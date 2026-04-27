@@ -359,7 +359,7 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 // LLM communication (llama-server)
 // ---------------------------------------------------------------------------
 
-func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+func forwardToLLM(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Model = modelName
 
 	// Inject /nothink into the LAST user message (not necessarily the last message)
@@ -561,7 +561,7 @@ func syntaxRepairLoop(ctx context.Context, req ChatRequest, content string, maxR
 		)
 		repairReq.Temperature = 0.2 // low temp for deterministic fix
 
-		repairResp, err := forwardToFox(ctx, repairReq)
+		repairResp, err := forwardToLLM(ctx, repairReq)
 		if err != nil || len(repairResp.Choices) == 0 {
 			log.Printf("  syntax repair request failed")
 			return content
@@ -996,7 +996,7 @@ func verifyAndRepair(ctx context.Context, originalReq ChatRequest, resp *ChatRes
 
 		log.Printf("  repair attempt %d/%d...", attempt, maxRepairAttempts)
 
-		repairResp, err := forwardToFox(ctx, repairReq)
+		repairResp, err := forwardToLLM(ctx, repairReq)
 		if err != nil {
 			log.Printf("  repair generation failed: %v", err)
 			break
@@ -1089,7 +1089,7 @@ func bestOfK(ctx context.Context, req ChatRequest, k int) (*ChatResponse, *LensS
 				attempt.Temperature = 1.0
 			}
 
-			resp, err := forwardToFox(ctx, attempt)
+			resp, err := forwardToLLM(ctx, attempt)
 			if err != nil || len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
 				results <- candidate{idx: idx}
 				return
@@ -1264,7 +1264,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			},
 			MaxTokens: 400, Temperature: 0.2,
 		}
-		specResp, specErr := forwardToFox(ctx, specReq)
+		specResp, specErr := forwardToLLM(ctx, specReq)
 		if specErr == nil && len(specResp.Choices) > 0 && len(specResp.Choices[0].Message.Content) > 20 {
 			spec := specResp.Choices[0].Message.Content
 			lastIdx := len(req.Messages) - 1
@@ -1277,7 +1277,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward to LLM
-	resp, err := forwardToFox(ctx, req)
+	resp, err := forwardToLLM(ctx, req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("upstream error: %v", err), 502)
 		return
@@ -1288,7 +1288,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		log.Printf("  empty response — retrying (temp=0.5)")
 		retryReq := req
 		retryReq.Temperature = 0.5
-		retryResp, retryErr := forwardToFox(ctx, retryReq)
+		retryResp, retryErr := forwardToLLM(ctx, retryReq)
 		if retryErr == nil && len(retryResp.Choices) > 0 && strings.TrimSpace(retryResp.Choices[0].Message.Content) != "" {
 			resp = retryResp
 			log.Printf("  retry succeeded: %d chars", len(resp.Choices[0].Message.Content))
@@ -1296,7 +1296,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			// Second retry with temp=0.7
 			log.Printf("  retry 1 failed — retrying (temp=0.7)")
 			retryReq.Temperature = 0.7
-			retryResp2, retryErr2 := forwardToFox(ctx, retryReq)
+			retryResp2, retryErr2 := forwardToLLM(ctx, retryReq)
 			if retryErr2 == nil && len(retryResp2.Choices) > 0 && strings.TrimSpace(retryResp2.Choices[0].Message.Content) != "" {
 				resp = retryResp2
 				log.Printf("  retry 2 succeeded: %d chars", len(resp.Choices[0].Message.Content))
@@ -1742,7 +1742,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					Stream:      false,
 				}
 
-				singleResp, singleErr := forwardToFox(r.Context(), singleReq)
+				singleResp, singleErr := forwardToLLM(r.Context(), singleReq)
 				if singleErr != nil || len(singleResp.Choices) == 0 {
 					log.Printf("  multi-file: failed to generate %s: %v", fname, singleErr)
 					continue
@@ -1786,14 +1786,14 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// This ensures Aider sees properly formatted whole-file output
 	if tier >= Tier1Simple {
 		log.Printf("  buffered generation for format-repair...")
-		// Deep-copy messages so forwardToFox's /nothink injection doesn't
+		// Deep-copy messages so forwardToLLM's /nothink injection doesn't
 		// mutate the original req.Messages (needed for filename extraction later)
 		bufMsgs := make([]ChatMessage, len(req.Messages))
 		copy(bufMsgs, req.Messages)
 		bufReq := req
 		bufReq.Messages = bufMsgs
 		bufReq.Stream = false
-		bufResp, bufErr := forwardToFox(r.Context(), bufReq)
+		bufResp, bufErr := forwardToLLM(r.Context(), bufReq)
 		if bufErr == nil && len(bufResp.Choices) > 0 && strings.TrimSpace(bufResp.Choices[0].Message.Content) != "" {
 			content := bufResp.Choices[0].Message.Content
 
@@ -1890,7 +1890,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					},
 					MaxTokens: 4096, Temperature: 0, Stream: false,
 				}
-				reformatResp, reformatErr := forwardToFox(r.Context(), reformatReq)
+				reformatResp, reformatErr := forwardToLLM(r.Context(), reformatReq)
 				if reformatErr == nil && len(reformatResp.Choices) > 0 {
 					reformatted := strings.TrimSpace(reformatResp.Choices[0].Message.Content)
 					if normalized2, ok := normalizeToWholeFile(reformatted, userHintFilename); ok {
@@ -1970,7 +1970,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					},
 					MaxTokens: 8192, Temperature: 0.3, Stream: false,
 				}
-				retryResp, retryErr := forwardToFox(r.Context(), retryReq)
+				retryResp, retryErr := forwardToLLM(r.Context(), retryReq)
 				if retryErr == nil && len(retryResp.Choices) > 0 {
 					retryContent := strings.TrimSpace(retryResp.Choices[0].Message.Content)
 					retryLower := strings.ToLower(retryContent)
@@ -2159,25 +2159,25 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 
 	body, _ := json.Marshal(req)
 
-	foxReq, err := http.NewRequestWithContext(r.Context(), "POST", inferenceURL+"/v1/chat/completions", bytes.NewReader(body))
+	llmReq, err := http.NewRequestWithContext(r.Context(), "POST", inferenceURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	foxReq.Header.Set("Content-Type", "application/json")
-	foxReq.Header.Set("Accept", "text/event-stream")
+	llmReq.Header.Set("Content-Type", "application/json")
+	llmReq.Header.Set("Accept", "text/event-stream")
 
 	client := &http.Client{Timeout: 300 * time.Second}
-	foxResp, err := client.Do(foxReq)
+	llmResp, err := client.Do(llmReq)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("LLM error: %v", err), 502)
 		return
 	}
-	defer foxResp.Body.Close()
+	defer llmResp.Body.Close()
 
 	// SSE headers already set above — reuse flusher
-	if foxResp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(foxResp.Body)
+	if llmResp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(llmResp.Body)
 		log.Printf("  LLM error: %s", truncate(string(raw), 100))
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -2187,7 +2187,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 
 	// Stream from LLM, intercept [DONE], accumulate content
 	var fullContent strings.Builder
-	scanner := bufio.NewScanner(foxResp.Body)
+	scanner := bufio.NewScanner(llmResp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
 
 	for scanner.Scan() {
@@ -2228,7 +2228,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		retryReq := req
 		retryReq.Stream = false
 		retryReq.Temperature = 0.5 // slightly higher temp to break out of think loop
-		retryResp, retryErr := forwardToFox(r.Context(), retryReq)
+		retryResp, retryErr := forwardToLLM(r.Context(), retryReq)
 		if retryErr == nil && len(retryResp.Choices) > 0 && retryResp.Choices[0].Message.Content != "" {
 			content = retryResp.Choices[0].Message.Content
 			log.Printf("  retry succeeded: %d chars", len(content))
@@ -2298,7 +2298,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 						Temperature: 0.3,
 					}
 
-					repairResp, repairErr := forwardToFox(r.Context(), repairReq)
+					repairResp, repairErr := forwardToLLM(r.Context(), repairReq)
 					if repairErr == nil && len(repairResp.Choices) > 0 {
 						repairContent := repairResp.Choices[0].Message.Content
 						repairBlocks := extractCodeBlocks(repairContent)
@@ -2472,11 +2472,11 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	foxOK, ragOK, sandboxOK := false, false, false
+	llmOK, ragOK, sandboxOK := false, false, false
 
 	if resp, err := http.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
-		foxOK = resp.StatusCode == 200
+		llmOK = resp.StatusCode == 200
 	}
 	if resp, err := http.Get(lensURL + "/health"); err == nil {
 		resp.Body.Close()
@@ -2489,7 +2489,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	status := map[string]any{
 		"status":   "ok",
-		"inference":      foxOK,
+		"inference":      llmOK,
 		"lens":  ragOK,
 		"sandbox":  sandboxOK,
 		"port":     proxyPort,
@@ -2795,7 +2795,7 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	resp, err := forwardToFox(classifyCtx, classifyReq)
+	resp, err := forwardToLLM(classifyCtx, classifyReq)
 	if err != nil {
 		log.Printf("  classify failed: %v — defaulting to T1", err)
 		return Tier1Simple
