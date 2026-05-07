@@ -1654,6 +1654,12 @@ func v3StageToEvent(stage string) string {
 		// TUI reads the stage name off the payload to decide between
 		// "scoring..." spinner, "winner: plan #N" summary, etc.
 		return "v3_plan"
+	case "lens_per_step":
+		// PC-207 wiring: per-token lens scoring of each V3 candidate. TUI
+		// surfaces first_off_rails_idx + gx_score_min so the user can see
+		// WHERE a candidate's quality cratered. Without this case the
+		// event flattens to v3_progress and the structured payload is lost.
+		return "v3_lens_per_step"
 	}
 	return "v3_progress"
 }

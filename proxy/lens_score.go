@@ -1,0 +1,157 @@
+package main
+
+// PC-207 agent-loop integration. Scores write_file / edit_file content
+// per-tool-call via geometric-lens /internal/lens/score-per-step. Tracks
+// recent gx_score_min values per session so a "stub loop" pattern (the
+// kind that hit the May 6 templates/resources.html session in production)
+// can be detected and broken with a corrective system message before the
+// next LLM call.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Threshold below which a write/edit is considered "low quality" by the
+// lens. Calibrated against G(x) verdict bands: 0.7+ likely_correct,
+// 0.3-0.7 uncertain, <0.3 likely_incorrect. We pick a strict 0.15 so
+// only severe quality crashes trigger intervention — the lens already
+// returns false-low scores on short snippets, so the threshold needs
+// margin to avoid false positives on legitimate small edits.
+const lensLowScoreThreshold = 0.15
+
+// Number of consecutive low-score write/edit calls that count as a
+// regression. 2 is the minimum that's clearly a pattern (not a one-off
+// dud); higher values (3+) miss the May 6 stub-loop case where the
+// model only got 2 attempts in before the error-loop break fired.
+const lensRegressionRunLength = 2
+
+type lensAggregate struct {
+	FirstOffRailsIdx int     `json:"first_off_rails_idx"`
+	GxScoreMin       float64 `json:"gx_score_min"`
+	GxScoreMean      float64 `json:"gx_score_mean"`
+	CxNormMax        float64 `json:"cx_norm_max"`
+}
+
+type lensPerStepResult struct {
+	Enabled     bool          `json:"enabled"`
+	GxAvailable bool          `json:"gx_available"`
+	NTokens     int           `json:"n_tokens"`
+	HiddenDim   int           `json:"hidden_dim"`
+	Layer       string        `json:"layer"`
+	Aggregate   lensAggregate `json:"aggregate"`
+	LatencyMS   float64       `json:"latency_ms"`
+	Error       string        `json:"error,omitempty"`
+}
+
+// scoreContentForAgent calls /internal/lens/score-per-step on the given
+// text and returns the parsed result. Fail-soft: returns (zero, false)
+// on any error so a lens outage degrades to "no signal" rather than
+// breaking the agent loop. Carries the agent's ctx so client cancellation
+// kills the lens call too.
+func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPerStepResult, bool) {
+	var zero lensPerStepResult
+	if lensURL == "" || content == "" {
+		return zero, false
+	}
+	body, err := json.Marshal(map[string]interface{}{"text": content})
+	if err != nil {
+		return zero, false
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST",
+		lensURL+"/internal/lens/score-per-step", bytes.NewReader(body))
+	if err != nil {
+		return zero, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[agent-lens] score request failed: %v", err)
+		return zero, false
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return zero, false
+	}
+	var r lensPerStepResult
+	if err := json.Unmarshal(raw, &r); err != nil {
+		log.Printf("[agent-lens] score parse failed: %v", err)
+		return zero, false
+	}
+	if !r.Enabled || r.NTokens == 0 {
+		return zero, false
+	}
+	return r, true
+}
+
+// extractScorableContent pulls lens-scoreable text from a tool call.
+// Only write_file (`content`) and edit_file (`new_str`) qualify — other
+// tools either don't carry generated text (read_file, list_directory)
+// or the scoring-on-shell-commands signal isn't useful. Returns the
+// text and a bool indicating whether the tool was scoreable.
+func extractScorableContent(toolName string, args json.RawMessage) (string, bool) {
+	switch toolName {
+	case "write_file":
+		var p struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(args, &p); err == nil && p.Content != "" {
+			return p.Content, true
+		}
+	case "edit_file":
+		var p struct {
+			NewStr string `json:"new_str"`
+		}
+		if err := json.Unmarshal(args, &p); err == nil && p.NewStr != "" {
+			return p.NewStr, true
+		}
+	}
+	return "", false
+}
+
+// agentLensRegression returns the corrective message to inject (and true)
+// when the recent agent-loop scoring history shows a quality crash
+// pattern. Returns ("", false) when no intervention is warranted.
+//
+// Pattern: the most recent N (= lensRegressionRunLength) gx_score_min
+// values are all below lensLowScoreThreshold. This is the "model is
+// stuck on a stub or near-duplicate response" signature — the May 6
+// resources.html loop is the canonical example.
+func agentLensRegression(history []float64) (string, bool) {
+	if len(history) < lensRegressionRunLength {
+		return "", false
+	}
+	recent := history[len(history)-lensRegressionRunLength:]
+	for _, score := range recent {
+		if score >= lensLowScoreThreshold {
+			return "", false
+		}
+	}
+	return fmt.Sprintf(
+		"⚠ Lens regression detected: the geometric lens flagged your last %d write attempts as "+
+			"severely low-quality (gx_score_min values: %v). This is the signature of a stuck "+
+			"or repetitive pattern — likely a stub/placeholder being submitted over and over, or "+
+			"near-duplicate responses that aren't making progress. STOP and try a different "+
+			"approach: (a) read a sibling file in the same directory to model the right "+
+			"structure, (b) ask the user for clarification on what concrete content is needed, "+
+			"or (c) skip this file and move on if it's not blocking the verify step.",
+		lensRegressionRunLength, formatScoreSlice(recent)), true
+}
+
+func formatScoreSlice(s []float64) string {
+	parts := make([]string, len(s))
+	for i, v := range s {
+		parts[i] = fmt.Sprintf("%.3f", v)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}

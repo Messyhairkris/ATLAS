@@ -372,6 +372,13 @@ type AgentContext struct {
 	FileReadTimes map[string]time.Time // for staleness detection
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens  int
+
+	// PC-207 agent-loop integration: rolling list of gx_score_min values
+	// from lens scoring of write_file/edit_file tool calls. When the
+	// recent N values all fall below lensLowScoreThreshold the loop
+	// injects a corrective system message before the next LLM call.
+	// See proxy/lens_score.go for the pattern detection.
+	LensScoreHistory []float64
 	mu           sync.Mutex
 
 	// Plan is the optional pre-flight plan produced by /v3/plan. Set

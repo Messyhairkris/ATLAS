@@ -533,6 +533,43 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
+			// PC-207 agent-loop integration: score write_file/edit_file
+			// content with the geometric lens BEFORE executing. The score
+			// reflects what the model produced (independent of whether the
+			// tool succeeds). On a quality-crash pattern (N consecutive
+			// low scores) we queue a corrective system message that gets
+			// appended AFTER the tool result so the next LLM call sees:
+			// assistant(tool_call) → tool(result) → system(lens warning).
+			// This is the direct fix for the May 6 templates/resources.html
+			// stub-loop case where PC-195 kept rejecting but the model
+			// kept retrying the same stub.
+			pendingLensCorrective := ""
+			if scorable, ok := extractScorableContent(parsed.Name, parsed.Args); ok {
+				if score, scored := scoreContentForAgent(ctx.Ctx, ctx.LensURL, scorable); scored {
+					ctx.LensScoreHistory = append(ctx.LensScoreHistory, score.Aggregate.GxScoreMin)
+					ctx.Stream("agent_lens_score", map[string]interface{}{
+						"tool":                 parsed.Name,
+						"turn":                 turn,
+						"n_tokens":             score.NTokens,
+						"first_off_rails_idx":  score.Aggregate.FirstOffRailsIdx,
+						"gx_score_min":         score.Aggregate.GxScoreMin,
+						"gx_score_mean":        score.Aggregate.GxScoreMean,
+						"latency_ms":           score.LatencyMS,
+					})
+					if msg, intervene := agentLensRegression(ctx.LensScoreHistory); intervene {
+						log.Printf("[agent] lens regression at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
+						ctx.Stream("agent_lens_intervention", map[string]interface{}{
+							"turn":   turn,
+							"tool":   parsed.Name,
+							"reason": msg,
+						})
+						pendingLensCorrective = msg
+						// Reset history so we don't re-fire on the same crash.
+						ctx.LensScoreHistory = nil
+					}
+				}
+			}
+
 			// Execute tool
 			startTime := time.Now()
 			result := executeToolCall(parsed.Name, parsed.Args, ctx)
@@ -652,6 +689,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ToolCallID: fmt.Sprintf("call_%d", turn),
 				ToolName:   parsed.Name,
 			})
+
+			// PC-207 agent-loop intervention: if the lens flagged a
+			// regression earlier in this iteration, append the corrective
+			// system message NOW so the next LLM call sees it after the
+			// tool result. This is the actual behavior change — pure
+			// telemetry would just emit the agent_lens_score event without
+			// touching ctx.Messages.
+			if pendingLensCorrective != "" {
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:    "system",
+					Content: pendingLensCorrective,
+				})
+			}
 
 			// PC-044: Trust V3-verified edits — strongly nudge toward done.
 			// When V3 ran the edit through its sandbox/probe pipeline and

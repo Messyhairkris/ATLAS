@@ -1254,6 +1254,44 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// PC-207 wiring: per-token lens scoring of a V3 candidate. Each
+	// event carries first_off_rails_idx (-1 if clean), gx_score_min,
+	// and the candidate index. We surface a compact one-liner per
+	// candidate so the user can see WHERE quality cratered without
+	// reading raw scores.
+	case "v3_lens_per_step":
+		body := formatLensPerStep(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "lens", Body: body,
+			})
+		}
+
+	// PC-207 agent-loop integration: lens scored a write_file/edit_file
+	// tool call's content. One row per write/edit. Fires whether or not
+	// it triggers an intervention; the intervention itself is a
+	// separate `agent_lens_intervention` event.
+	case "agent_lens_score":
+		body := formatAgentLensScore(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "lens", Body: body,
+			})
+		}
+
+	// PC-207 agent-loop integration: the lens detected a regression
+	// pattern (N consecutive low-quality writes) and the proxy is
+	// queueing a corrective system message for the next LLM call.
+	// We surface this prominently so the user knows the loop saw the
+	// stuck pattern and broke it.
+	case "agent_lens_intervention":
+		body := formatAgentLensIntervention(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "lens!", Body: body,
+			})
+		}
+
 	// Plan pipeline progress (planner candidate generation, scoring,
 	// selection). Lots of these fire during a 3-candidate sweep but
 	// we already drop per-token noise in the proxy callback — what
@@ -1358,6 +1396,103 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 		}
 	}
 	return body
+}
+
+// formatAgentLensScore renders an agent-loop lens-score event as one
+// chat row. PC-207 fires one of these per write_file/edit_file tool call
+// — it's the per-tool quality verdict the agent loop uses to detect
+// stuck/repetitive patterns. A clean write looks like
+// "write_file @ turn 4 · 320 tok · clean (gx_min=0.78)".
+// A bad one looks like "write_file @ turn 15 · 12 tok · off-rails @ tok 0 (gx_min=0.04)".
+func formatAgentLensScore(data json.RawMessage) string {
+	var p struct {
+		Tool             string  `json:"tool"`
+		Turn             int     `json:"turn"`
+		NTokens          int     `json:"n_tokens"`
+		FirstOffRailsIdx int     `json:"first_off_rails_idx"`
+		GxScoreMin       float64 `json:"gx_score_min"`
+		GxScoreMean      float64 `json:"gx_score_mean"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	var verdict string
+	if p.FirstOffRailsIdx >= 0 {
+		verdict = fmt.Sprintf("off-rails @ tok %d", p.FirstOffRailsIdx)
+	} else {
+		verdict = "clean"
+	}
+	tool := p.Tool
+	if tool == "" {
+		tool = "write"
+	}
+	return fmt.Sprintf("%s @ turn %d · %d tok · %s (gx_min=%.2f, gx_mean=%.2f)",
+		tool, p.Turn, p.NTokens, verdict, p.GxScoreMin, p.GxScoreMean)
+}
+
+// formatAgentLensIntervention renders the agent_lens_intervention event,
+// which fires when N consecutive low-quality writes triggered the
+// corrective-message inject. The reason field is the multi-sentence
+// system message the proxy queued for the next LLM call — we surface a
+// shortened version so the user can see WHY the lens intervened.
+func formatAgentLensIntervention(data json.RawMessage) string {
+	var p struct {
+		Turn   int    `json:"turn"`
+		Tool   string `json:"tool"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	// The reason is verbose; show just the first sentence + score range
+	// so the row stays readable. Full text reaches the model via the
+	// injected system message.
+	reasonPreview := p.Reason
+	if len(reasonPreview) > 200 {
+		// Trim to the first sentence ending in period.
+		if cut := strings.Index(reasonPreview, ". "); cut > 0 && cut < 200 {
+			reasonPreview = reasonPreview[:cut+1]
+		} else {
+			reasonPreview = reasonPreview[:197] + "..."
+		}
+	}
+	return fmt.Sprintf("INTERVENTION at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
+}
+
+// formatLensPerStep renders a v3_lens_per_step event as a single chat row.
+// PC-207 wiring fires one of these per V3 candidate after generation.
+// The interesting signals: first_off_rails_idx tells the user WHICH token
+// the candidate first dipped below the gx threshold (-1 = clean run);
+// gx_score_min is the worst per-token quality verdict in the candidate.
+// A clean candidate looks like "lens · cand 1: 320 tok · clean (gx_min=0.74)".
+// A bad one looks like "lens · cand 0: 320 tok · off-rails @ tok 80 (gx_min=0.08)".
+func formatLensPerStep(data json.RawMessage) string {
+	var p struct {
+		Index            int     `json:"index"`
+		Source           string  `json:"source"`
+		FirstOffRailsIdx int     `json:"first_off_rails_idx"`
+		GxScoreMin       float64 `json:"gx_score_min"`
+		GxScoreMean      float64 `json:"gx_score_mean"`
+		CxNormMax        float64 `json:"cx_norm_max"`
+		NTokens          int     `json:"n_tokens"`
+		Detail           string  `json:"detail"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	src := p.Source
+	if src == "" {
+		src = "candidate"
+	}
+	tokSummary := fmt.Sprintf("%d tok", p.NTokens)
+	var verdict string
+	if p.FirstOffRailsIdx >= 0 {
+		verdict = fmt.Sprintf("off-rails @ tok %d", p.FirstOffRailsIdx)
+	} else {
+		verdict = "clean"
+	}
+	return fmt.Sprintf("%s · cand %d: %s · %s (gx_min=%.2f, gx_mean=%.2f)",
+		src, p.Index, tokSummary, verdict, p.GxScoreMin, p.GxScoreMean)
 }
 
 // extractPaneSelection returns the plain text of `paneName`'s lines
