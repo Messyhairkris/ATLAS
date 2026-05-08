@@ -1284,6 +1284,31 @@ class V3PipelineService:
         # Metacognitive warnings
         metacog_warnings = self.metacognitive.get_warnings([], task_id)
 
+        # GH #39 point 3: build call-chain context for the failing
+        # function once, reuse across PR-CoT + refinement. Skips
+        # cleanly when stderr isn't a Python traceback or the failing
+        # function isn't defined in the project — both arms get plain
+        # error_output in that case.
+        chain_context_block = ""
+        if failing:
+            failing_func = _failing_function_from_stderr(failing[0].error_output)
+            if failing_func and files:
+                chain_context_block = call_chain_context(files, failing_func)
+                if chain_context_block:
+                    emit("call_chain_context",
+                         f"Built call-chain for failing `{failing_func}`",
+                         function=failing_func)
+                    print(
+                        f"  [phase3] call-chain context built for `{failing_func}`",
+                        flush=True,
+                    )
+
+        def _enriched_error(stderr: str) -> str:
+            """Append call-chain context to a candidate's stderr if available."""
+            if not chain_context_block:
+                return stderr
+            return (stderr or "") + "\n\n" + chain_context_block
+
         # Strategy 1: PR-CoT Quick Repair
         if failing:
             emit("pr_cot", "Attempting PR-CoT repair...",
@@ -1293,7 +1318,7 @@ class V3PipelineService:
                 pr_result = self.pr_cot.repair(
                     problem=problem,
                     code=best_failing.code,
-                    error=best_failing.error_output,
+                    error=_enriched_error(best_failing.error_output),
                     llm_call=llm,
                     task_id=task_id,
                 )
@@ -1318,10 +1343,24 @@ class V3PipelineService:
             emit("refinement", "Starting refinement loop...",
                  strategy="refinement", failing=len(failing))
             constraints = []  # from PlanSearch
+            # GH #39 point 3: enrich each failing candidate's error_output
+            # with call-chain context so the refinement loop sees it on
+            # every iteration. Cheap (chain_context_block is built once
+            # above and reused).
+            failing_for_refinement = failing
+            if chain_context_block:
+                failing_for_refinement = [
+                    FailingCandidate(
+                        index=c.index,
+                        code=c.code,
+                        error_output=_enriched_error(c.error_output),
+                    )
+                    for c in failing
+                ]
             try:
                 ref_result = self.refinement_loop.run(
                     problem=problem,
-                    failing_candidates=failing,
+                    failing_candidates=failing_for_refinement,
                     original_constraints=constraints,
                     llm_call=llm,
                     sandbox_run=sandbox,
@@ -1354,6 +1393,11 @@ class V3PipelineService:
                 f"Candidate {c.index}: {c.error_output[:200]}"
                 for c in failing[:3]
             )
+            # GH #39 point 3: append call-chain context to the failure
+            # context so derivation chains gets the structural hints
+            # alongside the truncated stderrs from each failing candidate.
+            if chain_context_block:
+                failure_context = failure_context + "\n\n" + chain_context_block
             try:
                 dc_result = self.derivation_chains.solve(
                     problem=problem,
@@ -2299,6 +2343,179 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         "n_local_defs": len(local_defs),
         "n_imports": len(imports),
     }
+
+
+# GH #39 point 3: Phase 3 repair with call-chain context.
+#
+# When all candidates fail sandbox and we drop to PR-CoT / refinement,
+# the repair model gets `error` (raw stderr) + `code` (the failing
+# candidate). It has to guess from the traceback alone what the
+# failing function does inside the project, who calls it, what it
+# depends on. With a call graph we can hand it that context directly.
+#
+# v1 approach: parse the deepest frame from a Python traceback to get
+# the failing function name, then walk file_map to find:
+#   - which file defines that function
+#   - which other project functions call it (direct callers, 1 hop)
+#   - which other project functions IT calls (direct callees, 1 hop)
+# Format as a markdown block, append to the error field passed to
+# PR-CoT / refinement so the repair LLM sees it as part of failure
+# context.
+
+import re as _re_phase3
+
+# Python traceback frame: `File "path", line N, in funcname`
+_TRACEBACK_FRAME_RE = _re_phase3.compile(r'File "[^"]+", line \d+, in (\S+)')
+
+
+def _failing_function_from_stderr(stderr: str):
+    """Return the deepest function name in a Python traceback, or None
+    if stderr doesn't look like a traceback. The deepest frame is the
+    one nearest the actual error; earlier frames are callers."""
+    if not stderr:
+        return None
+    matches = _TRACEBACK_FRAME_RE.findall(stderr)
+    if not matches:
+        return None
+    last = matches[-1]
+    # Filter sentinels — `<module>`, `<lambda>`, `<genexpr>` aren't
+    # callable names we can look up. Walk back until we find one.
+    for name in reversed(matches):
+        if not name.startswith("<"):
+            return name
+    return None
+
+
+def _python_call_targets_per_function(source: bytes):
+    """Return {function_name: list[called_identifier_names]} for the
+    file. Top-level functions only; class methods aggregate under their
+    class name (we don't track method-level callers in v1)."""
+    if not _AST_EDIT_AVAILABLE:
+        return {}
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return {}
+
+    out = {}
+
+    def text_of(node):
+        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    for node in tree.root_node.children:
+        target = node
+        if node.type == "decorated_definition":
+            for c in node.children:
+                if c.type in ("function_definition", "class_definition"):
+                    target = c
+                    break
+        if target.type not in ("function_definition", "class_definition"):
+            continue
+        # Find function/class name
+        name = None
+        for c in target.children:
+            if c.type == "identifier":
+                name = text_of(c)
+                break
+        if not name:
+            continue
+        # Extract direct-identifier calls from the function body
+        calls = []
+        stack = list(target.children)
+        while stack:
+            n = stack.pop()
+            if n.type == "call":
+                for child in n.children:
+                    if child.type == "identifier":
+                        calls.append(text_of(child))
+                        break
+                    if child.type not in ("(",):
+                        break
+            stack.extend(n.children)
+        out[name] = calls
+    return out
+
+
+def call_chain_context(file_map: dict, function_name: str, max_callers: int = 6, max_callees: int = 6) -> str:
+    """Build a markdown block describing direct callers + callees of
+    function_name across file_map's project. Returns empty string when
+    the function isn't found anywhere — caller should skip injection
+    in that case rather than dilute the error context with a useless
+    'no matches' block."""
+    if not function_name or not file_map or not _AST_EDIT_AVAILABLE:
+        return ""
+
+    # Pass 1: per-file map of {func: callees}. Also locate definition.
+    per_file = {}  # path -> {func: [calls]}
+    defined_in = None
+    for path, source_text in file_map.items():
+        if not path.lower().endswith(".py"):
+            continue
+        try:
+            src_bytes = source_text.encode("utf-8")
+        except (UnicodeEncodeError, AttributeError):
+            continue
+        funcs = _python_call_targets_per_function(src_bytes)
+        per_file[path] = funcs
+        if defined_in is None and function_name in funcs:
+            defined_in = path
+
+    if defined_in is None:
+        return ""
+
+    # Pass 2: callers — any (path, func) where func's body calls function_name
+    callers = []
+    for path, funcs in per_file.items():
+        for fname, calls in funcs.items():
+            if fname == function_name and path == defined_in:
+                continue  # don't list the function as its own caller
+            if function_name in calls:
+                callers.append((path, fname))
+
+    # Callees: the target function's own calls
+    callees = per_file.get(defined_in, {}).get(function_name, [])
+    # Dedup callees while preserving order
+    seen = set()
+    unique_callees = []
+    for c in callees:
+        if c in seen:
+            continue
+        seen.add(c)
+        unique_callees.append(c)
+
+    sb = [f"## Call-chain context for failing function `{function_name}`"]
+    sb.append("")
+    sb.append(f"Defined in: `{defined_in}`")
+    sb.append("")
+
+    if callers:
+        capped = callers[:max_callers]
+        sb.append(f"**Direct callers in project ({len(callers)} found):**")
+        for path, fname in capped:
+            sb.append(f"- `{fname}` in {path}")
+        if len(callers) > max_callers:
+            sb.append(f"- ... and {len(callers) - max_callers} more")
+        sb.append("")
+    else:
+        sb.append("**Direct callers in project:** (none found — this function may be an entry point or only called by external code)")
+        sb.append("")
+
+    if unique_callees:
+        capped = unique_callees[:max_callees]
+        sb.append(f"**Functions called by `{function_name}` ({len(unique_callees)} unique):**")
+        for c in capped:
+            sb.append(f"- `{c}`")
+        if len(unique_callees) > max_callees:
+            sb.append(f"- ... and {len(unique_callees) - max_callees} more")
+        sb.append("")
+    else:
+        sb.append(f"**Functions called by `{function_name}`:** (none — leaf function)")
+        sb.append("")
+
+    sb.append("Use this map to scope your fix: changing what `" + function_name + "` calls may require updating its callers; changing its callees may not.")
+
+    return "\n".join(sb)
 
 
 def cyclomatic_complexity(path: str, source_text: str) -> dict:

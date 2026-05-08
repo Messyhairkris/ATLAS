@@ -1293,6 +1293,18 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// GH #39 point 3: phase-3 repair built call-chain context for the
+	// failing function. Informational row — shows that PR-CoT /
+	// refinement got structural context layered on top of the bare
+	// stderr the LLM otherwise sees.
+	case "v3_call_chain_context":
+		body := formatCallChainContext(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "phase3", Body: body,
+			})
+		}
+
 	// PC-207 agent-loop integration: lens scored a write_file/edit_file
 	// tool call's content. One row per write/edit. Fires whether or not
 	// it triggers an intervention; the intervention itself is a
@@ -1546,6 +1558,23 @@ func formatLensVeto(data json.RawMessage) string {
 	}
 	return fmt.Sprintf("VETO cand %d: sandbox-passed but lens-rejected (gx_min=%.3f, %s) — likely a stub",
 		p.Index, p.GxScoreMin, off)
+}
+
+// formatCallChainContext renders a v3_call_chain_context event. Fires
+// once when V3's phase-3 repair builds a callers/callees map for the
+// failing function. The rendered body is short on purpose — the
+// detailed context goes into the LLM's repair prompt, not the TUI.
+func formatCallChainContext(data json.RawMessage) string {
+	var p struct {
+		Function string `json:"function"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	if p.Function == "" {
+		return ""
+	}
+	return fmt.Sprintf("phase 3: built call-chain context for failing `%s`", p.Function)
 }
 
 // formatStructuralVeto renders a v3_structural_veto event. Fires when

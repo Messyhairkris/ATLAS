@@ -1885,6 +1885,13 @@ func v3StageToEvent(stage string) string {
 		// or dead branches; structural verification doesn't care whether
 		// the unresolved call executes, only that it can't resolve.
 		return "v3_structural_veto"
+	case "call_chain_context":
+		// GH #39 point 3: V3 phase-3 repair built a call-chain context
+		// block for the failing function before invoking PR-CoT /
+		// refinement. Informational — not a veto, just shows the user
+		// that the repair phase has structural context the bare stderr
+		// doesn't include.
+		return "v3_call_chain_context"
 	}
 	return "v3_progress"
 }
