@@ -108,9 +108,41 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// calls/results, no system spam) on the TUI side. Without this,
 	// every user message starts a fresh agent loop and the model can't
 	// answer follow-ups like "what did you just delete?".
-	ctx.Messages = make([]AgentMessage, 0, 2+len(ctx.PriorHistory))
+	ctx.Messages = make([]AgentMessage, 0, 3+len(ctx.PriorHistory))
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "system", Content: systemPrompt})
 	ctx.Messages = append(ctx.Messages, ctx.PriorHistory...)
+
+	// GH #39 point 4: auto-inject reachability slice. If the user
+	// message names project symbols (`dashboard`, "the foo function",
+	// foo.bar.baz), pre-load their definitions so the model doesn't
+	// burn agent turns on read_file/list_directory recon. Fail-soft —
+	// no v3-service / no symbols / no project files / network error
+	// all degrade silently to the original message-only flow.
+	if symbols := extractCandidateSymbols(userMessage); len(symbols) > 0 {
+		fileMap := walkPythonFiles(ctx.WorkingDir)
+		if len(fileMap) > 0 {
+			if idx, ok := resolveProjectSymbols(ctx, fileMap, symbols); ok && len(idx.Matched) > 0 {
+				body := formatProjectContextMessage(idx.Matched)
+				if body != "" {
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role: "system", Content: body,
+					})
+					names := make([]string, 0, len(idx.Matched))
+					for _, m := range idx.Matched {
+						names = append(names, m.Name)
+					}
+					log.Printf("[symbol_index] injected %d snippet(s) for [%s] from %d project files",
+						len(idx.Matched), strings.Join(names, ", "), len(fileMap))
+					ctx.Stream("symbol_index_injected", map[string]interface{}{
+						"matched":  names,
+						"n_files":  len(fileMap),
+						"skipped":  len(idx.Skipped),
+					})
+				}
+			}
+		}
+	}
+
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})
 
 	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between

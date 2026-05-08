@@ -1888,6 +1888,122 @@ def _ast_selector_to_query(selector: str, language: str):
     return None, None, f"unsupported language: {language}"
 
 
+# GH #39 point 4: project-aware symbol resolution. Caller (proxy) extracts
+# candidate symbols from the user message and ships a file_map of relevant
+# project files; we tree-sitter-walk each, build a symbol index, return
+# snippets for the symbols that are actually defined in the project.
+# Stateless — no caching, fresh index per call. v1 supports Python only.
+
+def _symbol_index_for_python_source(source: bytes):
+    """Return list of (name, kind, start_byte, end_byte) for each top-level
+    function/class definition in source. Decorator-aware: function with
+    @app.route(...) returns the byte range that includes the decorator,
+    so callers paste the whole decorated unit."""
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return []
+    out = []
+    # Walk root children only — top-level definitions. Skip nested functions
+    # and methods inside classes for v1 (they'd noise up the index without
+    # adding much value for the kinds of references users actually make).
+    for node in tree.root_node.children:
+        target = node
+        kind = None
+        if node.type == "function_definition":
+            kind = "function"
+        elif node.type == "class_definition":
+            kind = "class"
+        elif node.type == "decorated_definition":
+            for child in node.children:
+                if child.type == "function_definition":
+                    target = child
+                    kind = "function"
+                    break
+                if child.type == "class_definition":
+                    target = child
+                    kind = "class"
+                    break
+            # Use the wrapper's byte range so the decorator is included
+        if not kind:
+            continue
+        # Find name child of the function/class itself
+        name = None
+        for child in target.children:
+            if child.type == "identifier":
+                name = source[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
+                break
+        if not name:
+            continue
+        # Use outer node's byte range (decorator wrapper if present)
+        out.append((name, kind, node.start_byte, node.end_byte))
+    return out
+
+
+def symbol_index(file_map: dict, candidate_symbols: list, max_snippets: int = 3, max_lines_per_snippet: int = 200) -> dict:
+    """Resolve candidate_symbols against a project's Python files.
+
+    file_map: {path: source_text} of project .py files
+    candidate_symbols: ['dashboard', 'UserModel', ...] extracted from user msg
+    Returns:
+        matched: [{name, kind, file, snippet, n_lines}] for symbols defined in the project
+        skipped: [{name, reason}] for symbols mentioned but not found
+    """
+    if not _AST_EDIT_AVAILABLE:
+        return {"matched": [], "skipped": [{"name": s, "reason": "tree-sitter not installed"} for s in candidate_symbols]}
+
+    # Build {symbol_name: [(file, kind, start_byte, end_byte)]} index
+    index: dict = {}
+    for path, source_text in (file_map or {}).items():
+        if not path.lower().endswith(".py"):
+            continue
+        try:
+            source_bytes = source_text.encode("utf-8")
+        except (UnicodeEncodeError, AttributeError):
+            continue
+        for name, kind, sb, eb in _symbol_index_for_python_source(source_bytes):
+            index.setdefault(name, []).append((path, kind, sb, eb, source_bytes))
+
+    matched, skipped, seen = [], [], set()
+    for sym in candidate_symbols:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        if len(matched) >= max_snippets:
+            skipped.append({"name": sym, "reason": "snippet cap reached"})
+            continue
+        hits = index.get(sym)
+        if not hits:
+            skipped.append({"name": sym, "reason": "not defined in scanned project files"})
+            continue
+        if len(hits) > 1:
+            # Ambiguous — multiple files define the same symbol. Skip
+            # rather than guess; the model can read_file directly if the
+            # context matters.
+            skipped.append({"name": sym, "reason": f"ambiguous ({len(hits)} definitions)"})
+            continue
+        path, kind, sb, eb, source_bytes = hits[0]
+        snippet_bytes = source_bytes[sb:eb]
+        snippet = snippet_bytes.decode("utf-8", errors="replace")
+        # Trim very long snippets — keep the head only. The model can
+        # read_file for the full content if it actually needs it.
+        snippet_lines = snippet.split("\n")
+        truncated = False
+        if len(snippet_lines) > max_lines_per_snippet:
+            snippet = "\n".join(snippet_lines[:max_lines_per_snippet]) + f"\n# ... ({len(snippet_lines) - max_lines_per_snippet} more lines truncated)"
+            truncated = True
+        matched.append({
+            "name": sym,
+            "kind": kind,
+            "file": path,
+            "snippet": snippet,
+            "n_lines": len(snippet_lines),
+            "truncated": truncated,
+        })
+    return {"matched": matched, "skipped": skipped}
+
+
 def cyclomatic_complexity(path: str, source_text: str) -> dict:
     """McCabe-style cyclomatic complexity from tree-sitter AST.
 
@@ -2032,6 +2148,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_ast_edit()
         elif self.path == "/internal/cyclomatic_complexity":
             self._handle_cyclomatic_complexity()
+        elif self.path == "/internal/symbol_index":
+            self._handle_symbol_index()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -2327,6 +2445,44 @@ class V3Handler(BaseHTTPRequestHandler):
             )
         else:
             print(f"  [ast_edit] FAIL path={path} selector={selector!r}: {result['error']}", flush=True)
+        self._json_response(200, result)
+
+    def _handle_symbol_index(self):
+        """POST /internal/symbol_index — resolve candidate symbols to project snippets.
+
+        Request:
+            {"file_map": {"app.py": "...", "utils.py": "..."},
+             "symbols": ["dashboard", "UserModel", ...],
+             "max_snippets": 3, "max_lines_per_snippet": 200}
+        Response:
+            {"matched": [{name, kind, file, snippet, n_lines, truncated}],
+             "skipped": [{name, reason}]}
+
+        Caps default to 3 snippets / 200 lines each. Caller is the proxy,
+        which extracts symbols from the user message via regex and walks
+        the working directory for .py files (with its own size cap).
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"matched": [], "skipped": [], "error": f"invalid JSON body: {e}"})
+            return
+
+        file_map = body.get("file_map") or {}
+        symbols = body.get("symbols") or []
+        max_snippets = int(body.get("max_snippets", 3))
+        max_lines = int(body.get("max_lines_per_snippet", 200))
+
+        result = symbol_index(file_map, symbols, max_snippets=max_snippets, max_lines_per_snippet=max_lines)
+        n_matched = len(result.get("matched", []))
+        n_skipped = len(result.get("skipped", []))
+        n_files = len(file_map)
+        print(
+            f"  [symbol_index] {n_files} files, {len(symbols)} candidates → "
+            f"matched={n_matched} skipped={n_skipped}",
+            flush=True,
+        )
         self._json_response(200, result)
 
     def _handle_cyclomatic_complexity(self):

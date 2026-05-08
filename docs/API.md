@@ -445,6 +445,37 @@ GH #39 v1 — friendly-selector AST node replacement. Stateless transform: calle
 
 Hard rule: selector must match exactly one node. Ambiguous selectors fail with a clear error so the caller can be more specific instead of silently rewriting the wrong function.
 
+### POST /internal/symbol_index
+
+GH #39 point 4 — resolve user-message symbol references against project source. The proxy extracts candidate symbols from the user message via regex (backticked identifiers, "the X function" patterns, dotted-path leaves), walks the working directory for `.py` files (capped at 50 files / 500 KB total), and POSTs to this endpoint. Server tree-sitter-walks each file for `function_definition` and `class_definition` nodes, returns snippets for the symbols defined in the project. Matched snippets are auto-injected into the agent's first turn so the model doesn't burn turns on `read_file`-spelunking.
+
+**Request:**
+```json
+{
+  "file_map": {"app.py": "<file source>", "utils.py": "..."},
+  "symbols": ["dashboard", "UserModel", "validate"],
+  "max_snippets": 3,
+  "max_lines_per_snippet": 200
+}
+```
+
+**Response:**
+```json
+{
+  "matched": [
+    {"name": "dashboard", "kind": "function", "file": "app.py", "snippet": "@app.route('/dashboard')\ndef dashboard():\n    return ...", "n_lines": 5, "truncated": false}
+  ],
+  "skipped": [
+    {"name": "UserModel", "reason": "not defined in scanned project files"},
+    {"name": "validate", "reason": "ambiguous (3 definitions)"}
+  ]
+}
+```
+
+Decorator-aware (matches `ast_edit`'s behavior): a function with `@app.route(...)` returns the byte range of the wrapping `decorated_definition`, so the snippet includes the decorator line. Skips nested functions and methods inside classes — top-level definitions only in v1.
+
+Stateless: each call rebuilds the index from the file_map. No caching.
+
 ### POST /internal/cyclomatic_complexity
 
 GH #39 point 2 — McCabe cyclomatic complexity from tree-sitter AST traversal. Used by the proxy's `classifyFileTier` to *escalate* (never downgrade) the regex-based tier verdict when real branching complexity warrants the V3 pipeline.
