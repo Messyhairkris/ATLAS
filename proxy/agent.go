@@ -12,10 +12,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+// stripThinkTags removes <think>...</think> blocks (Qwen3.5 reasoning
+// markers) from a response string. Used as a defensive cleanup when
+// reasoning_content gets surfaced as content fallback — the raw
+// reasoning text sometimes still has the tags wrapping it.
+var thinkTagRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
+func stripThinkTags(s string) string {
+	return strings.TrimSpace(thinkTagRE.ReplaceAllString(s, ""))
+}
 
 // activeSessions tracks in-flight /v1/agent turns by session_id so
 // /cancel can abort them. Map value is the context.CancelFunc returned
@@ -533,6 +544,26 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
+			// Tool-call repetition detector. Catches the structural-loop
+			// case the lens scoring doesn't see: same exact (tool, args)
+			// emitted N times in close succession. Lens covers semantic
+			// repetition (model produced the same low-quality content);
+			// this covers structural repetition (model emitted the same
+			// call to read_file or run_command). Fires before tool
+			// execution so the corrective lands in the same iteration
+			// as the lens corrective if both trigger.
+			pendingRepeatCorrective := ""
+			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating {
+				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
+				ctx.Stream("agent_repeat_intervention", map[string]interface{}{
+					"turn":   turn,
+					"tool":   parsed.Name,
+					"reason": msg,
+				})
+				pendingRepeatCorrective = msg
+				ctx.RecentToolCalls = nil // reset so we don't re-fire
+			}
+
 			// PC-207 agent-loop integration: score write_file/edit_file
 			// content with the geometric lens BEFORE executing. The score
 			// reflects what the model produced (independent of whether the
@@ -700,6 +731,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "system",
 					Content: pendingLensCorrective,
+				})
+			}
+			// Tool-call repetition intervention: same pattern, different
+			// signal. If both fire on the same turn the model gets two
+			// stacked warnings — that's intentional, both signals are
+			// telling it the same thing from different angles.
+			if pendingRepeatCorrective != "" {
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:    "system",
+					Content: pendingRepeatCorrective,
 				})
 			}
 
@@ -1077,6 +1118,16 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 
 	var (
 		contentBuf     strings.Builder
+		// PC-?: capture reasoning_content separately so we can fall
+		// back to it when contentBuf is empty. Qwen3.5 occasionally
+		// engages thinking mode despite enable_thinking=false (most
+		// reproducibly on retries with bumped temperature) — when it
+		// does, ALL output streams into delta.reasoning_content. The
+		// previous version threw it away and returned an empty string,
+		// which fired PC-043's empty-response retry uselessly. Now we
+		// surface the reasoning as content (with <think> tags stripped)
+		// so the agent loop has SOMETHING to parse.
+		reasoningBuf   strings.Builder
 		totalTokens    int
 		firstTokenSent bool
 	)
@@ -1098,13 +1149,14 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *struct {
-				TotalTokens     int `json:"total_tokens"`
-				PromptTokens    int `json:"prompt_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
 			} `json:"usage"`
 		}
@@ -1112,6 +1164,13 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 			continue
 		}
 		for _, c := range chunk.Choices {
+			if c.Delta.ReasoningContent != "" {
+				// Don't stream reasoning tokens to the TUI — they're
+				// not part of the user-visible response and would
+				// double-render if we ever forwarded them. Just
+				// accumulate for the empty-content fallback below.
+				reasoningBuf.WriteString(c.Delta.ReasoningContent)
+			}
 			if c.Delta.Content == "" {
 				continue
 			}
@@ -1137,8 +1196,22 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 	}
 
 	if contentBuf.Len() == 0 {
-		// No deltas at all — usually a llama-server hiccup. Caller's
-		// empty-response retry path (callLLMConstrained) will handle.
+		// No content deltas — but check reasoning_content first. The
+		// model may have produced its entire response inside a
+		// <think>...</think> block (Qwen3.5's hybrid reasoning mode
+		// firing despite our /nothink directive). The reasoning IS
+		// the response in that case; surface it stripped of the
+		// thinking tags so the JSON inside makes it to the parser.
+		if reasoningBuf.Len() > 0 {
+			recovered := stripThinkTags(reasoningBuf.String())
+			log.Printf("[agent] PC-043 follow-up: empty content but %d chars of reasoning_content — recovered %d chars after <think> strip",
+				reasoningBuf.Len(), len(recovered))
+			if recovered != "" {
+				return recovered, totalTokens, nil
+			}
+		}
+		// Truly nothing. Caller's empty-response retry path
+		// (callLLMConstrained) will handle.
 		return "", totalTokens, nil
 	}
 	return contentBuf.String(), totalTokens, nil

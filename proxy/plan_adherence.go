@@ -37,16 +37,36 @@ import (
 
 const (
 	// planAutoReviseThreshold is the number of consecutive off-plan
-	// tool calls before we auto-revise the plan. Tuned to be generous
-	// enough that one or two exploratory off-plan calls don't trigger
-	// thrashing, but tight enough that a fundamentally wrong plan
-	// gets re-derived before the agent burns its turn budget.
-	planAutoReviseThreshold = 3
+	// tool calls before we auto-revise the plan. Bumped 3→5 alongside
+	// the recon-tool neutrality fix below: even with recon excluded,
+	// 3 was firing on routine exploration patterns (the May 6 session
+	// hit it twice on read_file/list_directory chains for templates
+	// the model was hunting). 5 unmatched non-recon calls is a real
+	// off-plan signal; 3 was thrashing on normal agent behavior.
+	planAutoReviseThreshold = 5
 
 	// planMaxRevisions caps how many times we'll regenerate per loop.
 	// After this we give up and run plan-free for the remainder.
 	planMaxRevisions = 2
 )
+
+// isReconTool returns true for tools that gather information without
+// taking action. These calls are neutral for plan adherence — they
+// neither satisfy plan steps (a plan rarely lists "read_file app.py"
+// as a step) nor count as off-plan (recon between planned actions is
+// expected and shouldn't burn the off-streak counter).
+//
+// Without this, the agent's natural "look around before changing
+// anything" pattern triggered plan revisions purely from exploratory
+// reads — visible in the May 6 session as 2 revisions fired purely
+// from read_file/list_directory chains.
+func isReconTool(name string) bool {
+	switch name {
+	case "read_file", "list_directory", "find_file", "search_files":
+		return true
+	}
+	return false
+}
 
 // matchPlanStep returns the index of the first unsatisfied plan step
 // that the tool call (toolName, args) satisfies, or -1 if no match.
@@ -206,6 +226,22 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 			"step_action": ctx.Plan.Steps[idx].Action,
 			"satisfied":   countTrue(ctx.PlanStepsSatisfied),
 			"total":       len(ctx.PlanStepsSatisfied),
+		})
+		return false
+	}
+
+	// Recon tools (read_file / list_directory / find_file / search_files)
+	// are neutral: they don't satisfy steps but they don't extend the
+	// off-streak either. The agent's natural exploration pattern
+	// shouldn't trigger plan revisions.
+	if isReconTool(toolName) {
+		ctx.Stream("plan_adherence", map[string]interface{}{
+			"matched":    false,
+			"neutral":    true,
+			"tool":       toolName,
+			"off_streak": ctx.PlanOffStreak, // unchanged
+			"satisfied":  countTrue(ctx.PlanStepsSatisfied),
+			"total":      len(ctx.PlanStepsSatisfied),
 		})
 		return false
 	}

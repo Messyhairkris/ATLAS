@@ -1292,6 +1292,19 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// Tool-call repetition detector: the proxy saw the model emit the
+	// same (tool, args) signature N times in close succession and
+	// queued a corrective for the next LLM call. Different signal
+	// from the lens intervention (semantic vs structural) but same
+	// "the loop noticed and broke the model out" surface.
+	case "agent_repeat_intervention":
+		body := formatAgentRepeatIntervention(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "repeat!", Body: body,
+			})
+		}
+
 	// Plan pipeline progress (planner candidate generation, scoring,
 	// selection). Lots of these fire during a 3-candidate sweep but
 	// we already drop per-token noise in the proxy callback — what
@@ -1457,6 +1470,33 @@ func formatAgentLensIntervention(data json.RawMessage) string {
 		}
 	}
 	return fmt.Sprintf("INTERVENTION at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
+}
+
+// formatAgentRepeatIntervention renders the agent_repeat_intervention
+// event, which fires when the proxy detected the model issuing the same
+// (tool, args) signature N times in close succession (toolRepeatThreshold
+// in proxy/tool_repeat.go). Sibling event to agent_lens_intervention but
+// catches structural loops the lens (which only sees write content) misses.
+// Reason is the verbose corrective queued for the next LLM call; we trim
+// it for display.
+func formatAgentRepeatIntervention(data json.RawMessage) string {
+	var p struct {
+		Turn   int    `json:"turn"`
+		Tool   string `json:"tool"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	reasonPreview := p.Reason
+	if len(reasonPreview) > 200 {
+		if cut := strings.Index(reasonPreview, ". "); cut > 0 && cut < 200 {
+			reasonPreview = reasonPreview[:cut+1]
+		} else {
+			reasonPreview = reasonPreview[:197] + "..."
+		}
+	}
+	return fmt.Sprintf("REPEAT at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
 }
 
 // formatLensPerStep renders a v3_lens_per_step event as a single chat row.

@@ -379,6 +379,13 @@ type AgentContext struct {
 	// injects a corrective system message before the next LLM call.
 	// See proxy/lens_score.go for the pattern detection.
 	LensScoreHistory []float64
+
+	// Tool-call repetition detector: rolling window of recent (tool,
+	// args) signatures. When the same signature appears
+	// toolRepeatThreshold times within the last toolRepeatWindow
+	// entries, the loop injects a corrective system message. See
+	// proxy/tool_repeat.go for the detection logic.
+	RecentToolCalls []string
 	mu           sync.Mutex
 
 	// Plan is the optional pre-flight plan produced by /v3/plan. Set
