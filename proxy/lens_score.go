@@ -33,6 +33,22 @@ const lensLowScoreThreshold = 0.15
 // model only got 2 attempts in before the error-loop break fired.
 const lensRegressionRunLength = 2
 
+// Severe-threshold short-circuit: a single write whose gx_score_min
+// drops below this is bad enough to trigger intervention immediately
+// without waiting for a second confirmation. Calibrated from the May 7
+// dashboard.html session where gx_min=0.040 on turn 2 (off_rails at
+// token 14 of 840) was unambiguously a stub but the run-of-2 rule
+// waited until turn 4 to act — by which point V3's sandbox-verifier
+// had already approved the write. Anything below 0.05 is so far into
+// the "likely_incorrect" band that one sample is enough signal.
+//
+// Language-agnostic: gx values are normalized 0-1 outputs of the
+// XGBoost head on the residual stream. They don't depend on the
+// surface language of the file being scored — Python stub, HTML stub,
+// Rust stub, Java stub all produce the same kind of low gx_min when
+// the model's internal state collapses to a placeholder pattern.
+const lensSevereThreshold = 0.05
+
 type lensAggregate struct {
 	FirstOffRailsIdx int     `json:"first_off_rails_idx"`
 	GxScoreMin       float64 `json:"gx_score_min"`
@@ -128,6 +144,30 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // stuck on a stub or near-duplicate response" signature — the May 6
 // resources.html loop is the canonical example.
 func agentLensRegression(history []float64) (string, bool) {
+	if len(history) == 0 {
+		return "", false
+	}
+	// Severe single-write short-circuit: gx_min below lensSevereThreshold
+	// (~0.05) is so far into the "likely_incorrect" band that one sample
+	// is enough — don't wait for a second confirmation while V3's
+	// sandbox-verifier rubber-stamps the stub in the same iteration.
+	last := history[len(history)-1]
+	if last < lensSevereThreshold {
+		return fmt.Sprintf(
+			"⚠ Lens severe-quality alert: the geometric lens scored your last write at "+
+				"gx_min=%.3f, which is in the unambiguously-bad band (<%.2f). This usually "+
+				"means the file is a stub, a placeholder, or has collapsed into a repetitive "+
+				"pattern. STOP and try a different approach: (a) read a sibling file in the "+
+				"same directory to model the right structure, (b) ask the user for "+
+				"clarification on what concrete content is needed, or (c) skip this file and "+
+				"move on if it's not blocking the verify step. DO NOT re-issue the same "+
+				"write — the lens will catch it again.",
+			last, lensSevereThreshold), true
+	}
+	// Run-of-N moderate-low check: lensRegressionRunLength consecutive
+	// scores below lensLowScoreThreshold (~0.15). Catches gradual stub
+	// loops where each write is moderately bad but no single one is
+	// catastrophic.
 	if len(history) < lensRegressionRunLength {
 		return "", false
 	}
@@ -139,7 +179,7 @@ func agentLensRegression(history []float64) (string, bool) {
 	}
 	return fmt.Sprintf(
 		"⚠ Lens regression detected: the geometric lens flagged your last %d write attempts as "+
-			"severely low-quality (gx_score_min values: %v). This is the signature of a stuck "+
+			"severely low-quality (gx_score_min values: %s). This is the signature of a stuck "+
 			"or repetitive pattern — likely a stub/placeholder being submitted over and over, or "+
 			"near-duplicate responses that aren't making progress. STOP and try a different "+
 			"approach: (a) read a sibling file in the same directory to model the right "+

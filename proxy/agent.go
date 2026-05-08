@@ -728,14 +728,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 			// PC-207 agent-loop intervention: if the lens flagged a
 			// regression earlier in this iteration, append the corrective
-			// system message NOW so the next LLM call sees it after the
-			// tool result. This is the actual behavior change — pure
-			// telemetry would just emit the agent_lens_score event without
-			// touching ctx.Messages.
+			// NOW so the next LLM call sees it after the tool result.
+			// Role MUST be "user" — Qwen3.5's Jinja template enforces
+			// "System message must be at the beginning" and rejects any
+			// system role appended mid-conversation, which previously
+			// crashed the next LLM call with a 500. The "[system note]:"
+			// prefix is how the model knows it's loop-machinery feedback,
+			// not an actual user instruction.
 			if pendingLensCorrective != "" {
 				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "system",
-					Content: pendingLensCorrective,
+					Role:    "user",
+					Content: "[system note]: " + pendingLensCorrective,
 				})
 			}
 			// Tool-call repetition intervention: same pattern, different
@@ -744,8 +747,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// telling it the same thing from different angles.
 			if pendingRepeatCorrective != "" {
 				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "system",
-					Content: pendingRepeatCorrective,
+					Role:    "user",
+					Content: "[system note]: " + pendingRepeatCorrective,
 				})
 			}
 
