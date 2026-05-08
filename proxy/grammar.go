@@ -179,6 +179,13 @@ func generateInputExample(toolName string) string {
 		// shape, so a "rename foo to bar" placeholder steered them
 		// toward purely cosmetic edits instead of real bug-fix shapes.
 		return `{"path": "src/main.py", "old_str": "if x == 0:\n        return None", "new_str": "if x is None or x == 0:\n        return None", "replace_all": false}`
+	case "ast_edit":
+		// Whole-function rewrite — the case where edit_file would force
+		// the model to copy the entire existing function as old_str and
+		// blow through max_tokens. Selector grammar is intentionally
+		// narrow in v1 (function:NAME, class:NAME, <tag>) to avoid the
+		// raw-tree-sitter hallucination problem (GH #39 measurement).
+		return `{"path": "src/main.py", "selector": "function:dashboard", "content": "@app.route('/dashboard')\ndef dashboard():\n    return render_template('dashboard.html')"}`
 	case "delete_file":
 		return `{"path": "old_file.py"}`
 	case "run_command":

@@ -175,6 +175,33 @@ type EditFileOutput struct {
 	LinesRemoved int   `json:"lines_removed,omitempty"`
 }
 
+// -- ast_edit (GH #39 v1) --
+//
+// Friendly-selector AST edits via tree-sitter. Replaces a single named node
+// (function, class, HTML element) with new content. The selector grammar is
+// per-language and intentionally narrow in v1 to avoid the model
+// hallucinating raw tree-sitter s-expressions (42% intended-match measured
+// on Qwen3.5-9B-Q6_K, May 8 — see GH #39 open design questions).
+//
+//   Selectors v1:
+//     python: function:NAME, class:NAME (decorator-aware: replaces
+//             decorated_definition wrapper when present)
+//     html:   <tag>             (top-level tag-name match)
+
+type AstEditInput struct {
+	Path     string `json:"path"`
+	Selector string `json:"selector"`
+	Content  string `json:"content"`
+}
+
+type AstEditOutput struct {
+	OK         bool   `json:"ok"`
+	Selector   string `json:"selector"`
+	Language   string `json:"language,omitempty"`
+	BytesOld   int    `json:"bytes_old,omitempty"`
+	BytesNew   int    `json:"bytes_new,omitempty"`
+}
+
 // -- delete_file --
 
 type DeleteFileInput struct {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -26,6 +27,7 @@ func init() {
 	registerTool(readFileTool())
 	registerTool(writeFileTool())
 	registerTool(editFileTool())
+	registerTool(astEditTool())
 	registerTool(deleteFileTool())
 	registerTool(runCommandTool())
 	registerTool(searchFilesTool())
@@ -856,6 +858,130 @@ func editFileTool() *ToolDef {
 				result.PhaseSolved = v3Out.PhaseSolved
 			}
 			return result, nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ast_edit — GH #39 v1: friendly-selector AST node replacement
+// ---------------------------------------------------------------------------
+
+func astEditTool() *ToolDef {
+	return &ToolDef{
+		Name: "ast_edit",
+		Description: "Replace a named AST node (function, class, HTML element) with new content. " +
+			"Selectors v1: python `function:NAME` or `class:NAME` (decorators included automatically); " +
+			"html `<tag>` (top-level element). Selector must match exactly one node — failures return " +
+			"actionable errors. Prefer this over edit_file for whole-function or whole-element rewrites: " +
+			"no need to regurgitate the existing content as old_str.",
+		InputSchema: AstEditInput{},
+		ReadOnly:    false,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input AstEditInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{Success: false,
+					Error: "ast_edit: path cannot be empty. Read the file first then ast_edit with the same path."}, nil
+			}
+			if strings.TrimSpace(input.Selector) == "" {
+				return &ToolResult{Success: false,
+					Error: "ast_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"}, nil
+			}
+
+			path := resolveAgentPath(ctx, input.Path)
+			if !ctx.WasFileRead(path) {
+				return nil, fmt.Errorf("file not read yet — use read_file first before ast_edit: %s", input.Path)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
+			}
+			source := string(data)
+
+			ctx.mu.Lock()
+			lastRead := ctx.FileReadTimes[path]
+			ctx.mu.Unlock()
+			if info, err := os.Stat(path); err == nil && info.ModTime().After(lastRead) {
+				return nil, fmt.Errorf("file modified since last read — read it again before ast_edit: %s", input.Path)
+			}
+
+			// Sanitise replacement content the same way edit_file does — the
+			// model occasionally fences fragments with ```python or ```html.
+			if cleaned, sanitized := sanitizeFileContent(input.Path, input.Content); sanitized {
+				log.Printf("[ast_edit] sanitised markdown wrapper from content of %s", input.Path)
+				input.Content = cleaned
+			}
+
+			// Call v3-service /internal/ast_edit. Stateless transform:
+			// proxy reads + writes (preserving lens-score-before-write),
+			// v3-service is the tree-sitter authority.
+			reqBody, _ := json.Marshal(map[string]interface{}{
+				"path":     input.Path, // for language detection + error messages
+				"source":   source,
+				"selector": input.Selector,
+				"content":  input.Content,
+			})
+			v3URL := ctx.V3URL
+			if v3URL == "" {
+				return nil, fmt.Errorf("ast_edit unavailable: V3 service URL not configured")
+			}
+			req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/ast_edit", bytes.NewReader(reqBody))
+			if err != nil {
+				return nil, fmt.Errorf("ast_edit: build request: %w", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("ast_edit: v3-service unreachable: %w", err)
+			}
+			defer resp.Body.Close()
+			respBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("ast_edit: read v3 response: %w", err)
+			}
+			var astResp struct {
+				Success    bool   `json:"success"`
+				Error      string `json:"error,omitempty"`
+				Language   string `json:"language,omitempty"`
+				NewContent string `json:"new_content,omitempty"`
+				ByteRange  []int  `json:"byte_range,omitempty"`
+				OldSize    int    `json:"old_size,omitempty"`
+				NewSize    int    `json:"new_size,omitempty"`
+			}
+			if err := json.Unmarshal(respBytes, &astResp); err != nil {
+				return nil, fmt.Errorf("ast_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200))
+			}
+			if !astResp.Success {
+				return &ToolResult{Success: false, Error: astResp.Error}, nil
+			}
+
+			// Atomic write — same pattern as edit_file/write_file.
+			tmpPath := path + ".atlas.tmp"
+			if err := os.WriteFile(tmpPath, []byte(astResp.NewContent), 0644); err != nil {
+				return nil, fmt.Errorf("cannot write %s: %w", input.Path, err)
+			}
+			if err := os.Rename(tmpPath, path); err != nil {
+				os.Remove(tmpPath)
+				return nil, fmt.Errorf("cannot rename temp file: %w", err)
+			}
+			ctx.RecordFileRead(path, astResp.NewContent)
+
+			log.Printf("[ast_edit] %s %s selector=%q lang=%s old=%dB new=%dB",
+				input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, astResp.NewSize)
+
+			out := AstEditOutput{
+				OK:       true,
+				Selector: input.Selector,
+				Language: astResp.Language,
+				BytesOld: astResp.OldSize,
+				BytesNew: astResp.NewSize,
+			}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }

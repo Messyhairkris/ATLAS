@@ -12,6 +12,14 @@ COPY v3-service/main.py /app/main.py
 # Install Python deps
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
+# GH #39 v1: tree-sitter for /internal/ast_edit. Wheels ship pre-built so
+# this doesn't pull in build-essential. Languages match the selector
+# translator — extend when adding new languages.
+RUN pip install --no-cache-dir \
+        tree_sitter \
+        tree_sitter_python \
+        tree_sitter_html
+
 EXPOSE 8070
 
 CMD ["python", "main.py"]

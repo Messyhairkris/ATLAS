@@ -1811,6 +1811,158 @@ def generate_plan(
     return plan
 
 
+# --- AST-edit (GH #39 v1) ----------------------------------------------------
+#
+# Friendly-selector-driven structural edits. Replaces the model's edit_file
+# old_str/new_str pair (which truncates on long blocks: 2716-char Flask
+# template hit max_tokens mid-JSON in the May 7 session) with a tree-sitter
+# AST node selector.
+#
+# v1 supports:
+#   - Python: function:NAME, class:NAME
+#   - HTML:   <tag>
+# Single-match enforcement: ambiguous selectors fail with a clear error so
+# the model knows to be more specific. Returns new content for the proxy to
+# write, preserving the lens-score-before-write pattern that write_file uses.
+
+try:
+    import tree_sitter as _ts
+    import tree_sitter_python as _tsp
+    import tree_sitter_html as _tsh
+    _PY_LANG = _ts.Language(_tsp.language())
+    _HTML_LANG = _ts.Language(_tsh.language())
+    _AST_EDIT_AVAILABLE = True
+except ImportError as _e:
+    print(f"[ast_edit] tree-sitter not available: {_e} — endpoint will return 501", flush=True)
+    _AST_EDIT_AVAILABLE = False
+    _PY_LANG = None
+    _HTML_LANG = None
+
+
+def _ast_language_for_path(path: str):
+    p = path.lower()
+    if p.endswith(".py"):
+        return "python", _PY_LANG
+    if p.endswith((".html", ".htm")):
+        return "html", _HTML_LANG
+    return None, None
+
+
+def _ast_selector_to_query(selector: str, language: str):
+    """Translate friendly selector → (tree-sitter query string, target capture).
+    Returns (None, None, error_message) for unknown selectors.
+    """
+    s = selector.strip()
+    if language == "python":
+        if s.startswith("function:"):
+            name = s[len("function:"):].strip()
+            if not name:
+                return None, None, "selector 'function:' missing name (e.g. 'function:dashboard')"
+            return (
+                f'(function_definition name: (identifier) @_name (#eq? @_name "{name}")) @target',
+                "target", None,
+            )
+        if s.startswith("class:"):
+            name = s[len("class:"):].strip()
+            if not name:
+                return None, None, "selector 'class:' missing name (e.g. 'class:UserModel')"
+            return (
+                f'(class_definition name: (identifier) @_name (#eq? @_name "{name}")) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for python. Supported: function:NAME, class:NAME"
+        )
+    if language == "html":
+        if s.startswith("<") and s.endswith(">") and len(s) > 2:
+            tag = s[1:-1].strip().lower()
+            if not tag.replace("-", "").replace("_", "").isalnum():
+                return None, None, f"selector '{selector}' has invalid tag name"
+            return (
+                f'(element (start_tag (tag_name) @_tag (#eq? @_tag "{tag}"))) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for html. Supported: <tag> (e.g. <body>, <head>, <h1>)"
+        )
+    return None, None, f"unsupported language: {language}"
+
+
+def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
+    """Apply a friendly-selector AST edit. Stateless transform — caller provides
+    the source bytes (read from their own filesystem) and gets back new content.
+    v3-service does no file IO; the proxy reads + writes via its existing
+    workspace mount, which keeps lens-score-before-write intact."""
+    if not _AST_EDIT_AVAILABLE:
+        return {"success": False, "error": "ast_edit unavailable: tree-sitter not installed in this v3-service build"}
+
+    language, lang_obj = _ast_language_for_path(path)
+    if not language:
+        return {"success": False, "error": (
+            f"unsupported file type for ast_edit: {path}. v1 supports .py, .html, .htm — "
+            f"use edit_file for other languages."
+        )}
+
+    query_str, target_cap, err = _ast_selector_to_query(selector, language)
+    if err:
+        return {"success": False, "error": err}
+
+    try:
+        source = source_text.encode("utf-8")
+    except (UnicodeEncodeError, AttributeError) as e:
+        return {"success": False, "error": f"source not valid utf-8 string: {e}"}
+
+    try:
+        parser = _ts.Parser(lang_obj)
+        tree = parser.parse(source)
+        query = _ts.Query(lang_obj, query_str)
+        # tree_sitter ≥0.23 moved captures off Query onto QueryCursor; older
+        # versions exposed Query.captures directly. Support both so the
+        # service works whichever wheel pip resolves.
+        if hasattr(_ts, "QueryCursor"):
+            captures = _ts.QueryCursor(query).captures(tree.root_node)
+        else:
+            captures = query.captures(tree.root_node)
+    except Exception as e:
+        return {"success": False, "error": f"tree-sitter parse/query error: {type(e).__name__}: {e}"}
+
+    targets = captures.get(target_cap, [])
+    if len(targets) == 0:
+        return {"success": False, "error": (
+            f"selector '{selector}' matched 0 nodes in {path}. "
+            f"Verify the symbol exists — read the file first if unsure."
+        )}
+    if len(targets) > 1:
+        return {"success": False, "error": (
+            f"selector '{selector}' matched {len(targets)} nodes in {path}. "
+            f"ast_edit requires exactly one match — use a more specific selector."
+        )}
+
+    target = targets[0]
+    # Python grammar wraps decorated functions/classes in decorated_definition.
+    # function:dashboard matches the inner function_definition; if its parent
+    # is decorated_definition we want THAT byte range so @app.route(...) lines
+    # get replaced too. Otherwise the model writes new @decorator lines and
+    # the old ones stay, double-decorating the function.
+    if language == "python" and target.parent is not None and target.parent.type == "decorated_definition":
+        target = target.parent
+    try:
+        new_bytes = source[:target.start_byte] + content.encode("utf-8") + source[target.end_byte:]
+        new_content = new_bytes.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
+
+    return {
+        "success": True,
+        "language": language,
+        "selector": selector,
+        "new_content": new_content,
+        "byte_range": [target.start_byte, target.end_byte],
+        "old_size": len(source),
+        "new_size": len(new_bytes),
+    }
+
+
 # --- HTTP Handler (SSE streaming) --------------------------------------------
 
 pipeline = V3PipelineService()
@@ -1824,6 +1976,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_generate()
         elif self.path == "/v3/plan":
             self._handle_plan()
+        elif self.path == "/internal/ast_edit":
+            self._handle_ast_edit()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -2073,6 +2227,53 @@ class V3Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _handle_ast_edit(self):
+        """POST /internal/ast_edit — friendly-selector-driven AST edit.
+
+        Request:
+            {"path": "...",  "source": "<full file content>",
+             "selector": "function:foo" | "<body>" | ..., "content": "..."}
+        Response (success):
+            {"success": true, "new_content": "...", "byte_range": [start, end],
+             "old_size": int, "new_size": int, "language": "python" | "html"}
+        Response (failure):
+            {"success": false, "error": "..."}
+
+        Stateless transform — caller (the proxy) reads the file, sends content
+        in, gets new content out. v3-service does no file IO; proxy writes
+        after lens-scoring, matching write_file's flow so PC-207 lens-veto
+        can still reject stub-shaped replacements.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"success": False, "error": f"invalid JSON body: {e}"})
+            return
+
+        path = body.get("path", "")
+        source_text = body.get("source", "")
+        selector = body.get("selector", "")
+        content = body.get("content", "")
+        if not path or not selector or not source_text:
+            self._json_response(400, {"success": False, "error": "missing required field(s): path, source, selector"})
+            return
+
+        result = ast_edit(path, source_text, selector, content)
+        # Log per-call signal — matches the verbose-logging pattern we added
+        # to score_candidate_per_step. Lets `docker logs atlas-v3-service-1`
+        # answer "what did the model ask ast_edit to do" without SSE capture.
+        if result.get("success"):
+            print(
+                f"  [ast_edit] {result['language']} {path} selector={selector!r} "
+                f"matched bytes [{result['byte_range'][0]}-{result['byte_range'][1]}] "
+                f"old={result['old_size']}B new={result['new_size']}B",
+                flush=True,
+            )
+        else:
+            print(f"  [ast_edit] FAIL path={path} selector={selector!r}: {result['error']}", flush=True)
+        self._json_response(200, result)
 
     def _json_response(self, code, data):
         try:
