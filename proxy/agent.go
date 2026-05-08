@@ -537,9 +537,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// Allow write_file in that case and log the
 						// self-heal.
 						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) {
+							// GH #39: when the existing file is .py or .html
+							// and the model is replacing the whole thing,
+							// ast_edit is the right tool — selector-based
+							// node replacement, no old_str literal, no
+							// truncation risk on long content. Surface
+							// the option in the rejection text. edit_file
+							// stays the recommendation for surgical
+							// string-level changes (other file types,
+							// inline tweaks).
+							ext := strings.ToLower(filepath.Ext(wfInput.Path))
+							astHint := ""
+							if ext == ".py" || ext == ".html" || ext == ".htm" {
+								astHint = " For whole-function or whole-element rewrites, prefer `ast_edit` — it takes a structural selector (e.g. `function:dashboard`, `<body>`) and the new content body, no `old_str` needed. ast_edit doesn't truncate the way edit_file can on long replacement strings."
+							}
 							rejection := fmt.Sprintf(
-								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes — read the file first if you need to confirm the exact text to replace.",
-								wfInput.Path, existingLines)
+								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes (read the file first if you need to confirm the exact text to replace).%s",
+								wfInput.Path, existingLines, astHint)
 							log.Printf("[agent] rejecting write_file for existing %s (%d lines)", wfInput.Path, existingLines)
 							ctx.Messages = append(ctx.Messages, AgentMessage{
 								Role:    "assistant",

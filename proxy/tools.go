@@ -769,7 +769,27 @@ func editFileTool() *ToolDef {
 			// Find old_str with quote normalization
 			actualOldStr := findActualString(content, input.OldStr)
 			if actualOldStr == "" {
-				// Not found — return helpful error
+				// GH #39: detect HTML-entity encoding in old_str that
+				// doesn't match the literal characters on disk. Qwen3.5
+				// occasionally emits `&lt;` / `&gt;` / `&amp;` inside
+				// JSON tool-call args; the disk has `<` / `>` / `&`,
+				// findActualString returns "", and the model gets the
+				// generic "not found" error and retries with the same
+				// broken encoding. Hint at the encoding mismatch and
+				// recommend ast_edit for HTML rewrites.
+				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
+					strings.Contains(input.OldStr, "&gt;") ||
+					strings.Contains(input.OldStr, "&amp;")
+				literalsOnDisk := strings.ContainsAny(content, "<>&")
+				if hasEntities && literalsOnDisk {
+					ext := strings.ToLower(filepath.Ext(input.Path))
+					alt := ""
+					if ext == ".html" || ext == ".htm" || ext == ".py" {
+						alt = " For whole-element rewrites, ast_edit is the cleaner option — it takes a selector (e.g. `<body>`, `function:NAME`) and the new content body, no old_str needed."
+					}
+					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
+						alt, truncateStr(input.OldStr, 200))
+				}
 				return nil, fmt.Errorf("string to replace not found in file.\nSearched for: %s", truncateStr(input.OldStr, 200))
 			}
 
