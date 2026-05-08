@@ -1615,7 +1615,21 @@ Produce a plan as a SINGLE JSON object:
 }}
 
 Rules:
-- Each step is a single tool call: read_file, write_file, edit_file, delete_file, run_command, list_directory.
+- Each step is a single tool call: read_file, write_file, edit_file, ast_edit, delete_file, run_command, list_directory.
+- Tool selection guidance:
+    * read_file        — inspect a file before editing it
+    * write_file       — create a NEW file (rejected for files >5 lines that already exist)
+    * edit_file        — small, targeted string change (one function, one block) inside an existing file
+    * ast_edit         — replace a WHOLE function, class, or HTML element by selector. Use for any
+                         "replace the dashboard function" / "rewrite <body>" / "swap the validate method"
+                         step. Selectors: `function:NAME`, `class:NAME`, `<tag>` (.py and .html only).
+                         Strongly preferred over edit_file when the change is a whole-unit swap —
+                         edit_file truncates on long old_str/new_str pairs (>1.5 KB hits max_tokens
+                         mid-string and the JSON parse fails). ast_edit takes no old_str so it
+                         doesn't truncate.
+    * run_command      — build, test, run, curl. Verifies behavior.
+    * delete_file      — remove a file
+    * list_directory   — list a directory's contents
 - The verify_step MUST run a verification command — curl, pytest, python <script>, go test, npm test, cargo test, make test. ls / cat / grep do NOT verify; they only inspect.
 - Minimum 2 steps, maximum 6. Tighter is better.
 - Address the user's STATED problem only. Don't add unrelated work, don't re-architect.

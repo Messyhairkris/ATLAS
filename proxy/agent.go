@@ -311,9 +311,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Parse the response — extract JSON even if model added surrounding text
 		parsed, parseErr := extractModelResponse(response)
 		if parseErr != nil {
-			log.Printf("[agent] parse error: %v | raw_len=%d | raw: %q", parseErr, len(response), truncateStr(response, 500))
+			// Categorize the failure shape for the log so docker logs
+			// reads "what kind of broken" at a glance rather than
+			// dumping a 500-char raw blob every time. The category also
+			// drives the corrective feedback the model sees on retry.
+			category := categorizeParseFailure(response)
+			log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw: %q",
+				parseErr, category, len(response), truncateStr(response, 500))
 			ctx.Stream("error", map[string]string{
-				"error": "failed to parse model response",
+				"error":    "failed to parse model response",
+				"category": category,
 			})
 			// Targeted feedback — generic "your response wasn't JSON"
 			// led to the May 2026 user-session bug where the model
@@ -1703,6 +1710,14 @@ func classifyParseFailure(raw string) string {
 	if stripped == "" {
 		return "Your response was empty. Respond with ONLY a single JSON object — {\"type\":\"tool_call\",...} or {\"type\":\"text\",\"content\":\"...\"} or {\"type\":\"done\",\"summary\":\"...\"}."
 	}
+	// HTML-entity encoding detection — Qwen3.5 sometimes encodes <, >, &
+	// inside tool-call string args (`&lt;!DOCTYPE...&gt;`) instead of
+	// emitting them literally. JSON parses fine if the whole envelope
+	// arrives, but those entities then appear verbatim in old_str and
+	// don't match the actual file content. Catch and redirect.
+	htmlEntities := strings.Contains(stripped, "&lt;") ||
+		strings.Contains(stripped, "&gt;") ||
+		strings.Contains(stripped, "&amp;")
 	// Truncated tool_call detection: response starts with the tool-call
 	// preamble but doesn't have a properly closed args object. We look
 	// for the opening shape and the absence of a clean trailing `}}` —
@@ -1720,7 +1735,21 @@ func classifyParseFailure(raw string) string {
 			!strings.HasSuffix(stripped, "}") &&
 			!strings.HasSuffix(stripped, "]")
 		if hasEditOrWrite && truncated {
-			return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement. Respond now with a smaller edit_file targeting just the next change."
+			// GH #39: when truncation hits on a whole-file replacement,
+			// ast_edit is the right tool — it takes a structural
+			// selector (function:NAME, <tag>) instead of literal
+			// old_str, so the JSON envelope stays small. Steer the
+			// model toward it explicitly.
+			astHint := ""
+			if strings.Contains(stripped, `&lt;`) || strings.Contains(stripped, `&gt;`) ||
+				strings.Contains(stripped, `<body>`) || strings.Contains(stripped, `<head>`) ||
+				strings.Contains(stripped, `def `) || strings.Contains(stripped, `class `) {
+				astHint = " For whole-function or whole-element replacements, use `ast_edit` instead — it takes a selector (e.g. `function:dashboard`, `<body>`) and drops `old_str` entirely, so it doesn't truncate."
+			}
+			return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement." + astHint + " Respond now with a smaller edit_file or an ast_edit call."
+		}
+		if htmlEntities {
+			return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, ast_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed."
 		}
 		if truncated {
 			return "Your tool call was truncated mid-args. Make a smaller call — keep `content`, `old_str`, and `new_str` short (under ~30 lines). Respond now with the corrected, smaller call."
@@ -1728,6 +1757,48 @@ func classifyParseFailure(raw string) string {
 		return "Your tool_call JSON was malformed. Re-emit it as a single valid JSON object: {\"type\":\"tool_call\",\"name\":\"<tool>\",\"args\":{...}}. No prose, no markdown fences, no trailing commas."
 	}
 	return "Your response was not valid JSON. Respond with ONLY a JSON object, no other text. Example: {\"type\":\"tool_call\",\"name\":\"write_file\",\"args\":{\"path\":\"file.py\",\"content\":\"code\"}}"
+}
+
+// categorizeParseFailure returns a short stable label for the docker log,
+// so a human reading `docker logs atlas-proxy` can grep the failure mode
+// without parsing the full corrective text. Mirrors classifyParseFailure's
+// branching but emits codes instead of prose.
+//
+// Categories:
+//   empty           — response was whitespace
+//   prose           — response is non-JSON text (model narration leaking)
+//   truncated_tool  — JSON tool_call envelope cut off mid-args (max_tokens)
+//   html_entities   — tool_call contains &lt; / &gt; / &amp; in string args
+//   malformed_tool  — tool_call envelope present but JSON malformed
+//   non_json        — response begins with text other than '{'
+func categorizeParseFailure(raw string) string {
+	stripped := strings.TrimSpace(raw)
+	if stripped == "" {
+		return "empty"
+	}
+	looksLikeToolCall := strings.HasPrefix(stripped, `{"type":"tool_call"`) ||
+		strings.HasPrefix(stripped, `{ "type": "tool_call"`) ||
+		strings.HasPrefix(stripped, `{"type": "tool_call"`)
+	if !looksLikeToolCall {
+		// Could be prose narration (model thinking leaked into content)
+		// or some other non-tool_call shape.
+		if !strings.HasPrefix(stripped, "{") {
+			return "prose"
+		}
+		return "non_json"
+	}
+	truncated := !strings.HasSuffix(stripped, "}}") &&
+		!strings.HasSuffix(stripped, "}") &&
+		!strings.HasSuffix(stripped, "]")
+	if truncated {
+		return "truncated_tool"
+	}
+	if strings.Contains(stripped, "&lt;") ||
+		strings.Contains(stripped, "&gt;") ||
+		strings.Contains(stripped, "&amp;") {
+		return "html_entities"
+	}
+	return "malformed_tool"
 }
 
 // extractModelResponse extracts a ModelResponse from the LLM output,
