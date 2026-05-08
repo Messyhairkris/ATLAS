@@ -1280,6 +1280,19 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// GH #39 point 1: V3 vetoed a sandbox-passing candidate because
+	// tree-sitter found unresolved direct-identifier calls. Different
+	// failure mode from lens veto (which catches stub-shaped content);
+	// this catches "your code calls bar() but bar isn't defined,
+	// imported, builtin, or anywhere in the project."
+	case "v3_structural_veto":
+		body := formatStructuralVeto(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "veto!", Body: body,
+			})
+		}
+
 	// PC-207 agent-loop integration: lens scored a write_file/edit_file
 	// tool call's content. One row per write/edit. Fires whether or not
 	// it triggers an intervention; the intervention itself is a
@@ -1533,6 +1546,29 @@ func formatLensVeto(data json.RawMessage) string {
 	}
 	return fmt.Sprintf("VETO cand %d: sandbox-passed but lens-rejected (gx_min=%.3f, %s) — likely a stub",
 		p.Index, p.GxScoreMin, off)
+}
+
+// formatStructuralVeto renders a v3_structural_veto event. Fires when
+// tree-sitter walks a sandbox-passing candidate and finds direct-identifier
+// calls that don't resolve to any local def, import, builtin, or project
+// symbol. Sibling to v3_lens_veto in shape — caller only sees the row when
+// V3 actually rejected the candidate, not informational telemetry.
+func formatStructuralVeto(data json.RawMessage) string {
+	var p struct {
+		Index            int      `json:"index"`
+		NUnresolved      int      `json:"n_unresolved"`
+		UnresolvedCalls  []string `json:"unresolved_calls"`
+		NCallsTotal      int      `json:"n_calls_total"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	preview := strings.Join(p.UnresolvedCalls, ", ")
+	if len(preview) > 100 {
+		preview = preview[:97] + "..."
+	}
+	return fmt.Sprintf("STRUCTURAL VETO cand %d: %d/%d unresolved calls — %s",
+		p.Index, p.NUnresolved, p.NCallsTotal, preview)
 }
 
 // formatLensPerStep renders a v3_lens_per_step event as a single chat row.

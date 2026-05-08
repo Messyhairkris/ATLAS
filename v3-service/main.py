@@ -1166,6 +1166,50 @@ class V3PipelineService:
                 )
             passing = kept
 
+        # ===== STRUCTURAL VETO =====
+        # GH #39 point 1: hard-reject candidates whose direct-identifier
+        # calls don't resolve against (local defs, imports, builtins,
+        # project symbols). Sandbox can pass for code where the unresolved
+        # call is in a try/except ImportError fallback or a dead branch
+        # that doesn't execute under the tests; tree-sitter sees the
+        # surface bug regardless. Same architecture as lens veto.
+        #
+        # Language-agnostic fit: v1 supports Python only (matches the
+        # rest of the GH #39 stack), but the resolution-order pattern
+        # generalizes to any language with explicit imports + named
+        # functions (Go, Rust, JS/TS modules). Adding a language adds
+        # implementation surface, not model-facing API surface.
+        if passing and files:
+            project_symbols = build_project_symbols(files)
+            kept = []
+            for c in passing:
+                struct = structural_score(project_symbols, c.get("code", ""))
+                if struct.get("ok") and struct.get("n_unresolved", 0) >= 1:
+                    emit("structural_veto",
+                         f"Candidate {c['index']} sandbox-passed but "
+                         f"{struct['n_unresolved']} unresolved call(s): "
+                         f"{', '.join(struct['unresolved_calls'][:3])}",
+                         index=c["index"],
+                         n_unresolved=struct["n_unresolved"],
+                         unresolved_calls=struct["unresolved_calls"][:5],
+                         n_calls_total=struct["n_calls_total"])
+                    print(
+                        f"  [structural] vetoed cand {c['index']} — "
+                        f"{struct['n_unresolved']} unresolved: {struct['unresolved_calls'][:5]}",
+                        flush=True,
+                    )
+                    continue
+                if struct.get("ok"):
+                    c["structural"] = struct  # stash for phase 3 / repair
+                kept.append(c)
+            if len(kept) < len(passing):
+                print(
+                    f"  [structural] kept {len(kept)}/{len(passing)} candidates after structural veto"
+                    f"{' — falling through to phase-3 repair' if not kept else ''}",
+                    flush=True,
+                )
+            passing = kept
+
         # ===== CANDIDATE SELECTION =====
         if passing:
             # S* tiebreaking if multiple passing candidates
@@ -2002,6 +2046,259 @@ def symbol_index(file_map: dict, candidate_symbols: list, max_snippets: int = 3,
             "truncated": truncated,
         })
     return {"matched": matched, "skipped": skipped}
+
+
+# GH #39 point 1: structural verification of V3 candidates.
+#
+# Sandbox tests whether code RUNS; structural verification tests whether
+# the candidate's calls actually resolve. The two answer different
+# questions — sandbox can pass for code with try/except ImportError
+# fallbacks, lazy imports, or dead branches that never execute the
+# unresolved call. Tree-sitter sees what sandbox can't.
+#
+# v1 supports Python only. Direct-identifier calls only (skips method
+# calls like `obj.foo()` and chained calls — they'd need import-graph
+# resolution that's a v2 problem). Resolution order:
+#   1. Local function/class definition in the same file
+#   2. Imported name (top-of-file imports only, no conditional imports)
+#   3. Python builtin
+#   4. Project-wide symbol (any function/class in any scanned file)
+# Anything that doesn't match → unresolved. Strict: 1+ unresolved → veto.
+
+PY_BUILTINS = frozenset({
+    # Subset of common builtins — anything heavily used in idiomatic
+    # Python that we don't want to false-positive on. Hand-curated to
+    # keep the set small; obscure builtins (intern, breakpoint,
+    # __import__) caught here are vanishingly rare in generated code.
+    "print", "len", "range", "str", "int", "float", "bool", "bytes", "bytearray",
+    "list", "dict", "tuple", "set", "frozenset", "complex",
+    "open", "input", "sum", "min", "max", "abs", "round", "pow", "divmod",
+    "type", "isinstance", "issubclass", "callable",
+    "getattr", "setattr", "hasattr", "delattr", "super",
+    "enumerate", "zip", "sorted", "reversed", "map", "filter", "any", "all",
+    "id", "vars", "dir", "iter", "next", "slice",
+    "ord", "chr", "hex", "oct", "bin", "repr", "format", "hash",
+    "eval", "exec", "compile", "globals", "locals",
+    "object", "classmethod", "staticmethod", "property",
+    # Common exception classes — frequently raised, treated as calls
+    "Exception", "BaseException", "ValueError", "TypeError", "KeyError",
+    "IndexError", "RuntimeError", "AttributeError", "ImportError",
+    "FileNotFoundError", "IOError", "OSError", "StopIteration",
+    "GeneratorExit", "NotImplementedError", "ZeroDivisionError",
+    "ArithmeticError", "OverflowError", "AssertionError", "LookupError",
+    "MemoryError", "NameError", "ReferenceError", "SyntaxError",
+    "SystemExit", "UnicodeError", "Warning", "DeprecationWarning",
+})
+
+
+def _extract_python_imports(source: bytes) -> set:
+    """Names introduced into the file's namespace by import statements.
+
+    Handles `import foo`, `import foo.bar`, `import foo as bar`,
+    `from foo import bar`, `from foo import bar as baz`. Doesn't track
+    star imports — `from foo import *` returns nothing because we don't
+    know what's in `foo` without resolving the import. Star imports are
+    a known v1 gap; conservative behavior is "treat the file's calls
+    as more likely unresolved" rather than silently passing them.
+    """
+    if not _AST_EDIT_AVAILABLE:
+        return set()
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return set()
+
+    imported = set()
+
+    def text_of(node):
+        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    def walk(node):
+        if node.type == "import_statement":
+            for child in node.children:
+                if child.type == "dotted_name":
+                    # `import foo.bar` introduces `foo` into namespace
+                    imported.add(text_of(child).split(".")[0])
+                elif child.type == "aliased_import":
+                    # `import foo as bar` — alias is the trailing identifier
+                    last_ident = None
+                    for c in child.children:
+                        if c.type == "identifier":
+                            last_ident = c
+                    if last_ident is not None:
+                        imported.add(text_of(last_ident))
+        elif node.type == "import_from_statement":
+            past_import_kw = False
+            for child in node.children:
+                if not past_import_kw:
+                    if child.type == "import" or text_of(child) == "import":
+                        past_import_kw = True
+                    continue
+                # After `import` keyword: dotted_name, identifier,
+                # aliased_import, or wildcard_import
+                if child.type == "dotted_name":
+                    imported.add(text_of(child).split(".")[0])
+                elif child.type == "identifier":
+                    imported.add(text_of(child))
+                elif child.type == "aliased_import":
+                    last_ident = None
+                    for c in child.children:
+                        if c.type == "identifier":
+                            last_ident = c
+                    if last_ident is not None:
+                        imported.add(text_of(last_ident))
+                elif child.type == "wildcard_import":
+                    # `from foo import *` — can't enumerate without
+                    # resolving the import. Best we can do: bail out
+                    # of strict mode for this file by adding a sentinel.
+                    imported.add("*")
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return imported
+
+
+def _extract_python_call_targets(source: bytes) -> list:
+    """All direct-identifier call targets. Skips attribute / subscript /
+    chained calls — those need full import-graph resolution and are out
+    of scope for v1. Returns a list (not set) because duplicate calls
+    matter when reporting — caller may dedup later."""
+    if not _AST_EDIT_AVAILABLE:
+        return []
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return []
+
+    out = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "call":
+            # `function:` field is the first non-paren child
+            for child in node.children:
+                if child.type == "identifier":
+                    out.append(source[child.start_byte:child.end_byte].decode("utf-8", errors="replace"))
+                    break
+                # attribute / subscript / lambda → skip silently
+                # so we don't false-positive on `obj.method()`
+                if child.type not in ("(",):
+                    break
+        stack.extend(node.children)
+    return out
+
+
+def _extract_python_top_level_defs(source: bytes) -> set:
+    """Top-level function and class names defined in the file. Used as
+    one input to call resolution. Skips nested functions and class
+    methods — those don't introduce names into the file's top-level
+    namespace."""
+    if not _AST_EDIT_AVAILABLE:
+        return set()
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return set()
+
+    names = set()
+    for node in tree.root_node.children:
+        target = node
+        if node.type == "decorated_definition":
+            for c in node.children:
+                if c.type in ("function_definition", "class_definition"):
+                    target = c
+                    break
+        if target.type in ("function_definition", "class_definition"):
+            for c in target.children:
+                if c.type == "identifier":
+                    names.add(source[c.start_byte:c.end_byte].decode("utf-8", errors="replace"))
+                    break
+    return names
+
+
+def build_project_symbols(file_map: dict) -> set:
+    """Aggregate top-level function/class names across every .py file
+    in file_map. Built once per V3 run, reused across all candidates."""
+    out = set()
+    for path, source_text in (file_map or {}).items():
+        if not path.lower().endswith(".py"):
+            continue
+        try:
+            out |= _extract_python_top_level_defs(source_text.encode("utf-8"))
+        except Exception:
+            continue
+    return out
+
+
+def structural_score(project_symbols, candidate_code: str) -> dict:
+    """Check a candidate for unresolved direct-identifier calls.
+
+    project_symbols: set built by build_project_symbols(file_map). Pass
+    {} or set() if the project is empty / unavailable — every call
+    will fall through to imports/builtins/unresolved.
+
+    Returns:
+        ok: True if parse succeeded
+        n_calls_total / n_unresolved: aggregate counts
+        unresolved_calls: list of unique unresolved names (capped at 10)
+        wildcard_imports: True if the candidate has `from x import *`,
+                          which makes the unresolved set a lower bound
+    """
+    if not _AST_EDIT_AVAILABLE:
+        return {"ok": False, "error": "tree-sitter not installed"}
+    try:
+        candidate_bytes = candidate_code.encode("utf-8")
+    except (UnicodeEncodeError, AttributeError) as e:
+        return {"ok": False, "error": f"candidate not utf-8: {e}"}
+
+    try:
+        local_defs = _extract_python_top_level_defs(candidate_bytes)
+        imports = _extract_python_imports(candidate_bytes)
+        calls = _extract_python_call_targets(candidate_bytes)
+    except Exception as e:
+        return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
+
+    has_wildcard = "*" in imports
+    if has_wildcard:
+        # Star import in scope → can't reliably mark anything unresolved.
+        # Be lenient and only flag calls that aren't obviously local /
+        # builtin — wildcard might supply the rest.
+        pass
+
+    unresolved = []
+    seen_unresolved = set()
+    for name in calls:
+        if name in seen_unresolved:
+            continue
+        if name in local_defs:
+            continue
+        if name in imports:
+            continue
+        if name in PY_BUILTINS:
+            continue
+        if name in (project_symbols or set()):
+            continue
+        if has_wildcard:
+            # Wildcard import might supply this — treat as resolved-by-
+            # wildcard rather than unresolved. False negatives possible
+            # but better than blocking valid code.
+            continue
+        seen_unresolved.add(name)
+        unresolved.append(name)
+
+    return {
+        "ok": True,
+        "n_calls_total": len(calls),
+        "n_unresolved": len(unresolved),
+        "unresolved_calls": unresolved[:10],
+        "wildcard_imports": has_wildcard,
+        "n_local_defs": len(local_defs),
+        "n_imports": len(imports),
+    }
 
 
 def cyclomatic_complexity(path: str, source_text: str) -> dict:

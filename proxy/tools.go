@@ -1878,6 +1878,13 @@ func v3StageToEvent(stage string) string {
 		// Surfaced as its own event so the user can see "sandbox said pass
 		// but lens vetoed" rather than burying it in v3_progress.
 		return "v3_lens_veto"
+	case "structural_veto":
+		// GH #39 point 1: V3 hard-rejected a sandbox-passing candidate
+		// because tree-sitter found unresolved direct-identifier calls.
+		// Sandbox passes for code with try/except ImportError fallbacks
+		// or dead branches; structural verification doesn't care whether
+		// the unresolved call executes, only that it can't resolve.
+		return "v3_structural_veto"
 	}
 	return "v3_progress"
 }
