@@ -1129,6 +1129,43 @@ class V3PipelineService:
         emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
              passed=len(passing), total=len(candidates))
 
+        # ===== LENS VETO =====
+        # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
+        # geometric-lens gx_min sits in the unambiguously-bad band (<0.05).
+        # Sandbox is an ORM (does it execute?), lens is a PRM (is the
+        # generation pattern collapsing into a stub?) — they answer
+        # different questions. The May 7 dashboard.html session shipped
+        # a 10-line `<h1>Dashboard</h1>` stub because sandbox said pass
+        # while lens said gx_min=0.069. Without this filter, V3 returns
+        # passed=True and the proxy's PC-044 nudges the agent to done.
+        #
+        # Language-agnostic by construction: the lens runs on the model's
+        # residual stream; gx values don't depend on whether the file
+        # being scored is HTML, Python, Rust, or Java.
+        LENS_SEVERE = 0.05
+        if passing:
+            kept, vetoed = [], []
+            for c in passing:
+                per_step = c.get("per_step") or {}
+                gx_min = per_step.get("gx_score_min")
+                if gx_min is not None and gx_min < LENS_SEVERE:
+                    vetoed.append(c)
+                    emit("lens_veto",
+                         f"Candidate {c['index']} sandbox-passed but lens-vetoed "
+                         f"(gx_min={gx_min:.3f} < {LENS_SEVERE}) — likely a stub",
+                         index=c["index"], gx_score_min=gx_min,
+                         first_off_rails_idx=per_step.get("first_off_rails_idx", -1))
+                else:
+                    kept.append(c)
+            if vetoed:
+                print(
+                    f"  [lens] vetoed {len(vetoed)}/{len(passing)} sandbox-passing "
+                    f"candidates with gx_min < {LENS_SEVERE} — falling "
+                    f"{'through to phase-3 repair' if not kept else 'back to remaining %d' % len(kept)}",
+                    flush=True,
+                )
+            passing = kept
+
         # ===== CANDIDATE SELECTION =====
         if passing:
             # S* tiebreaking if multiple passing candidates

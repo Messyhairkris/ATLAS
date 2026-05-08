@@ -1660,6 +1660,12 @@ func v3StageToEvent(stage string) string {
 		// WHERE a candidate's quality cratered. Without this case the
 		// event flattens to v3_progress and the structured payload is lost.
 		return "v3_lens_per_step"
+	case "lens_veto":
+		// PC-207 alignment: V3 hard-rejected a sandbox-passing candidate
+		// because the lens flagged it as a stub (gx_min < severe threshold).
+		// Surfaced as its own event so the user can see "sandbox said pass
+		// but lens vetoed" rather than burying it in v3_progress.
+		return "v3_lens_veto"
 	}
 	return "v3_progress"
 }

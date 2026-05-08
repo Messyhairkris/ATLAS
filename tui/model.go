@@ -1267,6 +1267,19 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// PC-207 alignment: V3 vetoed a sandbox-passing candidate because the
+	// lens flagged it as a stub. Different signal from v3_lens_per_step
+	// (which is informational telemetry) — this one means a candidate
+	// was actively rejected, so it gets its own row with a clear "veto"
+	// meta tag so it stands out in the pane.
+	case "v3_lens_veto":
+		body := formatLensVeto(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "veto!", Body: body,
+			})
+		}
+
 	// PC-207 agent-loop integration: lens scored a write_file/edit_file
 	// tool call's content. One row per write/edit. Fires whether or not
 	// it triggers an intervention; the intervention itself is a
@@ -1497,6 +1510,29 @@ func formatAgentRepeatIntervention(data json.RawMessage) string {
 		}
 	}
 	return fmt.Sprintf("REPEAT at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
+}
+
+// formatLensVeto renders a v3_lens_veto event as a single chat row.
+// Fires when V3 rejected a sandbox-passing candidate because gx_min sat
+// in the unambiguously-bad band — i.e. sandbox said "this code runs"
+// but the lens said "the model was emitting a stub when it generated
+// this." Distinct visual signal from v3_lens_per_step (telemetry) so
+// it's obvious in the pane that a real action was taken.
+func formatLensVeto(data json.RawMessage) string {
+	var p struct {
+		Index            int     `json:"index"`
+		GxScoreMin       float64 `json:"gx_score_min"`
+		FirstOffRailsIdx int     `json:"first_off_rails_idx"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	off := "clean"
+	if p.FirstOffRailsIdx >= 0 {
+		off = fmt.Sprintf("off-rails @ tok %d", p.FirstOffRailsIdx)
+	}
+	return fmt.Sprintf("VETO cand %d: sandbox-passed but lens-rejected (gx_min=%.3f, %s) — likely a stub",
+		p.Index, p.GxScoreMin, off)
 }
 
 // formatLensPerStep renders a v3_lens_per_step event as a single chat row.
