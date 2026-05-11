@@ -34,12 +34,34 @@ export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
 
+# BiasBusters #4 (ASA steering vectors) — always-on once the vector
+# file exists at the standard path. The default path lives next to the
+# model file on the persistent /models volume so it survives container
+# rebuilds. Operator drops the vector once (workflow:
+# ATLAS/geometric-lens/asa_calibration/README.md), and every llama-server
+# start picks it up automatically. To override the path or scale, set
+# ATLAS_CONTROL_VECTOR / ATLAS_CONTROL_VECTOR_SCALE / _LAYER_RANGE.
+# Default scale is conservative (0.5) — bump if behavior change is too
+# subtle, drop if non-tool tasks degrade.
+ATLAS_CONTROL_VECTOR="${ATLAS_CONTROL_VECTOR:-/models/ast_edit_steering.gguf}"
+CVECTOR_FLAGS=""
+CVECTOR_STATUS="not present at $ATLAS_CONTROL_VECTOR — build it via geometric-lens/asa_calibration/README.md"
+if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
+  CVECTOR_SCALE="${ATLAS_CONTROL_VECTOR_SCALE:-0.5}"
+  CVECTOR_FLAGS="--control-vector-scaled $ATLAS_CONTROL_VECTOR:$CVECTOR_SCALE"
+  if [ -n "$ATLAS_CONTROL_VECTOR_LAYER_RANGE" ]; then
+    CVECTOR_FLAGS="$CVECTOR_FLAGS --control-vector-layer-range $ATLAS_CONTROL_VECTOR_LAYER_RANGE"
+  fi
+  CVECTOR_STATUS="$ATLAS_CONTROL_VECTOR (scale=$CVECTOR_SCALE${ATLAS_CONTROL_VECTOR_LAYER_RANGE:+, layers=$ATLAS_CONTROL_VECTOR_LAYER_RANGE})"
+fi
+
 echo "=== V3.1: Qwen3.5-9B — Generation + Self-Embeddings ==="
 echo "  Model: $MODEL_FILE"
 echo "  Context: $CTX_LENGTH | KV: K=$KV_CACHE_K V=$KV_CACHE_V | Parallel: $PARALLEL"
 echo "  Embeddings: ENABLED (4096-dim Qwen3.5 self-embeddings)"
 echo "  Speculative decoding: DISABLED (not supported for Qwen3.5)"
 echo "  Slot save path: $SLOT_SAVE_PATH"
+echo "  ASA steering: $CVECTOR_STATUS"
 
 exec /usr/local/bin/llama-server \
   -m "$MODEL_FILE" \
@@ -58,4 +80,5 @@ exec /usr/local/bin/llama-server \
   --ctx-checkpoints 0 \
   --no-cache-prompt \
   --embeddings \
-  --jinja
+  --jinja \
+  $CVECTOR_FLAGS

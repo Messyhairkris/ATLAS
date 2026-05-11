@@ -268,6 +268,22 @@ func main() {
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: generate → score → sandbox → repair (max %d) → deliver", maxRepairAttempts)
 
+	// BiasBusters #4 (ASA steering vectors) — always-on once the vector
+	// file exists at the standard path. The proxy doesn't apply the
+	// vector itself (llama-server does, via --control-vector-scaled);
+	// we surface the configured state so it shows up in startup logs
+	// alongside the rest of the pipeline. The default path matches the
+	// inference entrypoint's default. Workflow:
+	// geometric-lens/asa_calibration/README.md.
+	cv := envOr("ATLAS_CONTROL_VECTOR", "/models/ast_edit_steering.gguf")
+	if _, err := os.Stat(cv); err == nil {
+		scale := envOr("ATLAS_CONTROL_VECTOR_SCALE", "0.5")
+		layers := envOr("ATLAS_CONTROL_VECTOR_LAYER_RANGE", "all")
+		log.Printf("  ASA steering: %s (scale=%s, layers=%s) — applied at llama-server", cv, scale, layers)
+	} else {
+		log.Printf("  ASA steering: not present at %s — build it via geometric-lens/asa_calibration/README.md", cv)
+	}
+
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()
 		log.Printf("  Keep-warm: pinging %s every 45s (set ATLAS_KEEP_LLAMA_WARM=0 to disable)", inferenceURL)
