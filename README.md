@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="ATLAS Banner"/>
+  <img src="docs/images/herodemo.gif" alt="ATLAS TUI in action"/>
 </p>
 
 <h1 align="center">A.T.L.A.S.</h1>
