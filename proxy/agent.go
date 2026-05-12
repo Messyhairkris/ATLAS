@@ -565,7 +565,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// for 53 wall-minutes (May 6 18:30 → 19:23).
 						// Allow write_file in that case and log the
 						// self-heal.
-						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) {
+						// Self-iteration carveout: if this session wrote the file
+						// itself (it's not the user's code, it's the agent's
+						// own draft), allow overwriting. Otherwise the agent
+						// can't correct its own first-pass mistakes — the
+						// May 12 multi-file failure mode where V3 wrote a
+						// stub app.py, realized it needed render-module
+						// wiring, and got blocked from fixing it.
+						sessionOwned := ctx.SessionWrites[wfInput.Path]
+						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) && !sessionOwned {
 							// GH #39: when the existing file is .py or .html
 							// and the model is replacing the whole thing,
 							// ast_edit is the right tool — selector-based

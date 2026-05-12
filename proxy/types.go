@@ -397,6 +397,17 @@ type AgentContext struct {
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens  int
 
+	// SessionWrites tracks files this agent loop wrote during this run.
+	// The write_file guard rejects overwrites of "existing" files >5
+	// lines (BiasBusters #3 — protects the user's code from clobbering).
+	// But a file the agent itself wrote in this session is NOT the
+	// user's code; it's the agent's own working output, and the agent
+	// must be allowed to iterate on it. Without this, the model can't
+	// realize mid-loop that an early file needs rewriting once later
+	// files exist (May 12 2026 multi-file Flask run — the wiring bug
+	// stemmed from the guard refusing the model's self-correction).
+	SessionWrites map[string]bool
+
 	// PC-207 agent-loop integration: rolling list of gx_score_min values
 	// from lens scoring of write_file/edit_file tool calls. When the
 	// recent N values all fall below lensLowScoreThreshold the loop
@@ -480,6 +491,7 @@ func NewAgentContext(workingDir string, tier Tier) *AgentContext {
 		PermissionMode: PermissionDefault,
 		FileReadTimes:  make(map[string]time.Time),
 		FilesRead:      make(map[string]string),
+		SessionWrites:  make(map[string]bool),
 		Ctx:            context.Background(),
 	}
 }

@@ -466,11 +466,19 @@ func writeFileTool() *ToolDef {
 			// selects the best. This is the intelligence layer.
 			if fileTier >= Tier2Medium && ctx.V3URL != "" {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
-				return writeFileWithV3(path, input.Content, ctx)
+				res, err := writeFileWithV3(path, input.Content, ctx)
+				if err == nil && res != nil && res.Success {
+					ctx.SessionWrites[input.Path] = true
+				}
+				return res, err
 			}
 
 			// T1: Direct write — config, data, boilerplate
-			return writeFileDirect(path, input.Content)
+			res, err := writeFileDirect(path, input.Content)
+			if err == nil && res != nil && res.Success {
+				ctx.SessionWrites[input.Path] = true
+			}
+			return res, err
 		},
 	}
 }
