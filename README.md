@@ -57,39 +57,39 @@ Open models historically can't keep up with hosted ones. ATLAS gets there anyway
 ## 🧱 What ATLAS Does
 
 1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client (PC-062). Type `atlas` in any project directory to launch it.
-  - a. [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
-  - b. [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
-  - c. [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
+   - [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
+   - [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
+   - [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
 
 2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
-  - a. [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-  - b. [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas keep JSON output valid
-  - c. [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
-  - d. [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
+   - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
+   - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas keep JSON output valid
+   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
+   - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
 3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
-  - a. [PlanSearch](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - constraint-driven structured planning
-  - b. [DivSampling](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - diverse candidates across temperature and strategy
-  - c. [Budget Forcing](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - per-phase thinking-token allocation
-  - d. [PR-CoT Repair](docs/reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - self-generated test cases for iterative fixes
-  - e. [Refinement Loops](docs/reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - sandbox verify and correct, then repeat
-  - f. [Derivation Chains](docs/reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - multi-step reasoning for harder problems
+   - [PlanSearch](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - constraint-driven structured planning
+   - [DivSampling](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - diverse candidates across temperature and strategy
+   - [Budget Forcing](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - per-phase thinking-token allocation
+   - [PR-CoT Repair](docs/reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - self-generated test cases for iterative fixes
+   - [Refinement Loops](docs/reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - sandbox verify and correct, then repeat
+   - [Derivation Chains](docs/reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - multi-step reasoning for harder problems
 
 4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
-  - a. [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - 4096→512→128→1 MLP that scores candidate quality
-  - b. [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble used for selection
-  - c. [RAG / PageIndex V2](docs/ARCHITECTURE.md#rag--pageindex-v2) - AST-aware code retrieval and project indexing
-  - d. [Confidence Router](docs/ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling routes compute to the candidates that need it
+   - [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - 4096→512→128→1 MLP that scores candidate quality
+   - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble used for selection
+   - [RAG / PageIndex V2](docs/ARCHITECTURE.md#rag--pageindex-v2) - AST-aware code retrieval and project indexing
+   - [Confidence Router](docs/ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling routes compute to the candidates that need it
 
 5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
-  - a. Multi-language execution: Python, Rust, Go, C, Shell, others
-  - b. Compilation and linting before scoring
-  - c. Runs both generated and existing test suites
+   - Multi-language execution: Python, Rust, Go, C, Shell, others
+   - Compilation and linting before scoring
+   - Runs both generated and existing test suites
 
 6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
-  - a. CUDA-accelerated quantized inference (Q6_K / Q4_K_M)
-  - b. Grammar-constrained decoding at the token level
-  - c. Self-embeddings, so the lens doesn't need a second model
+   - CUDA-accelerated quantized inference (Q6_K / Q4_K_M)
+   - Grammar-constrained decoding at the token level
+   - Self-embeddings, so the lens doesn't need a second model
 
 Full documentation (setup, architecture, configuration, troubleshooting, benchmark reports, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
 

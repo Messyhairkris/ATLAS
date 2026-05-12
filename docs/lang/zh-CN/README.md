@@ -40,39 +40,39 @@ ATLAS 是一个跑在你自己 GPU 上的编程助手。你把它指向一个项
 ## ATLAS 的功能
 
 1. **[atlas-tui](../../CLI.md)** - 基于 Bubbletea 的原生终端 UI，是官方聊天客户端 (PC-062)。在任意项目目录中输入 `atlas` 即可启动。
-  - a. [实时 Pipeline 视图](../../CLI.md#panes) - 在侧边窗格中观察 V3 各阶段
-  - b. [斜杠命令](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件与 shell
-  - c. [输入模式](../../CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
+   - [实时 Pipeline 视图](../../CLI.md#panes) - 在侧边窗格中观察 V3 各阶段
+   - [斜杠命令](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件与 shell
+   - [输入模式](../../CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
 
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的代理循环，负责编排整个系统。
-  - a. [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
-  - b. [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式保证 JSON 输出有效
-  - c. [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - 工具选择偏差的四层组合缓解（描述、语法禁用、系统提示、ASA 操控）
-  - d. [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
+   - [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
+   - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式保证 JSON 输出有效
+   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - 工具选择偏差的四层组合缓解（描述、语法禁用、系统提示、ASA 操控）
+   - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 
 3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 将单个提示词转化为已验证候选的多阶段代码生成流程。
-  - a. [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 约束驱动的结构化规划
-  - b. [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 跨温度和策略的多样化候选生成
-  - c. [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 按阶段控制思维 token 分配
-  - d. [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 用自生成测试做迭代修复
-  - e. [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - 沙箱验证与修正反复进行
-  - f. [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 针对难题的多步推理
+   - [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 约束驱动的结构化规划
+   - [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 跨温度和策略的多样化候选生成
+   - [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 按阶段控制思维 token 分配
+   - [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 用自生成测试做迭代修复
+   - [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - 沙箱验证与修正反复进行
+   - [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 针对难题的多步推理
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
-  - a. [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 4096→512→128→1 的 MLP，用于评估候选质量
-  - b. [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 用于候选选择的 XGBoost 集成
-  - c. [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - 感知 AST 的代码检索与项目索引
-  - d. [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling 把算力集中到真正需要的候选
+   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 4096→512→128→1 的 MLP，用于评估候选质量
+   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 用于候选选择的 XGBoost 集成
+   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - 感知 AST 的代码检索与项目索引
+   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling 把算力集中到真正需要的候选
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
-  - a. 多语言执行：Python、Rust、Go、C、Shell 等
-  - b. 评分前做编译与检查
-  - c. 同时运行自生成测试和已有测试套件
+   - 多语言执行：Python、Rust、Go、C、Shell 等
+   - 评分前做编译与检查
+   - 同时运行自生成测试和已有测试套件
 
 6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
-  - a. CUDA 加速的量化推理 (Q6_K / Q4_K_M)
-  - b. token 级语法约束解码
-  - c. 自嵌入（无需额外模型）
+   - CUDA 加速的量化推理 (Q6_K / Q4_K_M)
+   - token 级语法约束解码
+   - 自嵌入（无需额外模型）
 
 完整文档（安装指南、架构、配置、故障排查、基准测试报告，以及每个组件背后的[研究依据](../../SOURCES.md)）位于 [docs/](../../) 目录中。
 

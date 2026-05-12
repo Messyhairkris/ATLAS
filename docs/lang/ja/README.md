@@ -40,39 +40,39 @@ ATLAS は、自分の GPU 上で動くコーディングアシスタントです
 ## ATLAS の機能
 
 1. **[atlas-tui](../../CLI.md)** - ネイティブ Bubbletea ターミナル UI。公式チャットクライアント (PC-062)。任意のプロジェクトディレクトリで `atlas` と入力すれば起動します。
-  - a. [ライブパイプライン表示](../../CLI.md#panes) - V3 ステージをサイドペインで監視
-  - b. [スラッシュコマンド](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` でローカルファイルとシェルを操作
-  - c. [入力モード](../../CLI.md#input-modes) - チャット、`!bash`、`/slash` をヒントドロップダウン付きで切り替え
+   - [ライブパイプライン表示](../../CLI.md#panes) - V3 ステージをサイドペインで監視
+   - [スラッシュコマンド](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` でローカルファイルとシェルを操作
+   - [入力モード](../../CLI.md#input-modes) - チャット、`!bash`、`/slash` をヒントドロップダウン付きで切り替え
 
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - システム全体を統括する Go 製エージェントループ。
-  - a. [ツールコールルーティング](../../ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
-  - b. [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで JSON 出力の妥当性を担保
-  - c. [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - ツール選択バイアス対策の四段構成（説明文、文法禁則、システムノート、ASA ステアリング）
-  - d. [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
+   - [ツールコールルーティング](../../ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
+   - [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで JSON 出力の妥当性を担保
+   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - ツール選択バイアス対策の四段構成（説明文、文法禁則、システムノート、ASA ステアリング）
+   - [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
 
 3. **[V3 パイプライン](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。
-  - a. [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 制約駆動の構造化プランニング
-  - b. [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 温度と戦略をまたぐ多様な候補生成
-  - c. [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - フェーズごとの思考トークン割り当て
-  - d. [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 自己生成テストによる反復修正
-  - e. [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - サンドボックスでの検証と修正を繰り返す
-  - f. [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 難問向けのマルチステップ推論
+   - [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 制約駆動の構造化プランニング
+   - [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 温度と戦略をまたぐ多様な候補生成
+   - [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - フェーズごとの思考トークン割り当て
+   - [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 自己生成テストによる反復修正
+   - [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - サンドボックスでの検証と修正を繰り返す
+   - [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 難問向けのマルチステップ推論
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
-  - a. [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する 4096→512→128→1 の MLP
-  - b. [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 選択に用いる XGBoost アンサンブル
-  - c. [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - AST 対応のコード検索とプロジェクトインデキシング
-  - d. [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling で必要な候補に計算を寄せる
+   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する 4096→512→128→1 の MLP
+   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 選択に用いる XGBoost アンサンブル
+   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - AST 対応のコード検索とプロジェクトインデキシング
+   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling で必要な候補に計算を寄せる
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。
-  - a. 多言語実行: Python、Rust、Go、C、Shell など
-  - b. スコアリング前のコンパイルとリント
-  - c. 生成テストと既存テストスイートの両方を実行
+   - 多言語実行: Python、Rust、Go、C、Shell など
+   - スコアリング前のコンパイルとリント
+   - 生成テストと既存テストスイートの両方を実行
 
 6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 単一のコンシューマ GPU 上でのローカル LLM 推論。
-  - a. CUDA 加速の量子化推論 (Q6_K / Q4_K_M)
-  - b. トークンレベルの文法制約デコーディング
-  - c. セルフ埋め込み（別モデル不要）
+   - CUDA 加速の量子化推論 (Q6_K / Q4_K_M)
+   - トークンレベルの文法制約デコーディング
+   - セルフ埋め込み（別モデル不要）
 
 詳細ドキュメント（セットアップ、アーキテクチャ、設定、トラブルシューティング、ベンチマークレポート、各コンポーネントの[研究的背景](../../SOURCES.md)）は [docs/](../../) にあります。
 
