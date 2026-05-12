@@ -22,7 +22,9 @@
 
 ATLAS is a coding assistant that runs on your own GPU. Point it at a project and it does the kind of work you'd ask Claude or Copilot to do: read a codebase, write a feature, fix a bug. The model never leaves your machine.
 
-Open models aren't usually competitive with hosted ones. ATLAS gets there anyway by wrapping the model in a layer of inference scaffolding: planning before generation, verifying answers against self-generated tests, repairing the failures. The 14B reference build scored 74.6% on LiveCodeBench. Same scaffolding now runs on a 9B that fits on a $500 GPU.
+Every hosted AI tool is a subscription, a privacy tradeoff, and a vendor you trust to stick around. ATLAS isn't any of those. Your code stays on your hardware. You don't pay per token. If the project disappears tomorrow, your install keeps working.
+
+Open models historically can't keep up with hosted ones. ATLAS gets there anyway with a layer of inference scaffolding: planning before generation, verifying answers against self-generated tests, repairing failures. The 14B reference build scored 74.6% on LiveCodeBench. ATLAS canonically runs a 9B that fits on a $500 GPU, but isn't tied to any one model.
 
 ---
 
