@@ -9,7 +9,6 @@
   <img src="https://img.shields.io/badge/version-V3.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-Qwen3.5--9B-green" alt="Model"/>
-  <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
 </p>
 
 <p align="center">
@@ -20,11 +19,10 @@
 
 
 ## 🌎 What is ATLAS?
-ATLAS is a self-hosted coding assistant built on intelligent inference infrastructure. You point it at an open-weight model running locally, and it turns that model into something that competes with frontier systems, with no fine-tuning, no API calls, and no cloud in between.
 
-Instead of training a larger model or routing to a hosted one, ATLAS wraps a frozen local model in a pipeline that plans before generating, verifies its own output against constraints it extracts from the problem, scores candidates with an energy-based lens, and repairs failures through self-generated test feedback. The weights never change. The intelligence lives in the scaffolding around them.
+ATLAS is a coding assistant that runs on your own GPU. Point it at a project and it does the kind of work you'd ask Claude or Copilot to do: read a codebase, write a feature, fix a bug. The model never leaves your machine.
 
-The result is a serious coding assistant that runs on a single consumer GPU for fractions of a cent per task. Nothing leaves your machine, no vendor can pull the model out from under you, and the entire stack is open source. One model, one GPU, no one else's infrastructure in the loop.
+Open models aren't usually competitive with hosted ones. ATLAS gets there anyway by wrapping the model in a layer of inference scaffolding: planning before generation, verifying answers against self-generated tests, repairing the failures. The 14B reference build scored 74.6% on LiveCodeBench. Same scaffolding now runs on a 9B that fits on a $500 GPU.
 
 ---
 
@@ -55,64 +53,74 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 
 ## 🧱 What ATLAS Does
 
-1. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go-based agent loop that orchestrates the entire system.
+1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client (PC-062). Type `atlas` in any project directory to launch it.
+  - a. [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
+  - b. [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
+  - c. [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
+
+2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
   - a. [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-  - b. [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas guarantee 100% valid JSON output
-  - c. [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeout enforcement
+  - b. [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas keep JSON output valid
+  - c. [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
+  - d. [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
-2. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation that turns a single prompt into verified, high-quality output.
+3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
   - a. [PlanSearch](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - constraint-driven structured planning
-  - b. [DivSampling](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - diverse candidate generation across temperature and strategy
-  - c. [Budget Forcing](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - controls thinking token allocation per phase
-  - d. [PR-CoT Repair](docs/reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - self-generated test cases for iterative fix cycles
-  - e. [Refinement Loops](docs/reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - repeated sandbox verification and correction
-  - f. [Derivation Chains](docs/reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - multi-step reasoning for complex problems
+  - b. [DivSampling](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - diverse candidates across temperature and strategy
+  - c. [Budget Forcing](docs/reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - per-phase thinking-token allocation
+  - d. [PR-CoT Repair](docs/reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - self-generated test cases for iterative fixes
+  - e. [Refinement Loops](docs/reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - sandbox verify and correct, then repeat
+  - f. [Derivation Chains](docs/reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - multi-step reasoning for harder problems
 
-3. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring and retrieval without external oracles. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
-  - a. [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - MLP that scores candidate quality from embeddings
-  - b. [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost model for selection decisions
+4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
+  - a. [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - 4096→512→128→1 MLP that scores candidate quality
+  - b. [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble used for selection
   - c. [RAG / PageIndex V2](docs/ARCHITECTURE.md#rag--pageindex-v2) - AST-aware code retrieval and project indexing
-  - d. [Confidence Router](docs/ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling routes compute where it matters
+  - d. [Confidence Router](docs/ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling routes compute to the candidates that need it
 
-4. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution environment for build verification.
-  - a. Multi-language execution - Python, Rust, Go, C, Shell, and more
-  - b. Compilation and linting - syntax verification before scoring
-  - c. Test running - executes generated and existing test suites
+5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
+  - a. Multi-language execution: Python, Rust, Go, C, Shell, others
+  - b. Compilation and linting before scoring
+  - c. Runs both generated and existing test suites
 
-5. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on a single consumer GPU.
-  - a. CUDA acceleration - quantized model inference (Q6_K / Q4_K_M)
-  - b. Grammar-constrained decoding - structured output at the token level
-  - c. Self-embeddings - embedding extraction without a separate model
+6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
+  - a. CUDA-accelerated quantized inference (Q6_K / Q4_K_M)
+  - b. Grammar-constrained decoding at the token level
+  - c. Self-embeddings, so the lens doesn't need a second model
 
-6. **[Interactive CLI](docs/CLI.md)** - type `atlas` in any project directory and start building.
-  - a. [Tool-call agent loop](docs/CLI.md#streaming-output) - read, write, edit, delete, run commands
-  - b. [Streaming output](docs/CLI.md#how-streaming-works) - real-time response via SSE
-  - c. [Project-aware context](docs/CLI.md#proxy-file-access) - automatic file discovery and injection
-
-Full documentation - setup guides, architecture, configuration, troubleshooting, benchmark reports, and the [research that informs each component](docs/SOURCES.md) - lives in the [docs/](docs/) directory.
+Full documentation (setup, architecture, configuration, troubleshooting, benchmark reports, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
 
 ---
 
 ## 🚀 Get Started
 
-**One-shot install** — single curl, walks away:
+One-shot install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, builds the ASA steering vector (~5 min, BiasBusters #4), brings the stack up, and prints a green "ready" banner. Total time ~10–30 minutes on a fast connection (model download dominates).
+The script detects your distro (Ubuntu, Debian, RHEL, Fedora, Rocky, Alma), installs Docker and nvidia-container-toolkit, downloads the model weights, builds the ASA steering vector, and starts the stack. Expect 10-30 minutes; the model download is the bottleneck.
 
-Then in any project directory: `atlas`.
+Then in any project directory, run `atlas`.
 
-ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags.
+**Requirements**
+
+| | |
+|---|---|
+| GPU | NVIDIA, 16GB+ VRAM (tested on RTX 5060 Ti 16GB) |
+| Runtime | Docker with nvidia-container-toolkit, or Podman |
+| Python | 3.9+ |
+| Disk | ~20GB (model weights + container images) |
+
+Tested on NVIDIA only. macOS, Windows, and AMD ROCm are on the V3.1.1 roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
 
 ---
 
 ## ⚠️ Known Limitations
 
-- **Tested on NVIDIA only** - ATLAS uses llama.cpp for inference, which supports multiple accelerator backends. ROCm support is on the next-release roadmap.
-- **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are next-release work. For the V3 (14B) benchmark results, methodology, and ablation analysis, see [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw benchmark traces are published on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
-- **Complex feature additions can fail** - adding features to existing projects succeeds ~67% of the time. The model sometimes over-explores instead of writing code.
-- **Grammar-constrained inference speed** - ~51 tok/s on llama-server. Faster grammar integration is on the next-release roadmap.
+- **NVIDIA-only.** Tested on NVIDIA GPUs. AMD ROCm and Apple Metal are on the V3.1.1 roadmap.
+- **9B model is not formally benchmarked yet.** V3.1.0 ships Qwen3.5-9B with the full V3 pipeline, but the canonical 74.6% LiveCodeBench score is from the 14B reference build. Formal 9B numbers land with V3.1.1. The 14B methodology and ablations live in [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw traces are on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+- **Complex feature additions can be inconsistent.** The model sometimes spends agent turns exploring an unfamiliar codebase before writing code. Reliability has improved on the 9B build since the V3.0 measurement; a fresh number lands with the V3.1.1 benchmark pass.
+- **Grammar-constrained decoding is slow.** Around 51 tok/s on llama-server.
 
 ---
 
@@ -120,15 +128,10 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 
 **V3.1.0** - Current release. Bubbletea TUI as the canonical chat client (PC-062), `atlas init` first-run wizard (PC-054), `atlas doctor` install diagnostic (PC-053), `atlas tier` hardware-aware presets (PC-055), K3s deployment templates restored, ASA steering vectors auto-built during install (BiasBusters #4).
 
-**V3.1.x / next** - In progress.
-- ROCm support - AMD GPU inference via llama.cpp ROCm backend.
+**V3.1.1** - Next release.
+- OS support - macOS and Windows installers.
+- Expanded accelerator support - AMD ROCm via llama.cpp; Apple Metal once macOS lands.
 - Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
-- CLI reliability - expanded testing, targeting L6 ≥ 90%.
-- Grammar speed - C-side sampler chain for faster constrained decoding.
-- Structural code reasoning - tree-sitter + solver-backed call graph for reachability queries and scoped context injection, so the model stops burning agent turns exploring unfamiliar codebases on L6 tasks. Tracked as [issue #39](https://github.com/itigges22/ATLAS/issues/39); inspired by [Dmitri Sotnikov's chiasmus](https://github.com/yogthos/chiasmus/tree/main).
-
-**V3.2** - Exploratory.
-- [Reasoning with Sampling](https://arxiv.org/abs/2510.14901) - MCMC over logits during decoding to prune bad trajectories before completion, saving compute on PlanSearch candidates already going off the rails. Complements the Geometric Lens's post-hoc scoring; tracked as [issue #40](https://github.com/itigges22/ATLAS/issues/40).
 
 ---
 
