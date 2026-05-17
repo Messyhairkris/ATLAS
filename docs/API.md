@@ -2,7 +2,17 @@
 
 API endpoints for each ATLAS service. All services communicate over HTTP/JSON. Streaming endpoints use Server-Sent Events (SSE).
 
-> **Ports listed are defaults.** All are configurable via environment variables (see [CONFIGURATION.md](CONFIGURATION.md)). Docker Compose maps container-internal ports to host ports — the ports below are what you hit from the host.
+> **Ports listed are defaults.** All are configurable via environment variables (see [CONFIGURATION.md](CONFIGURATION.md)). The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
+>
+> | Service | Docker Compose (host=container) | Bare metal (env-configured) | K3s NodePort (`atlas.conf.example`) |
+> |---|---|---|---|
+> | atlas-proxy | `8090` | `ATLAS_PROXY_PORT` (default 8090) | `ATLAS_LLM_PROXY_NODEPORT` (default 30080) |
+> | v3-service | `8070` | `ATLAS_V3_PORT` (default 8070) | — internal-only |
+> | geometric-lens | `8099` | `ATLAS_LENS_PORT` (default 8099) | `ATLAS_LENS_NODEPORT` (default 31144) |
+> | sandbox | host `30820` → container `8020` | `ATLAS_SANDBOX_PORT` (default 8020) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
+> | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
+>
+> The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](SETUP.md) for the full K3s deployment.
 
 ---
 
@@ -19,6 +29,7 @@ There are three primary endpoints for building a client:
 | `/v1/agent` | POST | Send a user message, stream back a turn (tool calls, results, tokens, completion) as SSE |
 | `/cancel` | POST | Abort an in-flight `/v1/agent` turn by `session_id` |
 | `/events` | GET | Subscribe to a global typed-envelope event broker (PC-061) — same events the TUI's pipeline pane uses |
+| `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup (PC-059) |
 
 Plus three legacy / utility endpoints:
 
@@ -27,6 +38,7 @@ Plus three legacy / utility endpoints:
 | `/v1/chat/completions` | POST | OpenAI-compatible chat completions (legacy, kept for SDK compatibility) |
 | `/v1/models` | GET | List available models (OpenAI-compatible) |
 | `/health` | GET | Liveness + counters |
+| `/ready` | GET | Readiness probe — flips to 503 when lens scoring is degraded (lens weights missing, embedding-dim mismatch, etc — see PC-019). Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 
 ---
 
@@ -77,10 +89,11 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
 | `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
 | `v3_select` | Candidate selection (`s_star`, `s_star_winner`, `selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
-| `lens_per_step` | PC-207 wiring: per-token C(x)+G(x) scoring of each candidate via `/internal/lens/score-per-step`. Fires once per candidate after generation (PlanSearch + DivSampling paths). Lets the TUI surface WHERE a candidate's quality cratered, and gives downstream candidate-selection logic a per-step signal beyond the single `energy` scalar. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
-| `lens_veto` | PC-207 alignment: V3 hard-rejected a sandbox-passing candidate because its `gx_min` sat below the severe-quality threshold (0.05). Sandbox proves execution; lens proves the model's internal state didn't collapse to a stub. Without this veto a 10-line `<h1>Page</h1>` stub passes sandbox and rubber-stamps a bad write. Fires per-vetoed-candidate, before selection. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
-| `structural_veto` | GH #39 point 1: V3 hard-rejected a sandbox-passing candidate because tree-sitter found one or more direct-identifier calls that don't resolve to a local def, import, builtin, or project symbol. Sandbox can pass for code with try/except ImportError fallbacks or dead branches; structural verification doesn't care whether the unresolved call actually executes, only that it can't resolve. Fires per-vetoed-candidate, after `lens_veto`, before selection. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
-| `call_chain_context` | GH #39 point 3: V3's phase-3 repair built a call-chain context block for the failing function (parsed from the deepest non-`<module>` frame in the candidate's stderr) and is about to inject it into PR-CoT, refinement-loop, and derivation-chain prompts. Informational, not a veto. Fires once per phase-3 entry, only when the failing function is actually defined in `file_map`. | `stage`, `detail`, `function` (string — the failing function name) |
+| `v3_lens_per_step` | PC-207 wiring: per-token C(x)+G(x) scoring of each candidate via `/internal/lens/score-per-step`. Fires once per candidate after generation (PlanSearch + DivSampling paths). Lets the TUI surface WHERE a candidate's quality cratered, and gives downstream candidate-selection logic a per-step signal beyond the single `energy` scalar. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
+| `v3_lens_veto` | PC-207 alignment: V3 hard-rejected a sandbox-passing candidate because its `gx_min` sat below the severe-quality threshold (0.05). Sandbox proves execution; lens proves the model's internal state didn't collapse to a stub. Without this veto a 10-line `<h1>Page</h1>` stub passes sandbox and rubber-stamps a bad write. Fires per-vetoed-candidate, before selection. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
+| `v3_structural_veto` | GH #39 point 1: V3 hard-rejected a sandbox-passing candidate because tree-sitter found one or more direct-identifier calls that don't resolve to a local def, import, builtin, or project symbol. Sandbox can pass for code with try/except ImportError fallbacks or dead branches; structural verification doesn't care whether the unresolved call actually executes, only that it can't resolve. Fires per-vetoed-candidate, after `v3_lens_veto`, before selection. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
+| `v3_call_chain_context` | GH #39 point 3: V3's phase-3 repair built a call-chain context block for the failing function (parsed from the deepest non-`<module>` frame in the candidate's stderr) and is about to inject it into PR-CoT, refinement-loop, and derivation-chain prompts. Informational, not a veto. Fires once per phase-3 entry, only when the failing function is actually defined in `file_map`. | `stage`, `detail`, `function` (string — the failing function name) |
+| `symbol_index_injected` | GH #39 point 4: before the first LLM call, the proxy auto-injects function/class snippets for symbols referenced in the user message (via `/internal/symbol_index`). This event fires once per turn-zero, listing what got injected so the TUI can show "pre-loaded 3 snippets" instead of an opaque burst of context. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
 | `agent_lens_score` | PC-207 agent-loop integration: lens scored a `write_file` or `edit_file` tool call's content via `/internal/lens/score-per-step`. Fires per write/edit before tool execution. The score reflects the model's output quality (independent of whether the tool succeeds). Used by the proxy to detect stuck/repetitive patterns (see `agent_lens_intervention`). | `tool` (`write_file`\|`edit_file`), `turn` (int), `n_tokens` (int), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `latency_ms` (float) |
 | `agent_lens_intervention` | PC-207 agent-loop integration: lens detected ≥2 consecutive `write_file`/`edit_file` responses with `gx_score_min` below the low-quality threshold (0.15). The proxy queues a corrective system message that the next LLM call will see, breaking the model out of stuck patterns (the May 6 `templates/resources.html` stub-loop signature). | `turn` (int), `tool` (string), `reason` (string — the multi-sentence corrective injected into ctx.Messages) |
 | `agent_repeat_intervention` | Tool-call repetition detector (`proxy/tool_repeat.go`): proxy saw the model emit the same `(tool_name, args)` signature ≥3 times in the last 8 turns and queued a corrective for the next LLM call. Sibling to `agent_lens_intervention` — the lens covers semantic repetition in `write_file`/`edit_file` content; this covers structural repetition (e.g. `read_file('app.py')` 4 times in 6 turns, `run_command('curl …')` after the same error) for any tool. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
@@ -165,20 +178,18 @@ The TUI uses this on `Esc` mid-turn — see [CLI.md → Cancelling a turn](CLI.m
 
 Subscribe to the **global typed-envelope broker** (PC-061). Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
 
-**Envelope wire format** (matches `atlas/cli/events.py` exactly):
+**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`parent_id` is reserved but never set by current producers; `duration_ms` is only set on `stage_end` / `tool_result`):
 ```json
 {
   "event_id": "evt_a1b2c3d4",
   "timestamp": 1714617823.412,
   "type": "stage_start",
   "stage": "llm",
-  "payload": {"turn": 1, "messages": 3},
-  "parent_id": "evt_...",
-  "duration_ms": 245
+  "payload": {"turn": 1, "messages": 3}
 }
 ```
 
-**Event types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`.
+**Event types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`. See [PROTOCOL.md](PROTOCOL.md) for the full per-type payload contracts and the legacy → envelope translation atlas-proxy applies to v3-service SSE.
 
 **Transport:** SSE. Each line is `data: <json>\n\n`. The server sends `: connected\n\n` immediately on subscribe and a `: heartbeat\n\n` comment every 15 s during quiet stretches to keep proxies/load-balancers from idling out the connection.
 
@@ -188,6 +199,46 @@ curl -N http://localhost:8090/events
 ```
 
 Use `/events` when you want a global observability feed (a TUI pipeline pane, a metrics scraper, a debug log viewer). Use `/v1/agent` when you want to drive a specific user turn.
+
+---
+
+### GET /v1/calibration/status
+
+Returns the proxy's view of whether the loaded model has compatible Geometric Lens artifacts (PC-057 verdict, distilled from the lens service's `/health` payload) and whether an ASA control vector is in play. The TUI hits this on startup to render the badge next to the Pipeline pane title.
+
+**Response shape:**
+
+```json
+{
+  "lens": {
+    "verdict": "supported",
+    "cost_field_loaded": true,
+    "cost_field_dim": 4096,
+    "embed_dim": 4096,
+    "gx_loaded": true,
+    "hint": "ready"
+  },
+  "asa": {
+    "verdict": "missing",
+    "vector_path": "/models/ast_edit_steering.gguf",
+    "vector_present": false,
+    "hint": "no control vector at /models/ast_edit_steering.gguf — build one via `atlas asa build` (PC-061)"
+  }
+}
+```
+
+**Verdict values:**
+
+- **Lens:** `supported` | `no-artifacts` | `dim-mismatch` | `unreachable`
+- **ASA:** `supported` | `missing` | `unverified` (V3.1.2 will add `dim-mismatch` once PC-061 deepens the probe)
+
+**Use:**
+
+```bash
+curl http://localhost:8090/v1/calibration/status | jq .
+```
+
+**Cache:** none — every call re-probes the lens service. Cost is ~50–200 ms (one HTTP round-trip to `lens/health`). TUI calls once at startup; CI / monitoring should poll no faster than every few seconds.
 
 ---
 
@@ -246,13 +297,17 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
-| `write_file` | Create a new file or replace its full contents (rejected for existing files >100 lines — use `edit_file` instead) |
-| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. May route through V3 verification when the file is build-checkable. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go:557-568`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). PC-201 exempts corrupted-looking files (prose preamble, stray markdown fences) so a self-heal full-replace is allowed there. |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. The wrong tool for >10 lines of change — switch to `ast_edit`. |
+| `ast_edit` | GH #39 — surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
 | `delete_file` | Remove a file from the workspace |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
 | `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. (PC-028) |
 | `list_directory` | List files and subdirectories at a given path |
 | `run_command` | Execute a shell command via bash inside the **sandbox container** (PC-188). Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. Falls back to local proxy exec when the sandbox is unreachable so the dev/test workflow without docker compose still works. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
+| `run_background` | PC-196 — start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
+| `tail_background` | PC-196 — fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
+| `stop_background` | PC-196 — terminate a backgrounded job by `job_id`. |
 | `plan_tasks` | Decompose work into parallel tasks with dependencies |
 
 ---
@@ -365,7 +420,7 @@ Simplified endpoint for running the pipeline on a problem description (used by t
 
 ### POST /v3/plan
 
-Generates a step-by-step plan for a coding task using diverse LLM sampling and heuristic scoring. Used by the proxy's agent loop to seed each turn with explicit step guidance — see [PLAN_MODE.md](PLAN_MODE.md) for the consumer side.
+Generates a step-by-step plan for a coding task using diverse LLM sampling and heuristic scoring. Used by the proxy's agent loop to seed each turn with explicit step guidance — see [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) for the consumer side.
 
 **Request:**
 ```json
@@ -514,7 +569,7 @@ curl http://localhost:8070/health
 
 Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also serves as the RAG API for project indexing and retrieval.
 
-> **Internal port note:** The container runs uvicorn on port 8001. Docker Compose maps this to 8099 on the host.
+> **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile:26`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
 ### POST /internal/lens/gx-score
 
@@ -564,6 +619,14 @@ curl http://localhost:8099/health
 # {"status": "healthy", "service": "geometric-lens"}
 ```
 
+### GET /ready
+
+```bash
+curl http://localhost:8099/ready
+```
+
+Readiness probe (`geometric-lens/main.py:294`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch — see PC-019). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
+
 <details>
 <summary><b>Additional internal endpoints</b></summary>
 
@@ -603,6 +666,49 @@ These are used internally by other ATLAS services. They are stable but not part 
 ## Sandbox (Port 30820 → container 8020)
 
 Isolated code execution with compilation, testing, and linting support. The container is read-only with `/workspace` bind-mounted (rw) from `ATLAS_PROJECT_DIR` — the same path the proxy sees, so paths the agent learned via `read_file`/`list_directory` work verbatim in `/shell` calls.
+
+### POST /jobs/start
+
+PC-196 — spawn a background process and return a `job_id` immediately. Used by the proxy's `run_background` tool for long-running things like `python app.py` or `npm run dev`. The process runs in a new session group so `/jobs/{id}/stop` can kill the whole tree.
+
+**Request:**
+```json
+{
+  "command": "python app.py",
+  "cwd": "/workspace",
+  "env": {"FLASK_ENV": "development"}
+}
+```
+
+**Response:**
+```json
+{"job_id": "a1b2c3d4e5f6", "pid": 4711, "started_at": 1714617823.4}
+```
+
+**Errors:** 400 on empty command; 429 when active-job count exceeds `BG_MAX_JOBS`.
+
+### GET /jobs/{job_id}/output
+
+Snapshot of recent stdout/stderr plus run state. Used by the proxy's `tail_background` tool. Each stream is a ring buffer capped at `BG_MAX_LINES`; pass `?lines=N` (default 50) for the tail length.
+
+**Response:**
+```json
+{
+  "job_id": "a1b2c3d4e5f6",
+  "running": true,
+  "exit_code": null,
+  "stdout": ["Listening on :5000\n", "..."],
+  "stderr": [],
+  "elapsed_sec": 12.4,
+  "command": "python app.py"
+}
+```
+
+`exit_code` is null while running, integer once exited. **404** when `job_id` is unknown.
+
+### POST /jobs/{job_id}/stop
+
+SIGTERM the process group, wait briefly, SIGKILL if still alive. Used by the proxy's `stop_background` tool. Returns the final stdout/stderr buffer. **404** when `job_id` is unknown.
 
 ### POST /shell
 

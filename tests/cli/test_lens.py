@@ -277,4 +277,135 @@ def test_main_with_no_subcommand_shows_help(capsys):
     rc = lens.main([])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "check" in out and "build" in out
+    assert "check" in out and "build" in out and "publish" in out
+
+
+# ---------------------------------------------------------------------------
+# Publish subcommand (PC-059) — paths that don't require an HF token
+# ---------------------------------------------------------------------------
+
+def test_publish_refuses_when_no_artifact(monkeypatch, tmp_path, capsys):
+    """No cost_field.pt in the artifact dir -> usage error (rc=1)."""
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K", "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "No cost_field.pt" in out
+    assert "atlas lens build" in out
+
+
+def test_publish_dry_run_prints_pr_body(monkeypatch, tmp_path, capsys):
+    """Dry-run hashes the artifact, renders the PR body, prints it."""
+    torch = pytest.importorskip("torch")
+    state = {"net.0.weight": torch.zeros(512, 4096),
+             "net.0.bias": torch.zeros(512)}
+    torch.save(state, tmp_path / "cost_field.pt")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K", "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # PR body markdown should be present
+    assert "Verification checklist" in out
+    assert "Suggested registry diff" in out
+    # SHA256 should appear (computed from the fake .pt above)
+    assert "SHA256" in out or "sha256" in out
+    # Should mention `atlas lens publish` (the tool that auto-generated it)
+    assert "auto-generated" in out
+
+
+def test_publish_dry_run_works_without_torch(monkeypatch, tmp_path, capsys):
+    """Even without torch on the host, publish --dry-run should still
+    print a usable PR body — just with dim shown as 'unverified'."""
+    # Create a non-empty cost_field.pt that isn't a valid torch state dict.
+    # The SHA-256 + size + path inspection paths don't need torch; only
+    # the dim introspection does.
+    (tmp_path / "cost_field.pt").write_bytes(b"fake pt content for sha256")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    # Force the dim-inspection to fail by stubbing _inspect_cost_field.
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=None,
+                                           torch_available=False,
+                                           error="torch missing"))
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K", "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "unverified" in out  # dim_label fallback
+
+
+def test_publish_requires_repo_unless_dry_run(monkeypatch, tmp_path, capsys):
+    """No --repo + no --dry-run -> usage error explaining the requirement."""
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+    # Make sure HF_TOKEN is unset so we don't even reach the upload path
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "--repo" in out
+
+
+def test_publish_requires_hf_token_when_uploading(monkeypatch, tmp_path, capsys):
+    """--repo given but HF_TOKEN missing -> clean error pointing at the
+    token settings page."""
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+    for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K",
+                    "--repo", "alice/atlas-lens-test", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "HF_TOKEN" in out
+    assert "huggingface.co/settings/tokens" in out
+
+
+def test_publish_skip_pr_writes_body_without_gh(monkeypatch, tmp_path, capsys):
+    """--skip-pr in dry-run mode should print the PR body unconditionally
+    (no `gh` invocation, no upload). Sanity-check the exit code is 0."""
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K",
+                    "--dry-run", "--skip-pr", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Verification checklist" in out
+
+
+def test_render_registry_pr_body_includes_required_fields():
+    """Direct unit test on the renderer — guards against accidental
+    field drops in the markdown template."""
+    body = lens._render_registry_pr_body(
+        model_name="TestModel-9B",
+        hf_repo="alice/atlas-lens-test",
+        base_model="TestModel 9B (Q6_K)",
+        dim=4096,
+        sha256="a" * 64,
+        license_id="apache-2.0",
+    )
+    assert "TestModel-9B" in body
+    assert "alice/atlas-lens-test" in body
+    assert "apache-2.0" in body
+    assert "a" * 64 in body
+    # The maintainer needs the Python diff with `lens_status="supported"`
+    assert 'lens_status="supported"' in body
+
+
+def test_sha256_file_is_deterministic_and_correct(tmp_path):
+    """_sha256_file should match what `sha256sum` would compute."""
+    import hashlib
+    content = b"deterministic content for sha test" * 100
+    (tmp_path / "f.bin").write_bytes(content)
+    expected = hashlib.sha256(content).hexdigest()
+    assert lens._sha256_file(str(tmp_path / "f.bin")) == expected

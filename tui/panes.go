@@ -642,6 +642,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	lastTurnTokens, totalTokens, maxTokens int,
 	hideFiles, hidePipeline, hideEvents bool,
 	sel selectionState,
+	calibrationBadge string,
 	width, height int) (string, int) {
 
 	if width <= 0 || height <= 0 {
@@ -738,8 +739,16 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			p, pipelineContentH, innerW, pipelineScroll)
 		pipelinePane = applySelectionOverlay(pipelinePane, "pipeline",
 			sel, pipelineTopY, pipelineContentH)
+		// PC-059: append the Lens/ASA calibration badge to the right
+		// of the "Pipeline" title so users see compat verdict at a
+		// glance. The badge is pre-rendered by the caller (model.go's
+		// View) from m.calibration so this function stays UI-only.
+		pipelineTitle := titleStyle.Render(" Pipeline ")
+		if calibrationBadge != "" {
+			pipelineTitle += calibrationBadge
+		}
 		pipelineBox = bordStyle.Width(innerW).Render(
-			titleStyle.Render(" Pipeline ") + "\n" + pipelinePane)
+			pipelineTitle + "\n" + pipelinePane)
 	}
 
 	// Chat: render history into the available rows, then append a

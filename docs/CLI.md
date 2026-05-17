@@ -407,7 +407,41 @@ Minimums: at least 50 samples with both classes present (build refuses below thi
 After a successful build:
 1. `cost_field.pt` lands in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`).
 2. Re-run `atlas lens check` — should now report `compat`.
-3. Update the model's registry entry to `lens_status="supported"` so `atlas doctor` and `atlas tier` surface that the model has artifacts. (Registry write-back automation is PC-059 — for now this is a one-line manual edit to `atlas/cli/commands/model_registry.py`.)
+3. Run `atlas lens publish` (PC-059, below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
+
+### `atlas lens publish`
+
+Uploads trained artifacts to a HuggingFace repo and generates a maintainer-reviewable PR body that adds the model to the ATLAS registry (PC-059, GH #101).
+
+```bash
+atlas lens publish Qwen3.5-9B-Q6_K --repo alice/atlas-lens-qwen35-9b
+atlas lens publish <model> --repo <user>/<repo> --license mit
+atlas lens publish <model> --dry-run            # hash + render PR body, don't upload
+atlas lens publish <model> --skip-pr            # upload to HF, print PR body for manual paste
+```
+
+**Pipeline:**
+1. SHA-256 + size of `cost_field.pt` for the PR's verification checklist.
+2. `huggingface_hub` `create_repo` (idempotent) + uploads `cost_field.pt` + `metric_tensor.pt` if present + an auto-generated `README.md` model card.
+3. Renders a registry-PR markdown body with a verification checklist + suggested Python diff for `atlas/cli/commands/model_registry.py`.
+4. Tries `gh pr create --repo itigges22/ATLAS` if `gh` is installed + authenticated; otherwise prints the body for manual paste.
+
+**Requirements:**
+- `HF_TOKEN` env var (write-scope) — get one at https://huggingface.co/settings/tokens.
+- `pip install huggingface_hub` on the host (already bundled in the lens container).
+- License must be permissive for redistribution (apache-2.0 default; mit / bsd-3-clause also fine).
+
+**`--dry-run` is the no-upload mode** — runs the SHA + PR-body rendering pipeline without touching HF or `gh`. Useful for previewing the PR body before committing to a public upload, or for private deployments that don't want to share artifacts.
+
+### TUI calibration badge
+
+When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/ASA badge fetched from the proxy's `/v1/calibration/status`:
+
+```
+┌ Pipeline   Lens ✓   ASA ⚠ ─────────────────────────────┐
+```
+
+`✓` = supported, `⚠` = no-artifacts / dim-mismatch / missing vector, `✗` = unreachable / incompatible, `?` = unknown verdict. If the proxy is reachable but the lens hint asks you to run `atlas lens check` or `atlas asa check`, the badge gives you a one-glance prompt — the full diagnostic stays in those CLI commands' output.
 
 ### Prereqs
 

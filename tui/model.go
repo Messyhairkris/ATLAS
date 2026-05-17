@@ -163,6 +163,12 @@ type tuiModel struct {
 	// current turn skipped planning (T0 / planner failure).
 	plan *planView
 
+	// PC-059 / PC-061: Lens + ASA calibration verdict for the loaded
+	// model. Populated by fetchCalibrationStatusCmd on startup; rendered
+	// as a compact badge ("Lens ✓  ASA ⚠") next to the Pipeline pane
+	// title. nil while the initial fetch is in flight or if it failed.
+	calibration *calibrationStatus
+
 	// Chat scroll offset — number of rows scrolled UP from the bottom.
 	// 0 means "follow the latest" (auto-scroll on new messages); >0
 	// freezes the view at a position N rows above the latest. PgUp/PgDn
@@ -363,6 +369,10 @@ func (m tuiModel) Init() tea.Cmd {
 		// the ~10–50ms it takes scanFiles to complete on a typical
 		// project; results arrive via scanFilesMsg.
 		scanFilesCmd(m.workingDir),
+		// PC-059: probe Lens + ASA calibration status so the badge
+		// next to the Pipeline pane title can render. Result arrives
+		// via calibrationStatusMsg; until then the badge shows "cal …".
+		fetchCalibrationStatusCmd(m.proxyURL),
 		// Ask Bubbletea to send a WindowSizeMsg right away. Some
 		// terminals/multiplexers (tmux, screen) delay or skip the
 		// initial resize event, leaving us rendering with safe
@@ -890,6 +900,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.at.After(m.lastFileScan) || m.lastFileScan.IsZero() {
 			m.fileEntries = msg.entries
 			m.lastFileScan = msg.at
+		}
+		return m, nil
+
+	case calibrationStatusMsg:
+		// PC-059: initial /v1/calibration/status fetch returned. Store
+		// it; the next render picks up the new badge. On err we leave
+		// m.calibration nil so the badge falls back to its "cal …"
+		// placeholder rather than rendering stale data. Fire-and-forget —
+		// no retries, no Cmd to schedule another fetch (operator can
+		// restart the TUI if the proxy was down at startup).
+		if msg.err == nil {
+			m.calibration = msg.status
 		}
 		return m, nil
 	}
@@ -2065,6 +2087,7 @@ func (m tuiModel) View() string {
 		m.lastTurnTokens, m.totalTokensSession, m.maxContextTokens,
 		m.hideFiles, m.hidePipeline, m.hideEvents,
 		sel,
+		renderCalibrationBadge(m.calibration),
 		width, height)
 	// View is supposed to be pure, but we need to know the rendered
 	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the

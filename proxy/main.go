@@ -235,6 +235,8 @@ func main() {
 	mux.HandleFunc("/v1/agent", handleAgent) // tool-based agent endpoint
 	mux.HandleFunc("/events", handleEvents)  // PC-061: typed SSE event stream
 	mux.HandleFunc("/cancel", handleCancel)  // PC-062: TUI abort hook
+	// PC-059: TUI calls this on connect to render a Lens/ASA compat badge.
+	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -268,21 +270,12 @@ func main() {
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: generate → score → sandbox → repair (max %d) → deliver", maxRepairAttempts)
 
-	// BiasBusters #4 (ASA steering vectors) — always-on once the vector
-	// file exists at the standard path. The proxy doesn't apply the
-	// vector itself (llama-server does, via --control-vector-scaled);
-	// we surface the configured state so it shows up in startup logs
-	// alongside the rest of the pipeline. The default path matches the
-	// inference entrypoint's default. Workflow:
-	// geometric-lens/asa_calibration/README.md.
-	cv := envOr("ATLAS_CONTROL_VECTOR", "/models/ast_edit_steering.gguf")
-	if _, err := os.Stat(cv); err == nil {
-		scale := envOr("ATLAS_CONTROL_VECTOR_SCALE", "0.5")
-		layers := envOr("ATLAS_CONTROL_VECTOR_LAYER_RANGE", "all")
-		log.Printf("  ASA steering: %s (scale=%s, layers=%s) — applied at llama-server", cv, scale, layers)
-	} else {
-		log.Printf("  ASA steering: not present at %s — build it via geometric-lens/asa_calibration/README.md", cv)
-	}
+	// PC-059: probe geometric-lens + ASA calibration so operators see the
+	// same verdict the TUI's header badge will render. The old "ASA
+	// steering: present at X" banner is folded into logCalibrationStatusAtStartup
+	// below (which also adds the corresponding Lens line) so the proxy
+	// surfaces a unified calibration view at startup.
+	logCalibrationStatusAtStartup()
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()
