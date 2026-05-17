@@ -189,6 +189,19 @@ defenses compose in the proxy:
    in `geometric-lens/asa_calibration/README.md`. Override path/scale/
    layer-range via `ATLAS_CONTROL_VECTOR*` env vars.
 
+   **Per-model coupling (PC-061, V3.1.2).** Each ASA vector is trained
+   against a specific model's residual-stream geometry. The shipped
+   `ast_edit_steering.gguf` is calibrated for Qwen3.5-9B (4096-dim, 36
+   layers) — swap in a different model and the vector is at best a no-op
+   and at worst an active mis-steer. `atlas asa check` probes the configured
+   vector vs the loaded model's embedding dim, parses the GGUF metadata for
+   layer count + `model_hint`, and reports `compat` / `needs-build` /
+   `incompatible`. `atlas asa build` wraps the calibration workflow into
+   one CLI invocation that runs inside the lens container (which has the
+   PC-202 hidden-states client). `atlas asa publish` ships trained
+   artifacts to HF and generates a registry-PR — parallel to the
+   `atlas lens` family added in PC-057/058/059. See [CLI.md § atlas asa](CLI.md#atlas-asa-pc-061).
+
 All four mitigations compose: ASA biases the proposal distribution
 upstream (item 4), grammar is a hard ban after rejection (item 2),
 the system note keeps the model's working palette focused (item 3),

@@ -433,6 +433,65 @@ atlas lens publish <model> --skip-pr            # upload to HF, print PR body fo
 
 **`--dry-run` is the no-upload mode** — runs the SHA + PR-body rendering pipeline without touching HF or `gh`. Useful for previewing the PR body before committing to a public upload, or for private deployments that don't want to share artifacts.
 
+---
+
+## atlas asa (PC-061)
+
+ASA control-vector compat probe + per-model training + publish. Same shape as `atlas lens`, different mechanics. Wraps `geometric-lens/asa_calibration/build_steering_vector.py` end-to-end so swap-in models can be calibrated without learning the underlying scripts.
+
+### `atlas asa check`
+
+Probes the running llama-server + the configured `ATLAS_CONTROL_VECTOR` to verify the vector's residual dim matches the model's embedding dim.
+
+```bash
+atlas asa check                 # probe whatever's loaded
+atlas asa check --json          # machine-readable for CI / monitoring
+```
+
+Verdict + exit code:
+
+| Verdict | Exit | Meaning |
+|---|---|---|
+| `compat` | 0 | Vector present + dim matches model. Ready for `--control-vector-scaled`. |
+| `needs-build` | 1 | No vector, or dim mismatched (vector was trained for a different model). |
+| `incompatible` | 2 | llama-server unreachable. |
+
+Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `<atlas_root>/models/` and `$ATLAS_MODELS_DIR` in turn — so running `atlas asa check` on the host Just Works without manually translating paths.
+
+Requires the `gguf` Python pkg on the host (`pip install gguf`) for the dim probe. Without it the verdict falls back to `compat: unverified` rather than failing — llama-server will refuse to load an incompatible vector at boot anyway, so the worst case is a clear error in container logs.
+
+### `atlas asa build`
+
+Trains a fresh ASA vector by running `build_steering_vector.py` inside the lens container (which has the PC-202 hidden-states client + numpy + the gguf writer). The script + contrast pairs are docker-cp'd in, the run executes there, and the output `.gguf` is copied back to the host.
+
+```bash
+atlas asa build                                  # train w/ bundled contrast_pairs.jsonl
+atlas asa build --pairs custom.jsonl             # custom pairs (same {prompt, label} schema)
+atlas asa build --layer 27                       # extraction layer (default 27 = ~75% of Qwen3.5-9B's 36)
+atlas asa build --limit 50                       # smoke test (50 pairs, ~1 min)
+atlas asa build --container atlas-geometric-lens-1   # override container name
+atlas asa build --dry-run                        # stage but don't run
+```
+
+Full 1000-pair training run takes ~25 min on the canonical RTX 5060 Ti. Smoke-test (`--limit 50`) is the fast path for validating the build pipeline works end-to-end before committing to the full run.
+
+After build:
+1. The `.gguf` lands at `<artifact-dir>/ast_edit_steering.gguf` (default: dirname of `ATLAS_CONTROL_VECTOR`).
+2. Restart llama-server so it picks up the new vector: `docker compose up -d --build llama-server --no-deps`.
+3. Verify with `atlas asa check`.
+
+### `atlas asa publish`
+
+Same shape as `atlas lens publish` — uploads the trained `.gguf` to a HuggingFace repo and generates a maintainer-reviewable registry PR.
+
+```bash
+atlas asa publish Qwen3.5-9B-Q6_K --repo alice/atlas-asa-qwen35-9b
+atlas asa publish --dry-run                      # render PR body, no upload
+atlas asa publish --vector path/to/v.gguf        # custom vector path
+```
+
+Required: `HF_TOKEN` env var (same as `atlas lens publish`). PR body documents the residual dim, layer the vector was trained at, GGUF model hint, and the suggested registry diff for adding `asa_status="supported"` to the model entry.
+
 ### TUI calibration badge
 
 When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/ASA badge fetched from the proxy's `/v1/calibration/status`:

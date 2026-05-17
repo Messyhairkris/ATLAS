@@ -19,6 +19,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -115,34 +117,57 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 }
 
 // probeASAStatus checks for the configured ASA control-vector file on disk.
-// V3.1.1 first pass — only checks presence, not dim compatibility (PC-061
-// extends to a full probe). The configured path lives on the llama-server
-// container's filesystem, not the proxy's; this code path uses the env-var
-// declaration ATLAS_CONTROL_VECTOR which both the proxy and entrypoint
-// read identically, but the actual stat() lives in the llama-server image.
-// For the proxy we fall back to the lens /health hint when we can't read
-// the file directly.
+// V3.1.2 (PC-061): the configured path is container-relative (e.g.
+// /models/ast_edit_steering.gguf as llama-server sees it). The proxy
+// container doesn't have /models mounted, so we try several candidate
+// host-visible paths before giving up:
+//
+//  1. The configured path verbatim (works when proxy DOES have a /models
+//     mount — some K3s deployments do).
+//  2. <workspace>/models/<basename> (proxy's bind-mounted project root,
+//     ATLAS_PROJECT_DIR, plus the standard models/ subdir).
+//  3. The env-supplied ATLAS_LENS_MODELS or ATLAS_MODELS_DIR if set.
+//
+// llama-server is the authoritative source of "is the vector actually
+// loaded" but doesn't expose that via /props (verified 2026-05-17), so
+// disk presence is the best we can do without an out-of-band probe.
+// For the user-facing verdict, `atlas asa check` does the deeper GGUF
+// dim parse on the host — this endpoint is the "first impression" the
+// TUI badge renders.
 func probeASAStatus() ASAStatus {
-	path := envOr("ATLAS_CONTROL_VECTOR", "/models/ast_edit_steering.gguf")
-	out := ASAStatus{VectorPath: path, Verdict: "unverified"}
+	configured := envOr("ATLAS_CONTROL_VECTOR", "/models/ast_edit_steering.gguf")
+	out := ASAStatus{VectorPath: configured, Verdict: "unverified"}
 
-	// Stat as a best-effort signal — the proxy may not share the same fs
-	// view as llama-server, so a "not found" here doesn't always mean the
-	// llama-server actually missed it. PC-061 will deepen this with a
-	// dim+layers probe via the lens service.
-	if _, err := os.Stat(path); err == nil {
-		out.VectorPresent = true
-		out.Verdict = "supported"
-		out.Hint = "control vector present (dim-compat check is V3.1.2 work — see PC-061)"
-	} else if os.IsNotExist(err) {
-		out.VectorPresent = false
-		out.Verdict = "missing"
-		out.Hint = "no control vector at " + path +
-			" — build one via `atlas asa build` (PC-061) " +
-			"or geometric-lens/asa_calibration/README.md"
-	} else {
-		out.Hint = "stat(" + path + ") failed: " + err.Error()
+	// Candidate paths to probe, in order.
+	candidates := []string{configured}
+	if strings.HasPrefix(configured, "/models/") {
+		base := strings.TrimPrefix(configured, "/models/")
+		workspace := envOr("ATLAS_WORKSPACE_DIR", "/workspace")
+		candidates = append(candidates,
+			workspace+"/models/"+base)
+		if mdir := os.Getenv("ATLAS_MODELS_DIR"); mdir != "" {
+			candidates = append(candidates, mdir+"/"+base)
+		}
 	}
+
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil {
+			out.VectorPresent = true
+			out.Verdict = "supported"
+			out.VectorPath = p
+			out.Hint = "control vector present (" +
+				strconv.FormatInt(info.Size(), 10) + " bytes); " +
+				"`atlas asa check` does the deeper dim-compat probe"
+			return out
+		}
+	}
+
+	out.VectorPresent = false
+	out.Verdict = "missing"
+	out.Hint = "no control vector at " + configured +
+		" (also tried workspace/models/ + ATLAS_MODELS_DIR) — " +
+		"build one via `atlas asa build` (PC-061) " +
+		"or geometric-lens/asa_calibration/README.md"
 	return out
 }
 
