@@ -26,6 +26,8 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Tuple
 
+from atlas.cli.commands import tier
+
 # ANSI color codes
 RESET = "\033[0m"
 BOLD  = "\033[1m"
@@ -132,7 +134,37 @@ def check_compose() -> CheckResult:
     return CheckResult("compose", "pass", f"v{out.strip()}")
 
 
+def check_gpu() -> CheckResult:
+    """Dispatcher: pick the right vendor-specific GPU check or warn if no
+    GPU is detected. V3.1.1 — replaces the old check_nvidia() entry
+    point. NVIDIA + AMD supported; Metal/SYCL not yet packaged.
+    """
+    gpus = tier.detect_gpu()
+    if not gpus:
+        return CheckResult("gpu", "warn",
+            "no GPU detected (CPU-only mode — inference will be very slow)",
+            "")
+    primary = tier.primary_gpu(gpus)
+    if primary is None:
+        return CheckResult("gpu", "warn",
+            "GPUs detected but none selectable",
+            "tier.primary_gpu returned None")
+    if primary.vendor == "nvidia":
+        return _check_nvidia_via_docker()
+    if primary.vendor == "amd":
+        return _check_amd_via_docker()
+    return CheckResult("gpu", "warn",
+        f"vendor '{primary.vendor}' detected but Docker integration not yet supported "
+        f"(Metal -> V3.1.2 native install; SYCL -> roadmap)",
+        f"primary GPU: {primary.name}")
+
+
+# Backwards-compat alias for any external callers that imported the old name.
 def check_nvidia() -> CheckResult:
+    return check_gpu()
+
+
+def _check_nvidia_via_docker() -> CheckResult:
     """Verify nvidia-container-toolkit by running nvidia-smi inside Docker."""
     # Use the smallest CUDA base image available to keep the check fast.
     rc, out, err = _run([
@@ -144,19 +176,54 @@ def check_nvidia() -> CheckResult:
         # Distinguish "no GPU" from "toolkit broken"
         joined = (err + out).lower()
         if "could not select device driver" in joined or "nvidia-container" in joined:
-            return CheckResult("nvidia", "fail",
+            return CheckResult("gpu", "fail",
                 "nvidia-container-toolkit not configured",
                 (err or out).strip()[:300])
         if "no nvidia gpu" in joined or "no devices" in joined:
-            return CheckResult("nvidia", "warn",
+            return CheckResult("gpu", "warn",
                 "no NVIDIA GPU visible to Docker (CPU-only mode)",
                 (err or out).strip()[:300])
-        return CheckResult("nvidia", "fail",
+        return CheckResult("gpu", "fail",
             "nvidia-smi failed inside Docker",
             (err or out).strip()[:300])
     gpus = [g.strip() for g in out.strip().split("\n") if g.strip()]
-    return CheckResult("nvidia", "pass",
-        f"{len(gpus)} GPU(s): {', '.join(gpus)}")
+    return CheckResult("gpu", "pass",
+        f"[nvidia] {len(gpus)} GPU(s): {', '.join(gpus)}")
+
+
+def _check_amd_via_docker() -> CheckResult:
+    """Verify ROCm Docker passthrough by running rocm-smi inside a ROCm
+    container. Unlike NVIDIA, ROCm doesn't need a separate container
+    runtime — just /dev/kfd + /dev/dri device passthrough with the
+    video + render groups. This check validates that whole chain.
+    """
+    rc, out, err = _run([
+        "docker", "run", "--rm",
+        "--device=/dev/kfd", "--device=/dev/dri",
+        "--group-add", "video", "--group-add", "render",
+        "rocm/rocm-terminal:latest",
+        "rocm-smi", "--showproductname",
+    ], timeout=180)  # +60s headroom for the first-time image pull (~2 GB)
+    if rc != 0:
+        joined = (err + out).lower()
+        if "permission denied" in joined or "no such device" in joined:
+            return CheckResult("gpu", "fail",
+                "AMD GPU detected but Docker can't reach /dev/kfd — "
+                "check amdgpu kernel driver + render/video group membership",
+                (err or out).strip()[:300])
+        if "no gpus found" in joined or "no rocm devices" in joined:
+            return CheckResult("gpu", "warn",
+                "no AMD GPU visible to Docker (CPU-only mode)",
+                (err or out).strip()[:300])
+        return CheckResult("gpu", "fail",
+            "rocm-smi failed inside Docker",
+            (err or out).strip()[:300])
+    # rocm-smi product output is wide; count lines starting with "GPU[" or
+    # "card" as a GPU entry (output format varies across ROCm versions).
+    gpus = [ln.strip() for ln in out.strip().splitlines()
+            if ln.strip() and not ln.startswith(("=", "-"))]
+    summary = "; ".join(g[:80] for g in gpus[:3]) if gpus else "rocm-smi succeeded"
+    return CheckResult("gpu", "pass", f"[amd] {summary}")
 
 
 def _compose_ps(project_dir: str) -> List[Dict]:
@@ -713,8 +780,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 2. Docker compose v2
     results.append(check_compose())
 
-    # 3. NVIDIA toolkit (also slow — 60s timeout — pulls a small CUDA image first time)
-    results.append(check_nvidia())
+    # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
+    # AMD: /dev/kfd passthrough). Slow on first run since each vendor
+    # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
+    results.append(check_gpu())
 
     # 4. Compose stack — pass atlas_root as cwd so compose finds
     # docker-compose.yml even when doctor is invoked from elsewhere

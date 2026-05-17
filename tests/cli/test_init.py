@@ -71,7 +71,8 @@ def test_yes_skip_download_writes_env_and_keys(tmp_path, monkeypatch, capsys):
     # Wizard must write every key the compose stack reads at boot.
     for key in ("ATLAS_MODELS_DIR", "ATLAS_MODEL_FILE", "ATLAS_MODEL_NAME",
                 "ATLAS_CTX_SIZE", "ATLAS_GHCR_OWNER", "ATLAS_IMAGE_TAG",
-                "ATLAS_LLAMA_PORT", "PARALLEL_SLOTS"):
+                "ATLAS_LLAMA_PORT", "PARALLEL_SLOTS",
+                "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX"):
         assert f"{key}=" in body, f"missing {key} in .env"
 
     # Default models_dir is ./models when it equals atlas_root/models.
@@ -219,13 +220,60 @@ def test_json_output_shape_is_stable(tmp_path, monkeypatch, capsys):
     expected_keys = {"atlas_root", "tier", "model", "models_dir",
                      "env_path", "env_backup", "api_keys_path",
                      "api_keys_backup", "api_key", "image_tag",
-                     "ghcr_owner", "dry_run"}
+                     "ghcr_owner", "dry_run", "backend", "gpu"}
     assert expected_keys.issubset(payload.keys())
     assert payload["atlas_root"] == root
     assert payload["dry_run"] is False
     # api_key in JSON matches the file we wrote.
     file_payload = json.loads(open(payload["api_keys_path"]).read())
     assert payload["api_key"] in file_payload
+
+
+def test_amd_probe_renders_rocm_backend(tmp_path, monkeypatch, capsys):
+    """When the probe reports an AMD GPU, .env carries ATLAS_BACKEND=rocm
+    and the ROCm compose-override hint appears."""
+    amd_gpu = tier.GPUInfo(vendor="amd", name="AMD Radeon RX 7900 XTX",
+                            vram_gb=24.0, compute_target="gfx1100", index=0)
+    amd_probe = tier.Probe(
+        has_gpu=True, gpu_name=amd_gpu.name, gpu_vendor="amd",
+        vram_gb=24.0, gpu_count=1, gpus=[amd_gpu],
+        system_ram_gb=32.0, cpu_cores=8, disk_free_gb=200.0, platform="linux")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: amd_probe)
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    assert rc == 0
+    body = open(os.path.join(root, ".env")).read()
+    assert "ATLAS_BACKEND=rocm" in body
+    assert "ATLAS_GPU_VENDOR=amd" in body
+    assert "ATLAS_GPU_INDEX=0" in body
+    # The compose-override hint comment should be present so users know
+    # the second compose file is required for ROCm.
+    assert "docker-compose.rocm.yml" in body
+
+
+def test_apple_silicon_probe_refuses_until_v3_1_2(tmp_path, monkeypatch, capsys):
+    """Probe reporting an Apple Silicon GPU triggers wizard refusal —
+    Metal backend isn't packaged in V3.1.1 (Docker can't passthrough
+    to Apple GPUs anyway; needs native install path)."""
+    apple_gpu = tier.GPUInfo(vendor="apple", name="Apple M3 Pro",
+                              vram_gb=18.0, compute_target=None, index=0)
+    apple_probe = tier.Probe(
+        has_gpu=True, gpu_name=apple_gpu.name, gpu_vendor="apple",
+        vram_gb=18.0, gpu_count=1, gpus=[apple_gpu],
+        system_ram_gb=18.0, cpu_cores=11, disk_free_gb=200.0, platform="darwin")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple_probe)
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "Metal" in out
+    assert "V3.1.2" in out
+    # .env must NOT be written when the wizard refuses.
+    assert not os.path.isfile(os.path.join(root, ".env"))
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +344,8 @@ def test_refuses_on_cpu_tier(tmp_path, monkeypatch, capsys):
               ["--yes", "--skip-download", "--no-color"])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "No NVIDIA GPU detected" in out
-    assert "ATLAS v1 requires a CUDA GPU" in out
+    assert "No GPU detected" in out
+    assert "requires a CUDA, ROCm, or Metal-capable GPU" in out
     # Nothing got written — the refusal happens before step 4.
     assert not os.path.isfile(os.path.join(root, ".env"))
     assert not os.path.isdir(os.path.join(root, "secrets"))

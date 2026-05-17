@@ -129,6 +129,87 @@ def _choose(prompt: str, choices: List[str], default: str,
 
 
 # ---------------------------------------------------------------------------
+# Backend mapping — vendor → llama.cpp backend → docker image tag suffix
+# ---------------------------------------------------------------------------
+
+# Single source of truth for vendor → backend mapping. Used by the wizard
+# (label rendering) and by .env writing (ATLAS_BACKEND). Keep aligned
+# with the Dockerfile suffixes in /inference/.
+_BACKEND_BY_VENDOR = {
+    "nvidia": ("cuda",  "CUDA",          True),   # supported in V3.1.0
+    "amd":    ("rocm",  "ROCm",          True),   # supported in V3.1.1
+    "apple":  ("metal", "Metal",         False),  # V3.1.2 planned (native only)
+    "intel":  ("sycl",  "SYCL",          False),  # roadmap
+}
+
+
+def _backend_for(vendor: Optional[str]) -> Tuple[str, str, bool]:
+    """Return (backend_id, display_name, supported) for a vendor.
+    Unknown vendor falls through to ('unknown', 'unknown', False)."""
+    if vendor and vendor in _BACKEND_BY_VENDOR:
+        return _BACKEND_BY_VENDOR[vendor]
+    return ("unknown", "unknown", False)
+
+
+def _gpu_label(pos: int, g: "tier.GPUInfo") -> str:
+    """One-line human label: '[0] NVIDIA RTX 4090 (24.0 GB) [nvidia/CUDA]'.
+    pos is the wizard-local position (1..N) for selection; g.index is the
+    vendor-local index passed to {CUDA,HIP}_VISIBLE_DEVICES."""
+    _, backend_name, supported = _backend_for(g.vendor)
+    tag = f"{g.vendor}/{backend_name}" if supported else \
+          f"{g.vendor}/{backend_name} — NOT YET SUPPORTED"
+    return f"[{pos}] {g.name} ({g.vram_gb:.1f} GB VRAM) "\
+           f"[{tag} | vendor-idx={g.index}]"
+
+
+def _pick_gpu(probe: "tier.Probe", args: argparse.Namespace,
+              color: bool) -> Optional["tier.GPUInfo"]:
+    """Pick which GPU ATLAS will use. Honors ATLAS_GPU_VENDOR /
+    ATLAS_GPU_INDEX env if set; otherwise auto-picks largest VRAM.
+    When multiple GPUs are detected AND interactive, prompts the user
+    with the auto-pick as the default.
+
+    Wizard prompt uses *list position* (1..N) rather than vendor-local
+    index, because a multi-vendor host (e.g. NVIDIA + AMD) would have
+    colliding indices otherwise — each vendor enumerates from 0.
+    """
+    if not probe.gpus:
+        return None
+    override_vendor = os.environ.get("ATLAS_GPU_VENDOR") or None
+    override_index_str = os.environ.get("ATLAS_GPU_INDEX")
+    try:
+        override_index = int(override_index_str) if override_index_str else None
+    except ValueError:
+        override_index = None
+
+    auto = tier.primary_gpu(probe.gpus, override_vendor=override_vendor,
+                            override_index=override_index)
+    if len(probe.gpus) == 1 or not _is_interactive(args):
+        return auto
+
+    _safe_print(f"  Multiple GPUs detected ({len(probe.gpus)}):")
+    auto_pos = None
+    for pos, g in enumerate(probe.gpus, start=1):
+        marker = "*" if auto is not None and g is auto else " "
+        _safe_print(f"    {marker} {_gpu_label(pos, g)}")
+        if auto is not None and g is auto:
+            auto_pos = pos
+    _safe_print(f"  Default: position {auto_pos} ({auto.name if auto else 'none'}) "
+                f"— largest VRAM")
+
+    choices = [str(i + 1) for i in range(len(probe.gpus))]
+    default_choice = str(auto_pos) if auto_pos else choices[0]
+    pick_str = _choose("Pick a GPU position", choices, default_choice, args)
+    try:
+        pos = int(pick_str)
+    except ValueError:
+        return auto
+    if 1 <= pos <= len(probe.gpus):
+        return probe.gpus[pos - 1]
+    return auto
+
+
+# ---------------------------------------------------------------------------
 # Path resolution — share atlas_root with model.py / doctor.py
 # ---------------------------------------------------------------------------
 
@@ -162,27 +243,38 @@ def _resolve_models_dir(arg_models_dir: Optional[str], atlas_root: str) -> str:
 # Step 1 — hardware probe
 # ---------------------------------------------------------------------------
 
-def _step_probe(args: argparse.Namespace, color: bool) -> Tuple[tier.Probe, tier.TierProfile]:
+def _step_probe(args: argparse.Namespace, color: bool
+                 ) -> Tuple[tier.Probe, tier.TierProfile, Optional[tier.GPUInfo]]:
     probe = tier.probe()
     profile = tier.classify(probe)
     _safe_print(f"  Detected tier: {BOLD if color else ''}{profile.tier}{RESET if color else ''} "
                 f"({profile.label})")
     if probe.has_gpu:
-        _safe_print(f"    GPU: {probe.gpu_name or 'unknown'} "
+        _safe_print(f"    Primary GPU: [{probe.gpu_vendor}] "
+                    f"{probe.gpu_name or 'unknown'} "
                     f"({probe.vram_gb:.1f} GB VRAM)")
+        if probe.gpu_count > 1:
+            _safe_print(f"    ({probe.gpu_count} GPUs total — wizard will "
+                        f"prompt for selection)")
     else:
         _safe_print("    GPU: none detected")
     _safe_print(f"    System: {probe.system_ram_gb:.1f} GB RAM, "
                 f"{probe.cpu_cores} cores, "
                 f"{probe.disk_free_gb:.1f} GB free")
-    return probe, profile
+    selected = _pick_gpu(probe, args, color)
+    if selected is not None and probe.gpu_count > 1:
+        _safe_print(f"    Selected: {selected.name} "
+                    f"(vendor-idx={selected.index})")
+    return probe, profile, selected
 
 
 # ---------------------------------------------------------------------------
 # Step 2 — model selection
 # ---------------------------------------------------------------------------
 
-def _step_select_model(profile: tier.TierProfile, args: argparse.Namespace,
+def _step_select_model(profile: tier.TierProfile,
+                        selected_gpu: Optional[tier.GPUInfo],
+                        args: argparse.Namespace,
                         color: bool) -> Optional[model_registry.Model]:
     """Pick a model for the user. Tier default if `supported`, otherwise
     surface the supported-fallback so wizard never recommends a model
@@ -190,15 +282,37 @@ def _step_select_model(profile: tier.TierProfile, args: argparse.Namespace,
 
     PC-054 audit fix: refuse on cpu tier — the user has no GPU and
     `docker compose up -d` would fail at llama-server load. Better to
-    refuse here than write a broken .env."""
+    refuse here than write a broken .env.
+
+    V3.1.1 addition: refuse on unsupported backends (Metal, SYCL) — the
+    Dockerfile for that backend hasn't shipped yet, so `docker compose up`
+    would fail at image pull. Better to refuse with a clear message."""
     if profile.tier == "cpu":
-        _safe_print(f"  {RED if color else ''}No NVIDIA GPU detected. "
-                    f"ATLAS v1 requires a CUDA GPU for llama.cpp inference."
-                    f"{RESET if color else ''}")
-        _safe_print("  ROCm support for AMD and Metal for Apple Silicon are "
-                    "on the roadmap (see SETUP.md). The wizard refuses here "
-                    "rather than write a .env that won't boot.")
+        _safe_print(f"  {RED if color else ''}No GPU detected. "
+                    f"ATLAS requires a CUDA, ROCm, or Metal-capable GPU for "
+                    f"llama.cpp inference.{RESET if color else ''}")
+        _safe_print("  Supported: NVIDIA (CUDA), AMD (ROCm — V3.1.1), Apple "
+                    "Silicon (Metal — V3.1.2 planned). See SETUP.md. The "
+                    "wizard refuses here rather than write a .env that won't boot.")
         return None
+
+    if selected_gpu is not None:
+        backend_id, backend_name, supported = _backend_for(selected_gpu.vendor)
+        if not supported:
+            _safe_print(f"  {RED if color else ''}Selected GPU vendor "
+                        f"'{selected_gpu.vendor}' uses the {backend_name} backend, "
+                        f"which is not yet packaged.{RESET if color else ''}")
+            roadmap = {
+                "metal": "V3.1.2 (planned) — Apple Silicon will require a "
+                         "native install path (brew + uv), not Docker.",
+                "sycl":  "Roadmap (Intel Arc / oneAPI SYCL backend).",
+                "unknown": "Vendor not recognized — file an issue with "
+                           "your GPU details.",
+            }
+            _safe_print(f"  {roadmap.get(backend_id, '')}")
+            _safe_print("  The wizard refuses here rather than write a .env "
+                        "that won't boot.")
+            return None
 
     tier_default = model_registry.for_tier(profile.tier)
     supported = model_registry.supported_models()
@@ -270,6 +384,7 @@ def _step_download(m: model_registry.Model, models_dir: str,
 # ---------------------------------------------------------------------------
 
 def _render_env(m: model_registry.Model, profile: tier.TierProfile,
+                 selected_gpu: Optional[tier.GPUInfo],
                  models_dir: str, atlas_root: str, image_tag: str,
                  ghcr_owner: str) -> str:
     """Compose the .env body. Order is stable for diff-friendliness."""
@@ -280,6 +395,12 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
     models_value = "./models" if os.path.abspath(models_dir) == os.path.abspath(default_models) \
         else models_dir
 
+    # Backend selection (V3.1.1) — drives which Dockerfile / image is used
+    # and which docker-compose override files apply.
+    vendor = selected_gpu.vendor if selected_gpu else "nvidia"
+    backend_id, backend_name, _ = _backend_for(vendor)
+    gpu_index = str(selected_gpu.index) if selected_gpu else "0"
+
     keys = {
         "ATLAS_MODELS_DIR": models_value,
         "ATLAS_MODEL_FILE": m.model_file,
@@ -288,6 +409,9 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         "PARALLEL_SLOTS": str(profile.parallel_slots),
         "KV_CACHE_TYPE_K": profile.kv_cache_k,
         "KV_CACHE_TYPE_V": profile.kv_cache_v,
+        "ATLAS_BACKEND": backend_id,
+        "ATLAS_GPU_VENDOR": vendor,
+        "ATLAS_GPU_INDEX": gpu_index,
         "ATLAS_GHCR_OWNER": ghcr_owner,
         "ATLAS_IMAGE_TAG": image_tag,
         "ATLAS_LLAMA_PORT": "8080",
@@ -297,13 +421,23 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         "ATLAS_PROXY_PORT": "8090",
     }
 
+    gpu_descr = (f"{selected_gpu.name} ({selected_gpu.vram_gb:.1f} GB VRAM)"
+                 if selected_gpu else "none")
     lines = [
         "# ATLAS Compose configuration — generated by `atlas init` (PC-054).",
         f"# Tier: {profile.tier} ({profile.label})",
         f"# Model: {m.name} (lens_status={m.lens_status})",
+        f"# Backend: {backend_name} ({backend_id})  |  GPU: {gpu_descr}",
         "# Re-run `atlas init --reconfigure` to regenerate from new defaults.",
         "",
     ]
+    if backend_id == "rocm":
+        lines.append(
+            "# NOTE (ROCm): bring the stack up with the ROCm override:")
+        lines.append(
+            "#   docker compose -f docker-compose.yml "
+            "-f docker-compose.rocm.yml up -d")
+        lines.append("")
     for k, v in keys.items():
         lines.append(f"{k}={v}")
     lines.append("")
@@ -319,11 +453,12 @@ def _backup_if_exists(path: str) -> Optional[str]:
 
 
 def _step_write_env(m: model_registry.Model, profile: tier.TierProfile,
+                     selected_gpu: Optional[tier.GPUInfo],
                      models_dir: str, atlas_root: str, args: argparse.Namespace,
                      color: bool) -> Tuple[str, Optional[str]]:
     """Returns (env_path, backup_path_or_None). On --dry-run, no writes."""
     env_path = os.path.join(atlas_root, ".env")
-    body = _render_env(m, profile, models_dir, atlas_root,
+    body = _render_env(m, profile, selected_gpu, models_dir, atlas_root,
                        image_tag=args.image_tag,
                        ghcr_owner=args.ghcr_owner)
     if args.dry_run:
@@ -476,12 +611,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Step 1
     _safe_print("[1/5] Probing hardware…")
-    probe, profile = _step_probe(args, color)
+    probe, profile, selected_gpu = _step_probe(args, color)
     _safe_print("")
 
     # Step 2
     _safe_print("[2/5] Selecting model…")
-    chosen = _step_select_model(profile, args, color)
+    chosen = _step_select_model(profile, selected_gpu, args, color)
     if chosen is None:
         _safe_print(f"  {RED if color else ''}No installable model found "
                     f"for tier={profile.tier}.{RESET if color else ''}")
@@ -497,8 +632,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Step 4
     _safe_print("[4/5] Writing .env…")
-    env_path, env_backup = _step_write_env(chosen, profile, models_dir,
-                                            atlas_root, args, color)
+    env_path, env_backup = _step_write_env(chosen, profile, selected_gpu,
+                                            models_dir, atlas_root, args, color)
     _safe_print("")
 
     # Step 5
@@ -507,10 +642,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     _safe_print("")
 
     # Next steps
+    backend_id, _, _ = _backend_for(selected_gpu.vendor if selected_gpu else None)
     if not args.dry_run:
         _safe_print(f"{GREEN if color else ''}Setup complete.{RESET if color else ''}")
         _safe_print("Next:")
-        _safe_print("  1. docker compose up -d        # bring up the stack")
+        if backend_id == "rocm":
+            _safe_print("  1. docker compose -f docker-compose.yml "
+                        "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
+        else:
+            _safe_print("  1. docker compose up -d        # bring up the stack")
         _safe_print("  2. atlas doctor               # verify install health")
         _safe_print("  3. atlas                      # start using ATLAS")
 
@@ -528,6 +668,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "image_tag": args.image_tag,
             "ghcr_owner": args.ghcr_owner,
             "dry_run": args.dry_run,
+            "backend": backend_id,
+            "gpu": ({"vendor": selected_gpu.vendor, "name": selected_gpu.name,
+                     "vram_gb": round(selected_gpu.vram_gb, 1),
+                     "index": selected_gpu.index,
+                     "compute_target": selected_gpu.compute_target}
+                    if selected_gpu else None),
         }
         _safe_print(jsonlib.dumps(out, indent=2))
 

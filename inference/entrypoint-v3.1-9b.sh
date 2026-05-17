@@ -30,9 +30,59 @@ PARALLEL="${PARALLEL_SLOTS:-4}"
 MODEL_FILE="${MODEL_PATH:-/models/Qwen3.5-9B-Q6_K.gguf}"
 PORT="${PORT:-8080}"
 
-export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
-export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
-export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
+# Backend-specific runtime tuning (V3.1.1 multi-backend support).
+# ATLAS_BACKEND is written into .env by `atlas init`; unset defaults to
+# cuda so existing deployments don't break.
+ATLAS_BACKEND="${ATLAS_BACKEND:-cuda}"
+
+case "$ATLAS_BACKEND" in
+  cuda)
+    # NVIDIA CUDA runtime knobs (unchanged from V3.1.0).
+    #   GGML_CUDA_NO_PINNED=0     — keep pinned host memory for fast H2D
+    #   CUDA_DEVICE_MAX_CONNECTIONS=1 — single-stream batching is fine,
+    #                                   higher values seen no benefit
+    #   CUDA_MODULE_LOADING=LAZY  — defer kernel loading until first use
+    export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
+    export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
+    export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
+    if [ -n "$ATLAS_GPU_INDEX" ] && [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+      export CUDA_VISIBLE_DEVICES="$ATLAS_GPU_INDEX"
+    fi
+    ;;
+  rocm)
+    # AMD ROCm/HIP runtime knobs. llama.cpp's HIP backend shares the
+    # GGML_CUDA_* names internally (it mirrors the CUDA backend at the
+    # GGML layer) so GGML_CUDA_NO_PINNED still applies. The vendor-side
+    # CUDA_DEVICE_MAX_CONNECTIONS / CUDA_MODULE_LOADING vars are inert
+    # under HIP and don't need to be set.
+    export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
+    if [ -n "$ATLAS_GPU_INDEX" ] && [ -z "$HIP_VISIBLE_DEVICES" ]; then
+      export HIP_VISIBLE_DEVICES="$ATLAS_GPU_INDEX"
+      # Newer ROCm (5.7+) prefers ROCR_VISIBLE_DEVICES; set both for
+      # cross-version compatibility.
+      export ROCR_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-$ATLAS_GPU_INDEX}"
+    fi
+    # HSA_OVERRIDE_GFX_VERSION: force a specific gfx target. Useful when
+    # rocm-smi reports an "unsupported" GPU (e.g., a consumer Vega/RDNA1
+    # variant) that should still work with a near-compatible target.
+    # Example: ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0 makes RDNA1 cards
+    # masquerade as RDNA2 for HIP kernel selection.
+    if [ -n "$ATLAS_HSA_OVERRIDE_GFX_VERSION" ]; then
+      export HSA_OVERRIDE_GFX_VERSION="$ATLAS_HSA_OVERRIDE_GFX_VERSION"
+    fi
+    ;;
+  metal|sycl)
+    echo "Warning: ATLAS_BACKEND=$ATLAS_BACKEND but this entrypoint runs in Docker."
+    echo "  Metal requires native install (V3.1.2 planned). SYCL is roadmap."
+    echo "  Continuing with default CPU-only behavior; performance will be poor."
+    ;;
+  *)
+    echo "Warning: ATLAS_BACKEND='$ATLAS_BACKEND' unrecognized; treating as cuda."
+    export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
+    export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
+    export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
+    ;;
+esac
 
 # BiasBusters #4 (ASA steering vectors) — always-on once the vector
 # file exists at the standard path. The default path lives next to the
@@ -56,6 +106,7 @@ if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
 fi
 
 echo "=== V3.1: Qwen3.5-9B — Generation + Self-Embeddings ==="
+echo "  Backend: $ATLAS_BACKEND${ATLAS_GPU_INDEX:+ (GPU index=$ATLAS_GPU_INDEX)}"
 echo "  Model: $MODEL_FILE"
 echo "  Context: $CTX_LENGTH | KV: K=$KV_CACHE_K V=$KV_CACHE_V | Parallel: $PARALLEL"
 echo "  Embeddings: ENABLED (4096-dim Qwen3.5 self-embeddings)"

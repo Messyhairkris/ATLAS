@@ -13,20 +13,30 @@ Layering:
     PC-056 model registry    -> upgrades model_recommendations in place
 
 Tier breakpoints are based on VRAM, the hardest constraint for LLM
-inference:
+inference. Vendor-agnostic as of V3.1.1 — NVIDIA, AMD (ROCm), Apple
+Silicon (Metal), and Intel Arc (SYCL, planned) are all classified into
+the same VRAM bands.
 
-  cpu      no NVIDIA GPU             — ATLAS can't run llama.cpp CUDA;
+  cpu      no GPU detected           — ATLAS can't run llama.cpp;
                                        documented for completeness
-  small    8 GB <= VRAM < 12 GB      — RTX 3060 / 4060 / T4
+  small    8 GB <= VRAM < 12 GB      — RTX 3060 / 4060 / T4 / RX 6700 XT
   medium   12 GB <= VRAM < 20 GB     — RTX 4060 Ti 16GB / 5060 Ti 16GB /
-                                       3080 Ti / 4070 Ti Super 16GB
+                                       RX 6800 / Arc A770 / M3 Pro 18GB
                                        (default development target)
-  large    20 GB <= VRAM < 32 GB     — RTX 3090 / 4090 / 5090 24GB
-  xlarge   VRAM >= 32 GB             — RTX 5090 32GB / A6000 / A100 / H100
+  large    20 GB <= VRAM < 32 GB     — RTX 3090 / 4090 / RX 7900 XTX /
+                                       M3 Max 36GB
+  xlarge   VRAM >= 32 GB             — RTX 5090 32GB / RX 7900 XTX OC /
+                                       MI250 / A6000 / A100 / H100 /
+                                       M3 Max 48GB+
 
 Settings per tier are tuned for "sensible defaults that won't OOM on the
 smallest GPU in the band." Users can always override in `.env` — the
 tier output is a recommendation, not a lock.
+
+Apple Silicon caveat: unified memory means the reported "VRAM" is total
+system RAM. Realistic GPU budget under load is ~70% (OS + apps eat the
+rest). Tier classification uses the raw unified-memory figure but the
+tier card flags the caveat.
 
 Invoke:
     atlas tier              # classify this host + show recommendations
@@ -41,7 +51,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import List, Optional, Tuple
 
 from atlas.cli.commands import model_recommendations
@@ -85,70 +95,274 @@ def _safe_print(s: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Probe:
-    has_gpu: bool
-    gpu_name: Optional[str]
+class GPUInfo:
+    """One GPU discovered on the host.
+
+    Vendor-agnostic record. `compute_target` semantics by vendor:
+      nvidia: CUDA compute capability without the dot, e.g. "89" (Ada),
+              "120" (Blackwell). Passed to cmake as CMAKE_CUDA_ARCHITECTURES.
+      amd:    HIP gfx target, e.g. "gfx1100" (RDNA3) or "gfx906" (Vega20).
+              Passed to cmake/hipcc as AMDGPU_TARGETS / GPU_TARGETS.
+              May be None if rocm-smi alone can't determine it — operator
+              must set GFX_TARGET manually or the Dockerfile uses a fat
+              build covering common targets.
+      apple:  None — Metal doesn't take a compute-target arg at build time;
+              llama.cpp Metal backend is universal across M1/M2/M3/M4.
+      intel:  None — SYCL planned, target TBD.
+    """
+    vendor: str            # 'nvidia' | 'amd' | 'apple' | 'intel' | 'unknown'
+    name: str
     vram_gb: float
-    gpu_count: int
-    system_ram_gb: float
-    cpu_cores: int          # logical cores (incl. SMT)
-    disk_free_gb: float
-    platform: str  # 'linux' | 'darwin' | 'windows' | 'other'
+    compute_target: Optional[str] = None
+    index: int = 0         # vendor-local GPU index (for multi-GPU)
+
+
+@dataclass
+class Probe:
+    # All fields have defaults so callers and tests can construct with the
+    # subset they care about. Real probe() population still sets everything.
+    has_gpu: bool = False
+    gpu_name: Optional[str] = None
+    gpu_vendor: Optional[str] = None  # 'nvidia' | 'amd' | 'apple' | 'intel' | None
+    vram_gb: float = 0.0
+    gpu_count: int = 0
+    gpus: List[GPUInfo] = field(default_factory=list)  # all detected GPUs
+    system_ram_gb: float = 0.0
+    cpu_cores: int = 1          # logical cores (incl. SMT)
+    disk_free_gb: float = 0.0
+    platform: str = "other"  # 'linux' | 'darwin' | 'windows' | 'other'
 
     @property
     def description(self) -> str:
         if not self.has_gpu:
             return (f"{self.platform} | no GPU | {self.cpu_cores} cores "
                     f"| {self.system_ram_gb:.0f} GB RAM")
-        return (f"{self.platform} | {self.gpu_name} ({self.vram_gb:.1f} GB VRAM) "
+        vendor_tag = f"[{self.gpu_vendor}]" if self.gpu_vendor else ""
+        return (f"{self.platform} | {vendor_tag} {self.gpu_name} "
+                f"({self.vram_gb:.1f} GB VRAM) "
                 f"| {self.cpu_cores} cores "
                 f"| {self.system_ram_gb:.0f} GB RAM "
                 f"| {self.disk_free_gb:.0f} GB free disk")
 
 
-def _read_nvidia_smi() -> Tuple[bool, Optional[str], float, int]:
-    """Return (has_gpu, gpu_name, vram_gb, gpu_count).
+# ---------------------------------------------------------------------------
+# Per-vendor GPU detection
+# ---------------------------------------------------------------------------
 
-    Picks the GPU with the MOST VRAM (not the first) as the budget for
-    tier classification. Rationale: on hybrid-graphics systems (laptops
-    with iGPU + dGPU, workstations with display + compute GPUs), the
-    first GPU enumerated by nvidia-smi is often the smaller / display
-    GPU. ATLAS will run llama-server on the biggest GPU so the budget
-    should reflect that. To explicitly target a different GPU, set
-    `CUDA_VISIBLE_DEVICES=N` before invoking — nvidia-smi will then
-    only see the chosen GPU.
+def _read_nvidia_smi() -> List[GPUInfo]:
+    """Detect NVIDIA GPUs via nvidia-smi. Returns empty list if not present.
 
-    Multi-GPU tensor parallelism (e.g., 2x 24GB → 48GB effective via
-    --tensor-split) is still out of scope for v1; reported VRAM is
-    the largest single GPU, conservative for tensor-parallel users.
+    Queries `index,name,memory.total,compute_cap` so we get the compute
+    capability for build-time cmake. Compute cap formatted as "8.9" by
+    nvidia-smi; we strip the dot for CMAKE_CUDA_ARCHITECTURES which wants
+    "89".
     """
     if not shutil.which("nvidia-smi"):
-        return False, None, 0.0, 0
+        return []
     try:
         p = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total",
+            ["nvidia-smi", "--query-gpu=index,name,memory.total,compute_cap",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False, None, 0.0, 0
+        return []
     if p.returncode != 0:
-        return False, None, 0.0, 0
-    lines = [ln.strip() for ln in p.stdout.strip().split("\n") if ln.strip()]
-    if not lines:
-        return False, None, 0.0, 0
-    # Parse all GPUs, pick the one with most VRAM.
-    gpus: List[Tuple[str, float]] = []
-    for ln in lines:
+        return []
+    gpus: List[GPUInfo] = []
+    for ln in (l.strip() for l in p.stdout.strip().splitlines() if l.strip()):
+        parts = [x.strip() for x in ln.split(",")]
+        if len(parts) < 3:
+            continue
         try:
-            name, mem_mib = [x.strip() for x in ln.split(",", 1)]
-            gpus.append((name, float(mem_mib) / 1024.0))
+            idx = int(parts[0])
+            name = parts[1]
+            vram_gb = float(parts[2]) / 1024.0
+            compute = parts[3].replace(".", "") if len(parts) > 3 else None
         except (ValueError, IndexError):
             continue
+        gpus.append(GPUInfo(vendor="nvidia", name=name, vram_gb=vram_gb,
+                            compute_target=compute, index=idx))
+    return gpus
+
+
+# rocm-smi product-name → gfx target mapping for common consumer/datacenter
+# AMD GPUs. Used as a best-effort when rocminfo isn't available. Source:
+# https://llvm.org/docs/AMDGPUUsage.html and https://www.llvm.org/docs/AMDGPUUsage.html#processors
+_AMD_GFX_BY_NAME: List[Tuple[str, str]] = [
+    # RDNA3 (Navi 31/32/33) — RX 7000 series
+    ("7900 XTX", "gfx1100"), ("7900 XT", "gfx1100"), ("7900 GRE", "gfx1100"),
+    ("7800 XT", "gfx1101"), ("7700 XT", "gfx1101"),
+    ("7600",    "gfx1102"),
+    # RDNA2 (Navi 21/22/23) — RX 6000 series
+    ("6900 XT", "gfx1030"), ("6950 XT", "gfx1030"), ("6800 XT", "gfx1030"),
+    ("6800",    "gfx1030"),
+    ("6700 XT", "gfx1031"), ("6750 XT", "gfx1031"),
+    ("6600 XT", "gfx1032"), ("6650 XT", "gfx1032"), ("6600", "gfx1032"),
+    # CDNA2/3 datacenter
+    ("MI300X", "gfx942"), ("MI300A", "gfx940"),
+    ("MI250X", "gfx90a"), ("MI250",  "gfx90a"),
+    ("MI210",  "gfx90a"), ("MI100",  "gfx908"),
+    # Vega
+    ("Vega 64", "gfx900"), ("Vega 56", "gfx900"),
+]
+
+
+def _amd_gfx_from_name(name: str) -> Optional[str]:
+    """Best-effort gfx-target lookup from product name. None if no match."""
+    for needle, gfx in _AMD_GFX_BY_NAME:
+        if needle.lower() in name.lower():
+            return gfx
+    return None
+
+
+def _read_rocm_smi() -> List[GPUInfo]:
+    """Detect AMD GPUs via rocm-smi. Returns empty list if not present.
+
+    rocm-smi has shifted JSON schema across versions; we tolerate both the
+    pre-6.x "card0" / "Card Series" keys and the 6.x "GPU[0]" / "Card model"
+    keys. If --json fails entirely, fall back to text parsing of the
+    default rocm-smi table.
+    """
+    if not shutil.which("rocm-smi"):
+        return []
+    # Preferred: JSON output covering product name + VRAM
+    try:
+        p = subprocess.run(
+            ["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    if p.returncode != 0 or not p.stdout.strip():
+        return []
+    try:
+        data = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return []
+    gpus: List[GPUInfo] = []
+    for key, info in data.items():
+        # Tolerate 'card0', 'GPU[0]', 'GPU0', etc.
+        idx_str = ''.join(c for c in key if c.isdigit())
+        if not idx_str:
+            continue
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            continue
+        name = (info.get("Card Series") or info.get("Card Model")
+                or info.get("Card model") or info.get("Card SKU")
+                or info.get("GPU Model") or "AMD GPU")
+        # VRAM key varies: "VRAM Total Memory (B)", "VRAM Total (B)",
+        # "vram_total_bytes". Try each.
+        vram_bytes = 0.0
+        for vkey in ("VRAM Total Memory (B)", "VRAM Total (B)",
+                     "vram_total_bytes", "VRAM Total"):
+            if vkey in info:
+                try:
+                    vram_bytes = float(str(info[vkey]).replace(",", ""))
+                    break
+                except ValueError:
+                    continue
+        vram_gb = vram_bytes / (1024 ** 3) if vram_bytes else 0.0
+        gpus.append(GPUInfo(vendor="amd", name=name, vram_gb=vram_gb,
+                            compute_target=_amd_gfx_from_name(name),
+                            index=idx))
+    return gpus
+
+
+def _read_apple_metal() -> List[GPUInfo]:
+    """Detect Apple Silicon GPU via system_profiler. macOS-only.
+
+    Apple Silicon has unified memory — the GPU shares the system RAM
+    pool. Reported "VRAM" is total system RAM. Realistic GPU budget
+    under load is ~70% (OS + browser + IDE eat the rest). The tier card
+    surfaces this caveat in its notes; this detector reports the raw
+    figure so downstream code makes the same tier classification
+    decision as for dedicated-VRAM platforms.
+
+    Intel Macs (pre-2020) have AMD or Intel GPUs but llama.cpp Metal
+    only supports Apple Silicon. We filter on chip family to avoid
+    false-positiving an Intel Mac as Metal-capable.
+    """
+    if sys.platform != "darwin":
+        return []
+    if not shutil.which("system_profiler"):
+        return []
+    try:
+        p = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType", "-json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    if p.returncode != 0:
+        return []
+    try:
+        data = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return []
+    unified_ram_gb = _read_system_ram_gb()
+    gpus: List[GPUInfo] = []
+    for idx, gpu in enumerate(data.get("SPDisplaysDataType", []) or []):
+        name = (gpu.get("sppci_model") or gpu.get("_name") or "Apple GPU")
+        # Filter: only Apple Silicon GPUs get Metal acceleration for llama.cpp
+        # at performant speeds. Intel Macs' AMD/Intel GPUs are not in scope.
+        if not any(tag in name for tag in ("Apple M", "Apple GPU")):
+            continue
+        gpus.append(GPUInfo(vendor="apple", name=name,
+                            vram_gb=unified_ram_gb,
+                            compute_target=None, index=idx))
+    return gpus
+
+
+def detect_gpu() -> List[GPUInfo]:
+    """Detect all GPUs across all vendors. Returns empty list if none found.
+
+    Probes nvidia-smi, rocm-smi, and system_profiler (macOS) in sequence.
+    Each helper returns [] silently if its vendor's CLI is absent, so
+    this is safe on any host. Multi-vendor hosts (e.g., NVIDIA dGPU +
+    Intel iGPU on a workstation) will return entries from each detected
+    vendor; `primary_gpu()` picks one.
+    """
+    gpus: List[GPUInfo] = []
+    gpus.extend(_read_nvidia_smi())
+    gpus.extend(_read_rocm_smi())
+    gpus.extend(_read_apple_metal())
+    return gpus
+
+
+def primary_gpu(gpus: List[GPUInfo],
+                override_vendor: Optional[str] = None,
+                override_index: Optional[int] = None) -> Optional[GPUInfo]:
+    """Pick the GPU ATLAS will use for inference.
+
+    Default policy: largest VRAM wins. On hybrid-graphics systems (iGPU +
+    dGPU, or NVIDIA + Intel), the smaller/display GPU is filtered out by
+    this rule.
+
+    Overrides (typically from ATLAS_GPU_VENDOR / ATLAS_GPU_INDEX env vars
+    set by the installer or operator):
+      override_vendor — constrain selection to this vendor (e.g. force AMD
+                        when both NVIDIA and AMD are present).
+      override_index  — within the chosen vendor pool, pick this index.
+
+    If overrides don't match any detected GPU, fall back to the auto-pick
+    rule rather than returning None — better to run on *something* than
+    fail at startup.
+    """
     if not gpus:
-        return False, None, 0.0, 0
-    name, vram_gb = max(gpus, key=lambda g: g[1])
-    return True, name, vram_gb, len(gpus)
+        return None
+    candidates = gpus
+    if override_vendor:
+        filtered = [g for g in gpus if g.vendor == override_vendor.lower()]
+        if filtered:
+            candidates = filtered
+    if override_index is not None:
+        for g in candidates:
+            if g.index == override_index:
+                return g
+    return max(candidates, key=lambda g: g.vram_gb)
 
 
 def _read_system_ram_gb() -> float:
@@ -191,8 +405,22 @@ def _read_cpu_cores() -> int:
 
 
 def probe(install_dir: Optional[str] = None) -> Probe:
-    """Run all hardware probes and return a Probe."""
-    has_gpu, gpu_name, vram_gb, gpu_count = _read_nvidia_smi()
+    """Run all hardware probes and return a Probe.
+
+    GPU selection: detects across NVIDIA/AMD/Apple, then honors
+    ATLAS_GPU_VENDOR + ATLAS_GPU_INDEX env-var overrides if set; otherwise
+    auto-picks largest VRAM. The full GPU list is preserved on the Probe
+    so wizard / multi-GPU UI can offer the operator a choice.
+    """
+    gpus = detect_gpu()
+    override_vendor = os.environ.get("ATLAS_GPU_VENDOR") or None
+    override_index_str = os.environ.get("ATLAS_GPU_INDEX")
+    try:
+        override_index = int(override_index_str) if override_index_str else None
+    except ValueError:
+        override_index = None
+    primary = primary_gpu(gpus, override_vendor=override_vendor,
+                          override_index=override_index)
     sys_ram = _read_system_ram_gb()
     cpu_cores = _read_cpu_cores()
     # Probe disk against where ATLAS will live (model files are large).
@@ -200,9 +428,18 @@ def probe(install_dir: Optional[str] = None) -> Probe:
     disk_free = _read_disk_free_gb(disk_path)
     plat = sys.platform if sys.platform in ("linux", "darwin", "win32") else "other"
     plat = "windows" if plat == "win32" else plat
-    return Probe(has_gpu=has_gpu, gpu_name=gpu_name, vram_gb=vram_gb,
-                 gpu_count=gpu_count, system_ram_gb=sys_ram,
-                 cpu_cores=cpu_cores, disk_free_gb=disk_free, platform=plat)
+    return Probe(
+        has_gpu=primary is not None,
+        gpu_name=primary.name if primary else None,
+        gpu_vendor=primary.vendor if primary else None,
+        vram_gb=primary.vram_gb if primary else 0.0,
+        gpu_count=len(gpus),
+        gpus=gpus,
+        system_ram_gb=sys_ram,
+        cpu_cores=cpu_cores,
+        disk_free_gb=disk_free,
+        platform=plat,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,17 +513,17 @@ TIERS: List[TierProfile] = [
     TierProfile(
         tier="cpu",
         label="CPU-only (no GPU)",
-        description="No NVIDIA GPU detected. ATLAS requires a CUDA GPU "
-                    "for llama.cpp inference. CPU-only is documented for "
-                    "completeness but not supported in v1.",
+        description="No GPU detected. ATLAS requires a CUDA, ROCm, or "
+                    "Metal-capable GPU for llama.cpp inference. CPU-only "
+                    "is documented for completeness but not supported in v1.",
         min_vram_gb=0.0, max_vram_gb=0.0,
         example_gpus=[],
         context_length=0,
         parallel_slots=0,
         kv_cache_k="N/A", kv_cache_v="N/A",
         min_system_ram_gb=0, min_cpu_cores=0, min_disk_gb=0,
-        notes="ROCm support for AMD GPUs is on the roadmap. "
-              "Apple Silicon support requires llama.cpp Metal backend.",
+        notes="Supported backends: NVIDIA (CUDA), AMD (ROCm — V3.1.1), "
+              "Apple Silicon (Metal — V3.1.2 planned), Intel Arc (SYCL — roadmap).",
     ),
     TierProfile(
         tier="small",
@@ -294,7 +531,10 @@ TIERS: List[TierProfile] = [
         description="Conservative settings sized for 8 GB cards. "
                     "7B Q4 model leaves ~3 GB for KV cache + compute.",
         min_vram_gb=8.0, max_vram_gb=12.0,
-        example_gpus=["RTX 3060 8GB", "RTX 4060 8GB", "T4 16GB (datacenter)"],
+        example_gpus=["RTX 3060 8GB", "RTX 4060 8GB",
+                      "RX 6600 XT 8GB", "RX 7600 8GB",
+                      "Arc A580 8GB",
+                      "T4 16GB (datacenter)"],
         context_length=8192,
         parallel_slots=1,
         kv_cache_k="q4_0", kv_cache_v="q4_0",
@@ -316,7 +556,10 @@ TIERS: List[TierProfile] = [
                     "context fits comfortably with q8/q4 KV cache.",
         min_vram_gb=12.0, max_vram_gb=20.0,
         example_gpus=["RTX 4060 Ti 16GB", "RTX 5060 Ti 16GB",
-                      "RTX 3080 Ti 12GB", "RTX 4070 Ti Super 16GB"],
+                      "RTX 3080 Ti 12GB", "RTX 4070 Ti Super 16GB",
+                      "RX 6800 16GB", "RX 7700 XT 12GB",
+                      "Arc A770 16GB",
+                      "Apple M3 Pro 18GB (unified)"],
         context_length=32768,
         parallel_slots=1,
         kv_cache_k="q8_0", kv_cache_v="q4_0",
@@ -327,7 +570,8 @@ TIERS: List[TierProfile] = [
         # Model (6.9 GB) + images (8 GB) + ~10 GB working.
         min_disk_gb=25.0,
         notes="Default ATLAS configuration. Verified on RTX 5060 Ti 16GB "
-              "with ~3 GB headroom remaining.",
+              "with ~3 GB headroom remaining. Apple Silicon: unified memory "
+              "means realistic GPU budget is ~70% of system RAM.",
     ),
     TierProfile(
         tier="large",
@@ -335,7 +579,9 @@ TIERS: List[TierProfile] = [
         description="Headroom for 14B Q5/Q6 model with 32K context and "
                     "2 parallel slots for multi-conversation.",
         min_vram_gb=20.0, max_vram_gb=32.0,
-        example_gpus=["RTX 3090 24GB", "RTX 4090 24GB", "RTX 5090 24GB"],
+        example_gpus=["RTX 3090 24GB", "RTX 4090 24GB", "RTX 5090 24GB",
+                      "RX 7900 XT 20GB", "RX 7900 XTX 24GB",
+                      "Apple M3 Max 36GB (unified)"],
         context_length=32768,
         parallel_slots=2,
         kv_cache_k="q8_0", kv_cache_v="q8_0",
@@ -355,7 +601,9 @@ TIERS: List[TierProfile] = [
                     "and full F16 KV cache for maximum quality.",
         min_vram_gb=32.0, max_vram_gb=None,
         example_gpus=["RTX 5090 32GB", "RTX A6000 48GB",
-                      "A100 40/80GB", "H100 80GB"],
+                      "A100 40/80GB", "H100 80GB",
+                      "MI210 64GB", "MI250 128GB", "MI300X 192GB",
+                      "Apple M3 Max 48GB+ (unified)"],
         context_length=65536,
         parallel_slots=2,
         kv_cache_k="f16", kv_cache_v="f16",
@@ -478,10 +726,12 @@ def overall_status(checks: List[ConstraintCheck]) -> str:
 def _round_floats(d: dict, ndigits: int = 1) -> dict:
     """Round float values in a dict for clean JSON output.
 
-    nvidia-smi gives memory in MiB; dividing by 1024 produces noisy
-    decimals like 15.9287109375. Downstream consumers (PC-054 wizard,
+    Vendor SMI tools report memory in MiB/bytes; converting to GB produces
+    noisy decimals like 15.9287109375. Downstream consumers (PC-054 wizard,
     PC-056 model registry) want clean numbers — they never need 4-decimal
-    VRAM precision since tier breakpoints are integer-aligned.
+    VRAM precision since tier breakpoints are integer-aligned. Nested
+    lists/dicts (e.g. Probe.gpus) are passed through unchanged; JSON's
+    own float serializer handles those.
     """
     out = {}
     for k, v in d.items():
@@ -498,8 +748,13 @@ def classify(p: Probe) -> TierProfile:
     GPU present but VRAM below the smallest tier (e.g., 4 GB) returns
     `small` with a notes-level warning rather than `cpu`, so users with a
     too-small GPU at least see what to upgrade to. Pure no-GPU OR
-    has_gpu-but-zero-VRAM (rare nvidia-smi failure mode) returns `cpu`
-    since neither can run llama.cpp.
+    has_gpu-but-zero-VRAM (rare vendor-SMI failure mode where the tool
+    returns the GPU but reports zero memory) returns `cpu` since neither
+    can run llama.cpp.
+
+    Apple Silicon unified memory: VRAM = total system RAM. A 16 GB MBP
+    lands in `medium` tier on raw numbers, but the tier card's notes
+    field warns that realistic GPU budget is ~70% under load.
     """
     if not p.has_gpu or p.vram_gb <= 0:
         return TIERS[0]  # cpu
@@ -540,7 +795,7 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print(f"  {DIM if color else ''}{t.description}{RESET if color else ''}")
     _safe_print()
     if t.tier == "cpu":
-        _safe_print("  VRAM range:    n/a (no CUDA GPU)")
+        _safe_print("  VRAM range:    n/a (no GPU detected)")
     elif t.max_vram_gb is None:
         _safe_print(f"  VRAM range:    {t.min_vram_gb:.0f} GB and up")
     else:
@@ -666,7 +921,8 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
     _safe_print()
     if t.tier == "cpu":
         _safe_print(f"  {YELL if color else ''}Warning: ATLAS requires "
-                    f"a CUDA GPU. See SETUP.md.{RESET if color else ''}")
+                    f"a GPU (NVIDIA CUDA, AMD ROCm, or Apple Silicon "
+                    f"Metal). See SETUP.md.{RESET if color else ''}")
         return 1
     _safe_print("  Apply these settings: edit .env to set the values "
                 "shown above.")

@@ -1,6 +1,6 @@
 # ATLAS Troubleshooting Guide
 
-Common issues and solutions for ATLAS V3.0.1, organized by service.
+Common issues and solutions for ATLAS V3.1.0, organized by service.
 
 ---
 
@@ -32,13 +32,14 @@ The atlas-proxy health endpoint reports the status of all upstream services:
   "status": "ok",
   "inference": true,
   "lens": true,
+  "lens_ready": true,
   "sandbox": true,
   "port": "8090",
   "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
 }
 ```
 
-If any field is `false`, that service is the problem.
+If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. The split between `lens` and `lens_ready` (PC-019) lets you tell "Lens process is up but its `/ready` gate is failing — usually missing weights or embedding-dim mismatch" apart from "Lens HTTP is unreachable."
 
 ---
 
@@ -130,6 +131,100 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    ```
 
 The `atlas-bootstrap.sh` script now runs steps 1, 2 (auto-detects RHEL/Rocky/Alma vs subscription path), and 4 automatically. Step 3 is auto-handled on Debian/Ubuntu via `libnvidia-compute-NN` matched to the running driver version.
+
+### AMD GPU not detected (ROCm)
+
+**Symptom:** `atlas tier` says "no GPU detected" on a host that clearly has an AMD GPU, OR `docker compose up` fails with `/dev/kfd: no such file or directory`.
+
+**What it means:** the `amdgpu` kernel driver isn't loaded with compute support (the `kfd` — Kernel Fusion Driver — submodule). Display-only loads of `amdgpu` don't expose `/dev/kfd`.
+
+**Fix sequence:**
+
+1. **Verify the driver is loaded and `/dev/kfd` exists:**
+   ```bash
+   lsmod | grep amdgpu       # should print amdgpu + amdkfd
+   ls -l /dev/kfd            # should print a character-device entry
+   ls -l /dev/dri/render*    # should print one or more render nodes
+   ```
+
+2. **Install ROCm + kernel driver (if /dev/kfd is missing):**
+   - **RHEL 9 / Rocky / Alma:**
+     ```bash
+     sudo dnf install -y https://repo.radeon.com/amdgpu-install/6.2/rhel/9.4/amdgpu-install-6.2.60200-1.el9.noarch.rpm
+     sudo amdgpu-install --usecase=dkms,rocm
+     sudo reboot   # required — the kernel module needs a fresh boot
+     ```
+   - **Ubuntu/Debian:** follow [the official AMD install guide](https://rocm.docs.amd.com/projects/install-on-linux/) for your distro. The typical sequence is `amdgpu-install --usecase=dkms,rocm` after adding the AMDGPU repo.
+
+3. **After reboot, confirm `rocm-smi` sees the GPU:**
+   ```bash
+   rocm-smi --showproductname --showmeminfo vram
+   ```
+
+### AMD GPU detected but Docker can't reach it
+
+**Symptom:** `atlas doctor` reports "AMD GPU detected but Docker can't reach `/dev/kfd`" or the ROCm container fails with `Permission denied` on `/dev/kfd`.
+
+**What it means:** the user running Docker isn't in the `render` and/or `video` groups. ROCm uses those groups to gate access to `/dev/kfd` and `/dev/dri/render*`.
+
+**Fix:**
+
+```bash
+# 1. Confirm which groups you're currently in
+id -nG | tr ' ' '\n' | grep -E '^(render|video)$'
+# Expect both. If either is missing:
+
+# 2. Create the groups if they don't exist (rare; default on most distros)
+sudo groupadd -f render
+sudo groupadd -f video
+
+# 3. Add your user to both
+sudo usermod -aG video,render $USER
+
+# 4. Re-login (or use newgrp for the current shell)
+newgrp render
+newgrp video
+
+# 5. Re-verify, then re-run `atlas doctor`
+id -nG | grep -E 'render.*video|video.*render'
+atlas doctor
+```
+
+### AMD GPU is "unsupported" by ROCm but you want to try anyway
+
+**Symptom:** `rocm-smi` reports your GPU, but `rocminfo` doesn't, or HIP kernels fail with "no kernel image is available for execution on the device."
+
+**What it means:** llama.cpp's HIP kernels were compiled for `gfx` targets that don't include your GPU. ROCm has a long-standing pattern of dropping older consumer GPUs from official support while still letting them work with the right override.
+
+**Fix:** force a compatible gfx version at runtime via `ATLAS_HSA_OVERRIDE_GFX_VERSION`. Common overrides:
+
+| Your GPU | Set `ATLAS_HSA_OVERRIDE_GFX_VERSION=` |
+|---|---|
+| RDNA1 (RX 5700 XT / 5500 XT) | `10.3.0` (makes it look like RDNA2 / gfx1030) |
+| Vega 56/64 (gfx900) | `9.0.0` (usually already supported, override rarely needed) |
+| Polaris (RX 580/590, gfx803) | `8.0.3` (deep override; mileage varies) |
+
+Set the var in `.env` so it propagates through the compose override into the container env:
+
+```bash
+echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
+```
+
+If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/itigges22/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
+
+### ROCm container can't pull `rocm/rocm-terminal`
+
+**Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f docker-compose.rocm.yml pull` fails on the `llama-server` build.
+
+**What it means:** ROCm images are large (~2 GB) and Docker Hub rate-limits anonymous pulls.
+
+**Fix:** authenticate (free Docker Hub account allows higher rate limits), or pull during off-peak hours, or pin to a specific tag in `.env`:
+
+```bash
+docker login
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml pull
+```
 
 ### First Build Fails (CUDA Not Found)
 
@@ -247,7 +342,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **Symptom:** Model outputs `<think>` tags or raw text instead of JSON tool calls.
 
-**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically when `ATLAS_AGENT_LOOP=1`. If using llama-server directly, include it in your request:
+**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically inside the `/v1/agent` agent-loop handler — this is unconditional (no env-var toggle). If you're hitting llama-server directly via `/v1/chat/completions` or `/v1/completions`, you have to include the parameter yourself:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -282,12 +377,9 @@ ps aux | grep llama-server | grep ctx-size
 
 **Symptom:** Requests go directly to llama-server. No tool calls, no streaming status icons, no V3 pipeline.
 
-**Fix:** Set `ATLAS_AGENT_LOOP=1`. The `atlas` launcher does this automatically. If running the proxy manually:
-```bash
-ATLAS_AGENT_LOOP=1 atlas-proxy-v2
-```
+**Cause:** You're hitting the wrong endpoint. The agent loop only runs on `POST /v1/agent`. `POST /v1/chat/completions` (and anything else under `/v1/`) is a transparent passthrough to llama-server — no tools, no V3, no streaming chat events.
 
-In Docker Compose, this is set in `docker-compose.yml` and doesn't need manual configuration.
+**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) and the built-in `/solve` REPL both do this automatically. If you're writing a third-party client, see [docs/API.md](API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
 
 ### V3 Pipeline Not Firing on Feature Files
 
@@ -631,10 +723,13 @@ docker compose logs v3-service | grep "smoke_check"
 
 **If you're hitting this on a file extension PC-048
 doesn't recognize**, the smoke check defaults to Python
-and you get the same cascade. Workaround: set
-`ATLAS_AGENT_LOOP=1` and rely on the proxy's direct
-write path, or add the extension to `_ext_to_lang` in
-`v3-service/main.py:613`.
+and you get the same cascade. Workaround: add the
+extension to `_ext_to_lang` in `v3-service/main.py`
+(see the existing dispatch table around the `_ext_to_lang`
+constant) and rebuild the `v3-service` image. As an
+immediate escape valve, the proxy falls back to a direct
+write when V3 errors out — so the file does eventually
+land on disk, just slowly.
 
 ### V3 Pipeline Doesn't Fire on "Fix It Again" Prompts
 

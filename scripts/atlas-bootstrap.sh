@@ -8,12 +8,16 @@
 # What this does:
 #   1. Detects distro (RHEL/Fedora/Rocky/Alma, Ubuntu/Debian).
 #   2. Installs Docker Engine + Compose plugin if missing.
-#   3. Detects NVIDIA GPU and installs nvidia-container-toolkit if needed.
+#   3. Detects GPU vendor (NVIDIA or AMD) and installs the matching runtime:
+#        NVIDIA -> nvidia-container-toolkit (+ open-dkms driver libs on RHEL)
+#        AMD    -> verifies /dev/kfd + adds user to render/video groups
+#        (Apple Silicon / Intel Arc not yet supported — V3.1.2 roadmap)
 #   4. Sets vm.overcommit_memory=1 (PC-011 — Redis silent-write killer).
 #   5. RHEL-family: enables EPEL, opens firewalld ports, blacklists nouveau.
 #   6. Copies .env.example to .env if missing.
 #   7. Downloads model GGUFs and Lens weights from HuggingFace.
 #   8. `docker compose up -d` and waits for all services healthy.
+#      (ROCm hosts: brings up with -f docker-compose.rocm.yml override.)
 #   9. Prints a green "ATLAS ready" banner and the next-step command.
 #
 # Idempotent — safe to re-run. Each step checks "already done" before acting.
@@ -25,10 +29,12 @@
 #
 # Flags (env vars):
 #   ATLAS_BOOTSTRAP_SKIP_DOCKER=1     skip Docker install (already managed)
-#   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     skip GPU/nvidia-container-toolkit
+#   ATLAS_BOOTSTRAP_SKIP_GPU=1        skip GPU runtime install (NVIDIA toolkit or ROCm setup)
+#   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     [deprecated alias for ATLAS_BOOTSTRAP_SKIP_GPU]
 #   ATLAS_BOOTSTRAP_SKIP_MODELS=1     skip model download
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
 #   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
+#   ATLAS_BOOTSTRAP_SKIP_ASA=1        skip ASA steering-vector build (BiasBusters #4 — optional, ~5 min)
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
@@ -197,27 +203,52 @@ EOF
 # ---------------------------------------------------------------------------
 
 detect_gpu() {
-    HAS_NVIDIA=0
+    # V3.1.1: vendor-agnostic GPU detection. Sets GPU_VENDOR (nvidia|amd|""),
+    # GPU_NAME, and the per-vendor HAS_* flags. HAS_NVIDIA preserved for
+    # back-compat; HAS_AMD added.
+    GPU_VENDOR=""
     GPU_NAME=""
+    HAS_NVIDIA=0
+    HAS_AMD=0
+
     if command -v lspci &>/dev/null; then
         if lspci 2>/dev/null | grep -qi 'nvidia'; then
+            GPU_VENDOR="nvidia"
             HAS_NVIDIA=1
             GPU_NAME=$(lspci 2>/dev/null | grep -i 'nvidia' | head -1 | sed 's/.*: //')
+        # AMD GPUs identify as "Advanced Micro Devices" or "ATI"; further
+        # filter to actual display/compute GPUs (skip audio controllers
+        # which also show as AMD).
+        elif lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|ati|advanced micro devices)' | grep -qi .; then
+            GPU_VENDOR="amd"
+            HAS_AMD=1
+            GPU_NAME=$(lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|ati|advanced micro devices)' | head -1 | sed 's/.*: //')
         fi
     fi
-    # nvidia-smi present is also a positive signal even if lspci fails
-    if [[ $HAS_NVIDIA -eq 0 ]] && command -v nvidia-smi &>/dev/null; then
+    # SMI fallbacks — useful when lspci is missing (some containers) or
+    # when iGPU enumeration is weird. Trust the vendor SMI's existence.
+    if [[ -z "$GPU_VENDOR" ]] && command -v nvidia-smi &>/dev/null; then
+        GPU_VENDOR="nvidia"
         HAS_NVIDIA=1
         GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "NVIDIA GPU")
     fi
+    if [[ -z "$GPU_VENDOR" ]] && command -v rocm-smi &>/dev/null; then
+        GPU_VENDOR="amd"
+        HAS_AMD=1
+        GPU_NAME=$(rocm-smi --showproductname 2>/dev/null \
+            | awk -F': ' '/Card Series/ {print $2; exit}' \
+            | tr -d '\r')
+        [[ -z "$GPU_NAME" ]] && GPU_NAME="AMD GPU"
+    fi
 
-    if [[ $HAS_NVIDIA -eq 1 ]]; then
-        log_info "GPU: ${BOLD}${GPU_NAME}${NC}"
+    if [[ -n "$GPU_VENDOR" ]]; then
+        log_info "GPU: ${BOLD}${GPU_NAME}${NC} [${GPU_VENDOR}]"
     else
-        log_warn "No NVIDIA GPU detected. ATLAS can run CPU-only but inference will be very slow."
-        log_warn "Set ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 to suppress GPU steps and continue."
-        if [[ "${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}" != "1" ]]; then
-            die "No GPU detected. Re-run with ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 to install CPU-only."
+        log_warn "No GPU detected. ATLAS can run CPU-only but inference will be very slow."
+        log_warn "Set ATLAS_BOOTSTRAP_SKIP_GPU=1 (or legacy ATLAS_BOOTSTRAP_SKIP_NVIDIA=1)"
+        log_warn "  to suppress GPU steps and continue."
+        if [[ "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" != "1" ]]; then
+            die "No GPU detected. Re-run with ATLAS_BOOTSTRAP_SKIP_GPU=1 to install CPU-only."
         fi
     fi
 }
@@ -376,7 +407,8 @@ install_nvidia_driver_libs() {
 install_nvidia_toolkit() {
     log_step "Step 2: NVIDIA Container Toolkit"
 
-    if [[ $HAS_NVIDIA -eq 0 || "${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}" == "1" ]]; then
+    if [[ $HAS_NVIDIA -eq 0 \
+       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" == "1" ]]; then
         log_skip "No NVIDIA GPU or skip flag set"
         return
     fi
@@ -463,6 +495,140 @@ install_nvidia_toolkit() {
     fi
 
     die "GPU not visible to Docker. Check the container error above and the libnvidia-ml.so.1 hint."
+}
+
+# ---------------------------------------------------------------------------
+# Step 2 (alt): AMD ROCm runtime (V3.1.1)
+# ---------------------------------------------------------------------------
+#
+# ROCm path is structurally simpler than NVIDIA because Docker doesn't
+# need a separate container runtime (no rocm-container-toolkit). It just
+# needs /dev/kfd + /dev/dri passed through with appropriate group
+# membership, which our docker-compose.rocm.yml handles. Host-side prereqs:
+#   1. AMDGPU kernel driver loaded → /dev/kfd exists
+#   2. `render` and `video` groups exist on the host
+#   3. The user running docker is a member of those groups
+#
+# We can install the userspace amdgpu-install/rocm-libs but the kernel
+# driver (amdgpu-dkms) is much more invasive — requires kernel-headers,
+# dkms, and a reboot in some configurations. The bootstrap handles
+# group setup + verification but refuses to install the kernel driver
+# without an explicit opt-in (ATLAS_BOOTSTRAP_INSTALL_AMDGPU_DKMS=1) —
+# bricking a host's display via failed dkms build is too easy.
+
+install_rocm_setup() {
+    log_step "Step 2: AMD ROCm runtime"
+
+    if [[ $HAS_AMD -eq 0 \
+       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" == "1" ]]; then
+        log_skip "No AMD GPU or skip flag set"
+        return
+    fi
+
+    # 1. Kernel driver: /dev/kfd is the canonical signal the amdgpu
+    # kernel module is loaded with compute support.
+    if [[ ! -c /dev/kfd ]]; then
+        log_err "/dev/kfd missing — AMDGPU kernel driver not loaded with compute support."
+        log_err "Install the amdgpu-dkms / rocm-dkms driver:"
+        case "$DISTRO_FAMILY" in
+            rhel)
+                log_err "  $SUDO dnf install -y https://repo.radeon.com/amdgpu-install/6.2/rhel/9.4/amdgpu-install-6.2.60200-1.el9.noarch.rpm"
+                log_err "  $SUDO amdgpu-install --usecase=dkms,rocm"
+                ;;
+            debian)
+                log_err "  Follow https://rocm.docs.amd.com/projects/install-on-linux/en/latest/"
+                log_err "  Typical: amdgpu-install --usecase=dkms,rocm  (after adding the AMDGPU repo)"
+                ;;
+        esac
+        log_err "Then REBOOT and re-run this bootstrap."
+        die "AMDGPU kernel driver missing — see install hints above."
+    fi
+    log_ok "/dev/kfd present (AMDGPU compute driver loaded)"
+
+    # 2. video + render groups must exist
+    for grp in render video; do
+        if ! getent group "$grp" >/dev/null; then
+            log_info "Creating missing group: $grp"
+            $SUDO groupadd -f "$grp"
+        fi
+    done
+
+    # 3. Add docker-running user to render + video so containers can
+    # read /dev/kfd and /dev/dri/* via group_add in docker-compose.rocm.yml.
+    local target_user="${SUDO_USER:-$USER}"
+    if [[ "$target_user" != "root" ]]; then
+        local missing_groups=""
+        for grp in render video; do
+            if ! id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+                missing_groups+=" $grp"
+            fi
+        done
+        if [[ -n "$missing_groups" ]]; then
+            log_info "Adding $target_user to groups:$missing_groups"
+            $SUDO usermod -aG "render,video" "$target_user" 2>/dev/null || true
+            log_warn "Group changes require a re-login (or 'newgrp render') to take effect."
+        else
+            log_ok "$target_user already in render + video groups"
+        fi
+    fi
+
+    # 4. Verify by running a ROCm test container — does Docker actually
+    # see the GPU through /dev/kfd + /dev/dri?
+    log_info "Verifying ROCm container access (pulls rocm/rocm-terminal first time, ~2 GB)…"
+    local verify_log=/tmp/atlas-rocm-verify.log
+    if $DOCKER_PREFIX docker run --rm \
+            --device=/dev/kfd --device=/dev/dri \
+            --group-add video --group-add render \
+            rocm/rocm-terminal:latest rocm-smi >"$verify_log" 2>&1; then
+        log_ok "ROCm runtime verified — Docker can see AMD GPU"
+        return
+    fi
+
+    log_err "ROCm container test failed. Diagnostic:"
+    grep -E 'error|failed|cannot|permission' "$verify_log" | head -5 | sed 's/^/      /' >&2
+    log_err "Common fixes:"
+    log_err "  1. ls -l /dev/kfd /dev/dri/render*  (check group ownership)"
+    log_err "  2. id -nG  (confirm 'render' and 'video' are listed; re-login if not)"
+    log_err "  3. docker pull rocm/rocm-terminal:latest  (if the pull failed)"
+    die "ROCm not visible to Docker. See diagnostic above."
+}
+
+# ---------------------------------------------------------------------------
+# Step 2 dispatch: pick CUDA or ROCm based on detected GPU vendor
+# ---------------------------------------------------------------------------
+
+install_gpu_runtime() {
+    case "$GPU_VENDOR" in
+        nvidia)
+            install_nvidia_toolkit
+            ;;
+        amd)
+            install_rocm_setup
+            ;;
+        "")
+            log_skip "Step 2: GPU runtime — no vendor detected"
+            ;;
+        *)
+            log_warn "Step 2: unrecognized GPU vendor '$GPU_VENDOR' — skipping runtime install"
+            ;;
+    esac
+}
+
+# Returns the docker-compose -f flags appropriate for the detected GPU
+# vendor. NVIDIA (or no GPU) uses the base file alone; AMD layers the
+# ROCm override on top. Echo result so callers can splice into command
+# lines as `$(compose_files_args)`.
+compose_files_args() {
+    case "$GPU_VENDOR" in
+        amd)
+            echo "-f docker-compose.yml -f docker-compose.rocm.yml"
+            ;;
+        *)
+            # Empty = compose uses its default discovery, which is the
+            # base docker-compose.yml in the CWD.
+            echo ""
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -899,9 +1065,15 @@ start_compose() {
 
     # Use the same DOCKER_PREFIX we set up at the top — handles "user just
     # added to docker group, current shell doesn't know yet" transparently.
-    local DC="$DOCKER_PREFIX docker compose"
+    # V3.1.1: when AMD is the detected vendor, splice in the ROCm
+    # docker-compose override so /dev/kfd + /dev/dri get passed through
+    # and ATLAS_BACKEND=rocm reaches the llama-server container.
+    local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
     if [[ -n "$DOCKER_PREFIX" ]]; then
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
+    fi
+    if [[ "$GPU_VENDOR" == "amd" ]]; then
+        log_info "Using ROCm compose override (docker-compose.rocm.yml)"
     fi
 
     # Pull images first as a separate step so the user can see the layer-by-
@@ -948,7 +1120,7 @@ wait_for_healthy() {
         return
     fi
 
-    local DC="$DOCKER_PREFIX docker compose"
+    local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
 
     local services=(redis llama-server geometric-lens v3-service sandbox atlas-proxy)
     local timeout=300  # 5 min — first start can be slow while llama-server warms
@@ -1003,15 +1175,156 @@ wait_for_healthy() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 8.5: atlas doctor (PC-053) — surface non-container issues
+# Step 9: ASA steering vector (BiasBusters #4)
 # ---------------------------------------------------------------------------
-# Health-poll only checks `docker compose ps` for healthy. Doctor adds the
-# "is the install actually correct" layer: lens weights, model file size,
-# overcommit, image-tag skew. Run --quick (skip e2e smoke — wait until
-# user explicitly invokes for that) and only surface a summary line.
+# Builds /models/ast_edit_steering.gguf so llama-server's
+# entrypoint-v3.1-9b.sh appends --control-vector-scaled on every start.
+# Pipeline (per geometric-lens/asa_calibration/README.md):
+#   1. build_cvector_prompts.py turns contrast_pairs.jsonl into
+#      positive/negative .txt files
+#   2. llama-cvector-generator (shipped in atlas-llama runtime image since
+#      May 2026) extracts the residual-stream difference and writes the gguf
+#   3. We stop llama-server briefly to free the GPU, run cvector-generator
+#      in a one-shot container with a rw models mount, then restart
+# Fallback: if local build fails (no GPU? cvector-generator missing in
+# older images?), pull a prebuilt vector from the ATLAS HuggingFace
+# dataset. Final failure mode is warn-not-die — ATLAS works without it.
+
+_try_download_asa_from_hf() {
+    local out="$1"
+    local url="https://huggingface.co/datasets/itigges22/ATLAS/resolve/main/models/ast_edit_steering.gguf"
+    log_info "Attempting prebuilt download from HuggingFace…"
+    set +e
+    curl -fSL --connect-timeout 10 -o "$out" "$url" >> /tmp/atlas-asa-build.log 2>&1
+    local rc=$?
+    set -e
+    if [[ $rc -eq 0 ]] && [[ -s "$out" ]]; then
+        log_ok "Downloaded prebuilt ASA vector from HuggingFace"
+        # Make ownership match the rest of the install.
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO chown "$TARGET_USER:$TARGET_USER" "$out" 2>/dev/null || true
+        fi
+        return 0
+    fi
+    rm -f "$out"
+    return 1
+}
+
+build_asa_steering_vector() {
+    log_step "Step 9: ASA steering vector (~5 min — BiasBusters #4)"
+
+    if [[ "${ATLAS_BOOTSTRAP_SKIP_ASA:-0}" == "1" ]]; then
+        log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_ASA=1)"
+        return
+    fi
+
+    local models_dir_raw="${ATLAS_MODELS_DIR:-./models}"
+    local models_dir
+    if [[ "$models_dir_raw" = /* ]]; then
+        models_dir="$models_dir_raw"
+    else
+        models_dir="$ATLAS_INSTALL_DIR/$models_dir_raw"
+    fi
+    models_dir="$(realpath "$models_dir" 2>/dev/null || echo "$models_dir")"
+    local vector_path="$models_dir/ast_edit_steering.gguf"
+
+    if [[ -f "$vector_path" ]] && [[ -s "$vector_path" ]]; then
+        log_ok "ASA steering vector already present ($(du -h "$vector_path" 2>/dev/null | cut -f1)) — skipping build"
+        return
+    fi
+
+    local asa_dir="$ATLAS_INSTALL_DIR/geometric-lens/asa_calibration"
+    if [[ ! -f "$asa_dir/contrast_pairs.jsonl" ]] || [[ ! -f "$asa_dir/build_cvector_prompts.py" ]]; then
+        log_warn "ASA calibration assets missing at $asa_dir — trying HuggingFace prebuilt fallback"
+        _try_download_asa_from_hf "$vector_path" || \
+            log_warn "ASA unavailable. ATLAS works without it (recovery: see geometric-lens/asa_calibration/README.md)."
+        return
+    fi
+
+    local DC="$DOCKER_PREFIX docker compose"
+    local model_file="${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}"
+    local image_tag="${ATLAS_IMAGE_TAG:-latest}"
+    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
+    local image="ghcr.io/${ghcr_owner}/atlas-llama:${image_tag}"
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER"
+    fi
+
+    # 1. Build positive/negative prompt files on the host.
+    log_info "Generating ASA prompt files from $asa_dir/contrast_pairs.jsonl…"
+    set +e
+    $runner python3 "$asa_dir/build_cvector_prompts.py" \
+        --pairs "$asa_dir/contrast_pairs.jsonl" \
+        --positive "$models_dir/_asa_positive.txt" \
+        --negative "$models_dir/_asa_negative.txt" \
+        > /tmp/atlas-asa-build.log 2>&1
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 ]] || [[ ! -s "$models_dir/_asa_positive.txt" ]]; then
+        log_warn "Prompt file generation failed (exit $rc) — trying HuggingFace fallback"
+        rm -f "$models_dir/_asa_positive.txt" "$models_dir/_asa_negative.txt"
+        _try_download_asa_from_hf "$vector_path" || \
+            log_warn "ASA unavailable. ATLAS works without it."
+        return
+    fi
+
+    # 2. Stop llama-server so the GPU is free for the cvector loader.
+    log_info "Pausing llama-server briefly to free the GPU…"
+    $DC stop llama-server >> /tmp/atlas-asa-build.log 2>&1 || true
+
+    # 3. Run cvector-generator as a one-shot container with a rw models
+    #    mount (the compose mount is :ro on purpose).
+    log_info "Running llama-cvector-generator — this is the slow part (~5 min)…"
+    echo
+    set +e
+    $DOCKER_PREFIX docker run --rm --gpus all \
+        -v "$models_dir:/models:rw" \
+        --entrypoint llama-cvector-generator \
+        "$image" \
+        -m "/models/$model_file" \
+        --positive-file /models/_asa_positive.txt \
+        --negative-file /models/_asa_negative.txt \
+        --method mean \
+        -o /models/ast_edit_steering.gguf \
+        -ngl 99 2>&1 | tee -a /tmp/atlas-asa-build.log
+    rc=${PIPESTATUS[0]}
+    set -e
+    echo
+
+    # 4. Always restart llama-server, regardless of build outcome.
+    log_info "Restarting llama-server…"
+    $DC start llama-server >> /tmp/atlas-asa-build.log 2>&1 || \
+        log_warn "llama-server restart returned non-zero — check 'docker compose ps'"
+
+    # 5. Cleanup intermediate prompt files.
+    rm -f "$models_dir/_asa_positive.txt" "$models_dir/_asa_negative.txt"
+
+    if [[ $rc -eq 0 ]] && [[ -s "$vector_path" ]]; then
+        # Fix ownership (cvector-generator runs as root inside the container).
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO chown "$TARGET_USER:$TARGET_USER" "$vector_path" 2>/dev/null || true
+        fi
+        log_ok "ASA steering vector built ($(du -h "$vector_path" | cut -f1)): $vector_path"
+        log_info "  Auto-activates on the next llama-server start via the entrypoint check."
+        # Bounce llama-server one more time so it picks up the new vector.
+        $DC restart llama-server >> /tmp/atlas-asa-build.log 2>&1 || true
+    else
+        log_warn "Local ASA build failed (exit $rc) — trying HuggingFace prebuilt fallback"
+        if _try_download_asa_from_hf "$vector_path"; then
+            $DC restart llama-server >> /tmp/atlas-asa-build.log 2>&1 || true
+        else
+            log_warn "ASA build + HF fallback both failed. ATLAS works without it. Recovery: geometric-lens/asa_calibration/README.md or rerun bootstrap. Log: /tmp/atlas-asa-build.log. Suppress with ATLAS_BOOTSTRAP_SKIP_ASA=1."
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Step 10: doctor (sanity sweep)
+# ---------------------------------------------------------------------------
 
 run_doctor() {
-    log_step "Step 8.5: atlas doctor (sanity sweep)"
+    log_step "Step 10: atlas doctor (sanity sweep)"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_COMPOSE:-0}" == "1" ]]; then
         log_skip "Skipped (compose was skipped, no stack to check)"
@@ -1120,7 +1433,10 @@ main() {
     # the script work without "permission denied on /var/run/docker.sock".
     detect_docker_prefix
     echo
-    install_nvidia_toolkit
+    # V3.1.1: dispatch on detected GPU vendor — NVIDIA hits the original
+    # nvidia-container-toolkit path; AMD hits the new ROCm path
+    # (rocm-smi verify + group setup, no separate container runtime).
+    install_gpu_runtime
     echo
     configure_sysctl
     echo
@@ -1133,6 +1449,8 @@ main() {
     start_compose
     echo
     wait_for_healthy || die "Service health check failed."
+    echo
+    build_asa_steering_vector
     echo
     run_doctor
 

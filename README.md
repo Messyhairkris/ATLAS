@@ -87,7 +87,7 @@ Open models historically can't keep up with hosted ones. ATLAS gets there anyway
    - Runs both generated and existing test suites
 
 6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
-   - CUDA-accelerated quantized inference (Q6_K / Q4_K_M)
+   - GPU-accelerated quantized inference (Q6_K / Q4_K_M) — NVIDIA CUDA, AMD ROCm, with Apple Metal and Intel SYCL on the roadmap
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
@@ -101,7 +101,7 @@ One-shot install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-The script detects your distro (Ubuntu, Debian, RHEL, Fedora, Rocky, Alma), installs Docker and nvidia-container-toolkit, downloads the model weights, builds the ASA steering vector, and starts the stack. Expect 10-30 minutes; the model download is the bottleneck.
+The script detects your distro (Ubuntu, Debian, RHEL, Fedora, Rocky, Alma) and your GPU vendor (NVIDIA → nvidia-container-toolkit; AMD → ROCm device passthrough), installs the appropriate runtime, downloads the model weights, builds the ASA steering vector, and starts the stack. Expect 10-30 minutes; the model download is the bottleneck.
 
 Then in any project directory, run `atlas`.
 
@@ -109,18 +109,18 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | NVIDIA, 16GB+ VRAM (tested on RTX 5060 Ti 16GB) |
-| Runtime | Docker with nvidia-container-toolkit, or Podman |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA, V3.1.0+) or AMD (ROCm, V3.1.1). See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). |
+| Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) or Podman |
 | Python | 3.9+ |
-| Disk | ~20GB (model weights + container images) |
+| Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
 
-Tested on NVIDIA only. macOS, Windows, and AMD ROCm are on the V3.1.1 roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
+Apple Silicon (Metal native install) and Intel Arc (SYCL) are on the V3.1.2+ roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
 
 ---
 
 ## ⚠️ Known Limitations
 
-- **NVIDIA-only.** Tested on NVIDIA GPUs. AMD ROCm and Apple Metal are on the V3.1.1 roadmap.
+- **Linux-only Docker stack.** NVIDIA and AMD ROCm Docker paths both ship today. Apple Silicon (Metal native install) is V3.1.2 planned. Intel Arc / SYCL is roadmap.
 - **9B model is not formally benchmarked yet.** V3.1.0 ships Qwen3.5-9B with the full V3 pipeline, but the canonical 74.6% LiveCodeBench score is from the 14B reference build. Formal 9B numbers land with V3.1.1. The 14B methodology and ablations live in [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw traces are on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can be inconsistent.** The model sometimes spends agent turns exploring an unfamiliar codebase before writing code. Reliability has improved on the 9B build since the V3.0 measurement; a fresh number lands with the V3.1.1 benchmark pass.
 - **Grammar-constrained decoding is slow.** Around 51 tok/s on llama-server.

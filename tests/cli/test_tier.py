@@ -17,6 +17,7 @@ frameworks. The probe surface is deliberately narrow (4 _read_* helpers)
 specifically so it's testable without nvidia-smi or real disks.
 """
 
+import sys
 import tempfile
 
 import pytest
@@ -93,10 +94,11 @@ def test_classify_below_smallest_band_returns_warned_small():
 
 def test_read_nvidia_smi_picks_max_vram(monkeypatch):
     """Hybrid-graphics workstation: iGPU 8 GB enumerated first + A6000 48 GB
-    second. _read_nvidia_smi must return the A6000 (max VRAM), not the
-    iGPU (first). Pre-fix: classified as small (took iGPU).
-    Post-fix: classified as xlarge (took A6000)."""
-    fake_stdout = "Intel iGPU, 8192\nNVIDIA RTX A6000, 49152\n"
+    second. primary_gpu() on the _read_nvidia_smi result must pick the
+    A6000 (max VRAM), not the iGPU (first). Pre-fix: classified as small
+    (took iGPU). Post-fix: classified as xlarge (took A6000)."""
+    # Columns: index, name, memory.total (MiB), compute_cap
+    fake_stdout = "0, Intel iGPU, 8192, 7.5\n1, NVIDIA RTX A6000, 49152, 8.6\n"
 
     class FakeRun:
         returncode = 0
@@ -105,17 +107,66 @@ def test_read_nvidia_smi_picks_max_vram(monkeypatch):
     monkeypatch.setattr(tier.shutil, "which", lambda _: "/usr/bin/nvidia-smi")
     monkeypatch.setattr(tier.subprocess, "run",
                         lambda *a, **kw: FakeRun())
-    has_gpu, name, vram, count = tier._read_nvidia_smi()
-    assert has_gpu is True
-    assert name == "NVIDIA RTX A6000"
-    assert vram == pytest.approx(48.0, rel=0.01)
-    assert count == 2
+    gpus = tier._read_nvidia_smi()
+    assert len(gpus) == 2
+    assert {g.name for g in gpus} == {"Intel iGPU", "NVIDIA RTX A6000"}
+    primary = tier.primary_gpu(gpus)
+    assert primary is not None
+    assert primary.name == "NVIDIA RTX A6000"
+    assert primary.vram_gb == pytest.approx(48.0, rel=0.01)
+    assert primary.compute_target == "86"
 
 
 def test_read_nvidia_smi_no_smi_binary(monkeypatch):
     monkeypatch.setattr(tier.shutil, "which", lambda _: None)
-    has_gpu, name, vram, count = tier._read_nvidia_smi()
-    assert (has_gpu, name, vram, count) == (False, None, 0.0, 0)
+    assert tier._read_nvidia_smi() == []
+
+
+def test_detect_gpu_returns_empty_when_no_vendor_tools(monkeypatch):
+    """All three vendor SMI binaries missing → detect_gpu returns []."""
+    monkeypatch.setattr(tier.shutil, "which", lambda _: None)
+    monkeypatch.setattr(sys, "platform", "linux")  # avoid Apple branch
+    assert tier.detect_gpu() == []
+
+
+def test_primary_gpu_honors_vendor_override():
+    """User has NVIDIA + AMD. Override forces AMD selection regardless of VRAM."""
+    gpus = [
+        tier.GPUInfo(vendor="nvidia", name="RTX 4090", vram_gb=24.0,
+                     compute_target="89", index=0),
+        tier.GPUInfo(vendor="amd", name="RX 7900 XTX", vram_gb=24.0,
+                     compute_target="gfx1100", index=0),
+    ]
+    # No override → largest VRAM wins, ties go to whichever max() sees first
+    # (insertion order: NVIDIA). With equal VRAM the tie-break is incidental.
+    pick_default = tier.primary_gpu(gpus)
+    assert pick_default is not None
+    # Vendor override pins to AMD even when NVIDIA has the same/more VRAM
+    pick_amd = tier.primary_gpu(gpus, override_vendor="amd")
+    assert pick_amd is not None and pick_amd.vendor == "amd"
+
+
+def test_read_rocm_smi_parses_json(monkeypatch):
+    """rocm-smi --json output is parsed across schema variants."""
+    fake_json = (
+        '{"card0": {"Card Series": "Radeon RX 7900 XTX", '
+        '"VRAM Total Memory (B)": "25753026560"}}'
+    )
+
+    class FakeRun:
+        returncode = 0
+        stdout = fake_json
+
+    monkeypatch.setattr(tier.shutil, "which",
+                        lambda x: "/opt/rocm/bin/rocm-smi" if x == "rocm-smi" else None)
+    monkeypatch.setattr(tier.subprocess, "run",
+                        lambda *a, **kw: FakeRun())
+    gpus = tier._read_rocm_smi()
+    assert len(gpus) == 1
+    assert gpus[0].vendor == "amd"
+    assert "7900 XTX" in gpus[0].name
+    assert gpus[0].vram_gb == pytest.approx(24.0, rel=0.05)
+    assert gpus[0].compute_target == "gfx1100"
 
 
 # ---------------------------------------------------------------------------
