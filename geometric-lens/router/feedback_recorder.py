@@ -43,9 +43,12 @@ def record_outcome(
 
         pipe.execute()
 
+        # !r on enum.value (constrained set, but CodeQL doesn't track
+        # the Enum constraint across the import boundary) — escapes any
+        # control chars for py/log-injection compliance.
         logger.info(
-            f"Outcome recorded: bin={difficulty_bin.value} route={route.value} "
-            f"success={success}"
+            f"Outcome recorded: bin={difficulty_bin.value!r} "
+            f"route={route.value!r} success={success}"
         )
     except Exception as e:
         logger.error(f"Failed to record outcome: {e}")

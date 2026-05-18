@@ -167,12 +167,14 @@ def _read_cvector_meta(path: str) -> dict:
                 try:
                     out["layer_count"] = int(field_obj.parts[-1][0])
                 except (IndexError, ValueError, TypeError):
+                    # best-effort: swallow on failure (caller continues)
                     pass
             elif name == "controlvector.model_hint":
                 try:
                     raw = field_obj.parts[-1]
                     out["model_hint"] = bytes(raw).decode("utf-8")
                 except (UnicodeDecodeError, TypeError):
+                    # best-effort: swallow on failure (caller continues)
                     pass
         # Each "direction.<layer>" tensor has shape (hidden_dim,) — its
         # length IS the residual stream dim we need to match against the
@@ -471,6 +473,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             try:
                 os.remove(out_path)
             except OSError:
+                # best-effort: swallow on failure (caller continues)
                 pass
             return 1
         _safe_print(f"  saved: {out_path} ({size} bytes)")

@@ -240,7 +240,9 @@ func main() {
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("passthrough: %s %s", r.Method, r.URL.Path)
+		// %q on the path quotes + escapes CR/LF so a crafted URL can't
+		// fake additional log entries (go/log-injection).
+		log.Printf("passthrough: %s %q", r.Method, r.URL.Path)
 		body, _ := io.ReadAll(r.Body)
 		proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, inferenceURL+r.URL.Path, bytes.NewReader(body))
 		if err != nil {

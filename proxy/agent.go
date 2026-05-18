@@ -18,6 +18,33 @@ import (
 	"time"
 )
 
+// ------------------------------------------------------------------------
+// Trust model (load-bearing — read before "fixing" go/path-injection CodeQL
+// alerts on this file or its helpers in tools.go, project.go, claim_check.go).
+//
+// ATLAS is a single-tenant local-install agent. The proxy runs inside a
+// container whose /workspace mount IS the user's project directory: the
+// agent's whole purpose is to read, edit, and verify files there on
+// behalf of the user who owns that directory. The "user-controlled" value
+// CodeQL flags in agent path joins is almost always ctx.WorkingDir, which
+// is set ONCE at agent startup from the bind mount — not from a per-
+// request input. The few cases where the model emits a path
+// (resolveAgentPath callers in tools.go) go through that resolver, which
+// translates host-absolute paths into the container view + cleans `..`
+// segments before any os call.
+//
+// What we deliberately do NOT do: enforce a strict in-workspace check
+// that rejects paths resolving outside /workspace. The agent legitimately
+// reads outside it (e.g. /etc/os-release for tier detection, /tmp for
+// scratch). The container is the isolation boundary — host-side files
+// not bind-mounted in are simply not reachable.
+//
+// If ATLAS is ever deployed multi-tenant (e.g. shared proxy with many
+// users' workspaces colocated), every site flagged by go/path-injection
+// here would need a real fix. Until then they're dismissed as false
+// positives with this rationale.
+// ------------------------------------------------------------------------
+
 // stripThinkTags removes <think>...</think> blocks (Qwen3.5 reasoning
 // markers) from a response string. Used as a defensive cleanup when
 // reasoning_content gets surfaced as content fallback — the raw
@@ -591,7 +618,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							rejection := fmt.Sprintf(
 								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes (read the file first if you need to confirm the exact text to replace).%s",
 								wfInput.Path, existingLines, astHint)
-							log.Printf("[agent] rejecting write_file for existing %s (%d lines)", wfInput.Path, existingLines)
+							// %q quotes + escapes the path (go/log-injection).
+							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
 							ctx.Messages = append(ctx.Messages, AgentMessage{
 								Role:    "assistant",
 								Content: response,
@@ -623,7 +651,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil {
 					if rejection := validateRunCommand(rc.Command, ctx.WorkingDir); rejection != "" {
-						log.Printf("[agent] rejecting run_command %q: %s",
+						// %q on rejection too: validateRunCommand may embed
+						// fragments of the user's command verbatim in its
+						// reason string (go/log-injection).
+						log.Printf("[agent] rejecting run_command %q: %q",
 							truncateStr(rc.Command, 80), rejection)
 						ctx.Messages = append(ctx.Messages, AgentMessage{
 							Role:    "assistant",
@@ -1987,7 +2018,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Run agent loop
 	if err := runAgentLoop(ctx, req.Message); err != nil {
-		log.Printf("[agent] error: %v", err)
+		// %q quotes the error string so user-influenced fragments
+		// embedded in err.Error() can't fake additional log entries.
+		log.Printf("[agent] error: %q", err.Error())
 	}
 
 	// Send final done event

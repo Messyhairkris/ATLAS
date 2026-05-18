@@ -1523,8 +1523,9 @@ class V3BenchmarkRunner:
         else:
             self._run_serial(remaining, results, per_task_dir, total, done)
 
-        # Save phase summary (done counter updated by reference via results dict)
-        done = len(results)
+        # Save phase summary — `done` was tracked here historically for
+        # progress logging; the value now flows through summary["total_tasks"]
+        # below, so the standalone local was dead.
         passed = sum(1 for r in results.values() if r.get("passed"))
         summary = {
             "phase": phase_name,

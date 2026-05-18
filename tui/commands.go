@@ -39,7 +39,9 @@ import (
 // Returns nil on the first success. The OSC52 path only fails when we
 // can't write to the TTY at all — even on terminals that don't support
 // the sequence the write itself is silent (the escape is just ignored).
-func copyToClipboard(s string) error {
+func copyToClipboard(s string) (err error) {
+	// Named return so the deferred tty.Close() below can promote a
+	// close-time error when the write itself succeeded.
 	tools := [][]string{
 		{"wl-copy"},
 		{"xclip", "-selection", "clipboard"},
@@ -70,8 +72,16 @@ func copyToClipboard(s string) error {
 	if err != nil {
 		return fmt.Errorf("OSC52 fallback: %w", err)
 	}
-	defer tty.Close()
-	if _, err := fmt.Fprintf(tty, "\x1b]52;c;%s\x07", encoded); err != nil {
+	// Bare `defer tty.Close()` would swallow buffered-write errors on a
+	// writable fd (go/unhandled-writable-file-close). Wrap so we surface
+	// the close failure when the write itself succeeded — otherwise the
+	// caller thinks the copy went through.
+	defer func() {
+		if cerr := tty.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("OSC52 tty close: %w", cerr)
+		}
+	}()
+	if _, err = fmt.Fprintf(tty, "\x1b]52;c;%s\x07", encoded); err != nil {
 		return fmt.Errorf("OSC52 write: %w", err)
 	}
 	return nil

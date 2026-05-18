@@ -186,6 +186,7 @@ if _HAS_INFRA_DEPS:
             try:
                 redis_client.delete(key)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
 

@@ -581,8 +581,10 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         }
 
         elapsed_ms = (time.monotonic() - start) * 1000
+        # !r on tap_label — user-controllable string (layer id from
+        # request) — defends against py/log-injection via embedded CRLF.
         logger.debug(
-            f"per-step lens: n={n_tokens} layer={tap_label} "
+            f"per-step lens: n={n_tokens} layer={tap_label!r} "
             f"cx_norm[mean,max]=({aggregate['cx_norm_mean']:.3f},{aggregate['cx_norm_max']:.3f}) "
             f"gx[min,mean]=({aggregate['gx_score_min']:.3f},{aggregate['gx_score_mean']:.3f}) "
             f"latency={elapsed_ms:.1f}ms"

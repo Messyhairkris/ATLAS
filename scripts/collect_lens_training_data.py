@@ -20,12 +20,17 @@ import time
 import urllib.request
 import urllib.error
 import glob
+from typing import Optional
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
 
 
-def extract_embedding(text: str, max_retries: int = 5) -> list:
-    """Extract embedding from llama-server with retries."""
+def extract_embedding(text: str, max_retries: int = 5) -> Optional[list]:
+    """Extract embedding from llama-server with retries.
+
+    Returns None after `max_retries` consecutive failures so the caller
+    can skip the task instead of crashing on a transient network blip.
+    """
     body = json.dumps({"content": text}).encode("utf-8")
     req = urllib.request.Request(
         f"{LLAMA_URL}/embedding",

@@ -368,6 +368,7 @@ def background_stop(job_id: str):
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except ProcessLookupError:
+            # best-effort: swallow on failure (caller continues)
             pass
         try:
             proc.wait(timeout=3)
@@ -375,6 +376,7 @@ def background_stop(job_id: str):
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
+                # best-effort: swallow on failure (caller continues)
                 pass
             proc.wait(timeout=2)
         killed = True
@@ -735,6 +737,7 @@ def execute_python(code, test_code, workspace, timeout, requirements, **_):
         if m:
             lint_score = float(m.group(1))
     except Exception:
+        # best-effort: swallow on failure (caller continues)
         pass
 
     # Run

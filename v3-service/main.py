@@ -1873,7 +1873,11 @@ def _score_plan(plan: dict, user_message: str) -> Tuple[float, List[str]]:
 
     # Target-vs-user-message overlap. If the user said "fix index.html",
     # plans that touch index.html beat plans that don't.
-    mentioned_files = set(re.findall(r"[\w./-]+\.[a-zA-Z0-9]+", user_message.lower()))
+    # Length bounds (max 128 for the stem, max 16 for the extension) cap
+    # regex backtracking on pathological input like "a." repeated many
+    # times — both groups need `.` so without bounds this is polynomial.
+    mentioned_files = set(re.findall(
+        r"[\w./-]{1,128}\.[a-zA-Z0-9]{1,16}", user_message.lower()))
     target_hits = 0
     for s in steps:
         if not isinstance(s, dict):
@@ -2493,7 +2497,6 @@ def _failing_function_from_stderr(stderr: str):
     matches = _TRACEBACK_FRAME_RE.findall(stderr)
     if not matches:
         return None
-    matches[-1]
     # Filter sentinels — `<module>`, `<lambda>`, `<genexpr>` aren't
     # callable names we can look up. Walk back until we find one.
     for name in reversed(matches):

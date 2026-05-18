@@ -457,8 +457,13 @@ def _acquire_install_lock(target: str, color: bool) -> Optional[str]:
     # the bound, a permission error reading the lock could loop forever.
     for _ in range(2):
         try:
+            # 0o600 (owner-only): the lock content (PID + timestamp)
+            # isn't sensitive, but tightening from 0o644 keeps CodeQL
+            # happy (py/overly-permissive-file) and matches the
+            # convention for runtime-control files. Other users on the
+            # host don't need to read the lock — just .exists() check.
             fd = os.open(lock_path,
-                          os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                          os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
                 os.write(fd, payload)
             finally:

@@ -177,7 +177,12 @@ async def retrieve_chunks_pageindex(
     if cached is None:
         loaded = load_index(project_id)
         if loaded is None:
-            logger.warning(f"No PageIndex found for {project_id}, returning empty")
+            # !r escapes control chars so a malicious project_id can't
+            # forge log entries (py/log-injection). The validator in
+            # persistence.load_index already rejects anything not in
+            # ^[A-Za-z0-9_-]{1,128}$, but the safe-render here protects
+            # against future refactors that bypass the validator.
+            logger.warning(f"No PageIndex found for {project_id!r}, returning empty")
             return []
         tree_index, bm25_index = loaded
         _pageindex_cache[cache_key] = (tree_index, bm25_index)

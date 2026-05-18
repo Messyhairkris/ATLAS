@@ -189,9 +189,10 @@ def calculate_pass_at_k(
     per_task_c = {}  # task_id -> number correct
 
     for result in results:
-        n = result.num_attempts
-        c = result.num_passed
-        per_task_c[result.task_id] = c
+        # n / c assignments removed — n was shadowed by the comprehension
+        # below and c is only used to populate the dict, so the locals
+        # added noise without value (py/multiple-definition).
+        per_task_c[result.task_id] = result.num_passed
 
     # Calculate pass@k for each k
     pass_at_k_scores = {}

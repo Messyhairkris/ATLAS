@@ -278,6 +278,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
             for line in tail.splitlines()[-20:]:
                 print(f"    {line}")
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
         return False
 

@@ -103,7 +103,10 @@ class PatternStore:
                 return Pattern.model_validate_json(data)
             return None
         except Exception as e:
-            logger.error(f"Failed to get pattern {pattern_id}: {e}")
+            # !r on pattern_id quotes + escapes control chars so a
+            # malicious ID with embedded CR/LF can't fake additional
+            # log entries (py/log-injection).
+            logger.error(f"Failed to get pattern {pattern_id!r}: {e}")
             return None
 
     def update_pattern(self, pattern: Pattern, score: Optional[float] = None) -> bool:

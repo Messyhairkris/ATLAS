@@ -238,6 +238,7 @@ def verify_custom_tasks():
             try:
                 os.unlink(tmp.name)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     check(f"Canonical solutions pass own tests",
@@ -342,6 +343,7 @@ def verify_mutation_testing():
             try:
                 os.unlink(tmp.name)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     detection_rate = (caught / len(tasks)) * 100 if tasks else 0
@@ -505,6 +507,7 @@ def verify_runner_isolation():
                     execute_name = f"{module_name}.{fn_name}"
                     break
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         if execute_fn is None:
@@ -519,6 +522,7 @@ def verify_runner_isolation():
                             execute_name = f"benchmark.runner.{name}"
                             break
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         if execute_fn is None:
@@ -530,7 +534,9 @@ def verify_runner_isolation():
             # Timeout test
             start = time.time()
             try:
-                result = subprocess.run(
+                # Side-effect call: we WANT TimeoutExpired to fire; the
+                # result is unused unless the timeout fails to trip.
+                _ = subprocess.run(
                     [sys.executable, "-c", "import time; time.sleep(60)"],
                     capture_output=True, timeout=10, text=True
                 )
@@ -601,8 +607,9 @@ def verify_runner_isolation():
         print(f"  Testing filesystem restrictions...")
         try:
             fs_code = 'open("/tmp/atlas_test_escape", "w").write("escaped")'
-            result = execute_fn(fs_code)
-            # Check if the file was actually created
+            # Side-effect call: result discarded; the check below is on
+            # whether the sandboxed code actually created the file on disk.
+            _ = execute_fn(fs_code)
             escaped = os.path.isfile("/tmp/atlas_test_escape")
             if escaped:
                 os.unlink("/tmp/atlas_test_escape")

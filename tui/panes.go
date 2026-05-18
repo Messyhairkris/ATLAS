@@ -850,7 +850,8 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			viewStart: eventsViewStart,
 			lines:     eventsAll,
 		})
-		yCursor += eventsH
+		// (Don't bump yCursor here — no pane below events references it,
+		// stats + input are statically positioned relative to the bottom.)
 	}
 
 	statsLine := renderStatsPane(p, width, lastTurnTokens, totalTokens, maxTokens)

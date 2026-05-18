@@ -26,6 +26,40 @@ from indexer.bm25_index import BM25Index
 from indexer.summarizer import summarize_tree, collect_summaries
 from indexer.persistence import save_index, load_index, delete_index
 
+
+# ---------------------------------------------------------------------------
+# Logging + HTTP-response sanitization helpers
+# ---------------------------------------------------------------------------
+#
+# Untrusted strings (request bodies, file content, exception messages
+# that wrap user data) can contain CR/LF and other control chars that
+# fake additional log entries when written verbatim. _safe_log() strips
+# those and bounds length so a single log line stays one line.
+#
+# For HTTP responses, _safe_detail() returns a short generic message
+# while logging the real exception internally with a correlation ID.
+# Useful for endpoints where leaking exception text would expose
+# filesystem paths or internal types to a remote caller.
+def _safe_log(value: object, maxlen: int = 200) -> str:
+    """Render a value for inclusion in a log line. Strips CR/LF and
+    other ASCII control chars, truncates to maxlen."""
+    s = str(value)
+    s = "".join(c for c in s if c == "\t" or 0x20 <= ord(c) < 0x7f or ord(c) > 0x9f)
+    if len(s) > maxlen:
+        s = s[:maxlen] + "…"
+    return s
+
+
+def _safe_detail(e: Exception, op: str = "operation") -> str:
+    """Log the real exception with a correlation ID; return a generic
+    detail string safe to send in an HTTP response. Use for endpoints
+    where exposing str(e) would leak internal paths / types."""
+    err_id = uuid.uuid4().hex[:12]
+    logger.error(f"[err {err_id}] {op} failed: {type(e).__name__}: {_safe_log(e)}",
+                 exc_info=True)
+    return f"{op} failed (error_id={err_id})"
+
+
 # Redis for task queue
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 try:
@@ -1139,6 +1173,9 @@ async def lens_score_per_step(request: LensScorePerStepRequest):
 
         result = evaluate_per_step(request.text, layer=request.layer)
         agg = result.get("aggregate") or {}
+        # _safe_log on the request.layer value strips CRLF + truncates
+        # so user input can't fake a separate log entry. The other args
+        # are floats/ints from result — structurally safe.
         logger.info(
             "lens score-per-step: in_chars=%d n_tok=%d gx_min=%.3f gx_mean=%.3f off_rails=%d layer=%s lat=%.0fms",
             len(request.text or ""),
@@ -1146,7 +1183,7 @@ async def lens_score_per_step(request: LensScorePerStepRequest):
             float(agg.get("gx_score_min", 0.0)),
             float(agg.get("gx_score_mean", 0.0)),
             int(agg.get("first_off_rails_idx", -1)),
-            str(request.layer) if request.layer is not None else "last",
+            _safe_log(request.layer) if request.layer is not None else "last",
             float(result.get("latency_ms", 0.0)),
         )
         return result
