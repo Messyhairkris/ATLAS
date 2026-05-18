@@ -98,6 +98,22 @@ class Model:
     # `supported` claim to be honest. doctor.check_tier_match
     # cross-checks this — registered "supported" + missing files = warn.
     lens_artifact_files: List[str] = field(default_factory=list)
+    # PC-061: ASA control vector tracking. Mirrors the lens_* shape
+    # because the per-model coupling problem is identical (a vector
+    # trained on Qwen residuals won't steer Llama correctly).
+    #
+    # asa_status values:
+    #   "supported"    — vector exists + validated against this base
+    #   "no-artifacts" — no vector trained yet
+    #   "unverified"   — a structurally-applicable vector exists (e.g.
+    #                    different quant of same model family) but the
+    #                    exact combo hasn't been end-to-end checked
+    asa_status: str = "no-artifacts"
+    # Files that must exist for the asa_status claim to be honest. Today
+    # this is just `ast_edit_steering.gguf`; the list keeps the door
+    # open for multi-vector setups (per-layer banks) without a schema
+    # change. doctor cross-checks alongside lens_artifact_files.
+    asa_artifact_files: List[str] = field(default_factory=list)
     notes: str = ""
 
     def env_vars(self) -> Dict[str, str]:
@@ -183,6 +199,11 @@ REGISTRY: List[Model] = [
                                           "Qwen3.5-9B-Q4_K_M.gguf"),
         sha256="03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
         license="Apache-2.0",
+        # PC-061: same-family ASA vector as Q6_K should structurally apply
+        # (residual basis preserved across quants of the same model), but
+        # not validated for this exact combo. Same logic as lens_status.
+        asa_status="unverified",
+        asa_artifact_files=["ast_edit_steering.gguf"],
         notes="Smaller-than-Q6 9B variant. Uses the same Lens artifacts "
               "as the Q6 (different quant of the same model family — "
               "embedding space is structurally similar). Quality is "
@@ -210,8 +231,12 @@ REGISTRY: List[Model] = [
         # lens_artifact_dir=None means "use the global ATLAS_LENS_MODELS
         # dir" — current single-model layout.
         lens_artifact_files=["cost_field.pt", "metric_tensor.pt"],
+        # PC-061: ASA control vector trained + published 2026-05-12.
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
         notes="ATLAS development target. Lens artifacts trained and "
               "shipped in the repo (cost_field.pt + metric_tensor.pt). "
+              "ASA control vector built + published to HF 2026-05-12. "
               "End-to-end supported.",
     ),
     Model(
@@ -226,6 +251,10 @@ REGISTRY: List[Model] = [
                                           "Qwen3.5-9B-Q8_0.gguf"),
         sha256="809626574d0cb43d4becfa56169980da2bb448f2299270f7be443cb89d0a6ae4",
         license="Apache-2.0",
+        # PC-061: see Q4_K_M entry — same family, structurally applicable
+        # but not validated for this exact quant.
+        asa_status="unverified",
+        asa_artifact_files=["ast_edit_steering.gguf"],
         notes="Higher-quality 9B variant for hosts with 24+ GB VRAM. "
               "Uses the same Lens artifacts as Q6_K (different quant "
               "of the same model family). Quality is higher than Q6_K "

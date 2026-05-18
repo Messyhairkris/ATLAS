@@ -168,6 +168,11 @@ type tuiModel struct {
 	// as a compact badge ("Lens ✓  ASA ⚠") next to the Pipeline pane
 	// title. nil while the initial fetch is in flight or if it failed.
 	calibration *calibrationStatus
+	// Round-2 fix: track retry attempts so we can re-fire the fetch
+	// when the initial call lost the race against proxy startup (common
+	// during `docker compose up -d`). Stops retrying once we get a real
+	// status or after maxCalibrationRetries attempts — whichever first.
+	calibrationRetries int
 
 	// Chat scroll offset — number of rows scrolled UP from the bottom.
 	// 0 means "follow the latest" (auto-scroll on new messages); >0
@@ -372,7 +377,14 @@ func (m tuiModel) Init() tea.Cmd {
 		// PC-059: probe Lens + ASA calibration status so the badge
 		// next to the Pipeline pane title can render. Result arrives
 		// via calibrationStatusMsg; until then the badge shows "cal …".
+		// Pairs with the retry tick below so the badge converges even
+		// if the proxy is still warming up at TUI launch.
 		fetchCalibrationStatusCmd(m.proxyURL),
+		// Round-2 fix: schedule a retry trigger to re-probe if the
+		// initial fetch lost the race against proxy startup (common
+		// during `docker compose up -d`). The Update handler chooses
+		// whether to actually re-fire based on retry count + state.
+		scheduleCalibrationRetry(calibrationRetryInterval),
 		// Ask Bubbletea to send a WindowSizeMsg right away. Some
 		// terminals/multiplexers (tmux, screen) delay or skip the
 		// initial resize event, leaving us rendering with safe
@@ -904,16 +916,34 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case calibrationStatusMsg:
-		// PC-059: initial /v1/calibration/status fetch returned. Store
-		// it; the next render picks up the new badge. On err we leave
-		// m.calibration nil so the badge falls back to its "cal …"
-		// placeholder rather than rendering stale data. Fire-and-forget —
-		// no retries, no Cmd to schedule another fetch (operator can
-		// restart the TUI if the proxy was down at startup).
-		if msg.err == nil {
+		// /v1/calibration/status fetch returned. On success store the
+		// status and stop retrying (the retry tick checks state before
+		// re-firing, so once m.calibration is non-nil it short-circuits).
+		// On err leave m.calibration nil — the badge falls back to the
+		// "cal …" placeholder and the retry tick will re-probe.
+		if msg.err == nil && msg.status != nil {
 			m.calibration = msg.status
 		}
 		return m, nil
+
+	case calibrationRetryMsg:
+		// Round-2 fix: re-probe if the initial fetch missed (proxy
+		// hadn't finished starting up yet, common during compose-up
+		// races). Three short-circuit conditions, in priority order:
+		//   1. Already got a real status → no need to retry.
+		//   2. Hit the retry cap → give up; user can restart TUI.
+		//   3. Otherwise re-fire fetch + schedule the next retry.
+		if m.calibration != nil {
+			return m, nil
+		}
+		if m.calibrationRetries >= maxCalibrationRetries {
+			return m, nil
+		}
+		m.calibrationRetries++
+		return m, tea.Batch(
+			fetchCalibrationStatusCmd(m.proxyURL),
+			scheduleCalibrationRetry(calibrationRetryInterval),
+		)
 	}
 
 	// Forward remaining keystrokes to the textarea (typing, arrows…).

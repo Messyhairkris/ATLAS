@@ -46,6 +46,32 @@ type calibrationStatusMsg struct {
 	err    error
 }
 
+// calibrationRetryMsg fires when the model wants to retry the calibration
+// fetch — typically because a prior fetch failed and the proxy may have
+// come up since (common during `docker compose up -d`, where the TUI can
+// launch faster than the proxy finishes its startup probe).
+type calibrationRetryMsg struct{}
+
+// scheduleCalibrationRetry returns a Cmd that emits a retry trigger after
+// the given delay. The model's Update handler decides whether to actually
+// re-fire fetchCalibrationStatusCmd based on retry count + current state.
+func scheduleCalibrationRetry(after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg {
+		return calibrationRetryMsg{}
+	})
+}
+
+// maxCalibrationRetries caps the retry loop. At ~5s/retry, 5 attempts
+// covers ~25s of proxy-startup warmup — long enough for the slowest
+// realistic docker compose up, short enough that a permanently-down
+// proxy doesn't keep poking forever.
+const maxCalibrationRetries = 5
+
+// calibrationRetryInterval is the gap between retry attempts. Chosen to
+// be long enough that we don't hammer a struggling proxy, short enough
+// that the badge converges quickly once the proxy is healthy.
+const calibrationRetryInterval = 5 * time.Second
+
 // fetchCalibrationStatusCmd does an HTTP GET against the proxy. Fast — the
 // proxy itself caches nothing here, but the upstream lens /health call is
 // 3s-bounded and the rest is in-process. Total round-trip should be <4s.

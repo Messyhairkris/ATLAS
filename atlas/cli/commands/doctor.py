@@ -370,14 +370,39 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
         return CheckResult("asa_steering", "warn",
             "ast_edit_steering.gguf not present",
             f"expected at {path} — build it via "
-            f"`./scripts/atlas-bootstrap.sh` (auto, ~5 min) or "
-            f"`geometric-lens/asa_calibration/README.md` (manual). "
+            f"`atlas asa build` (PC-061, runs in the lens container, "
+            f"~25 min for the full 1000-pair training) or use the "
+            f"manual workflow in `geometric-lens/asa_calibration/README.md`. "
             f"ATLAS continues to work without it; the ast_edit-vs-edit_file "
             f"proposal bias is just unsteered.")
     try:
         size_mb = os.path.getsize(path) / (1024 * 1024)
     except OSError:
         size_mb = 0.0
+
+    # PC-061 round-2 fix: when llama-server is reachable, run the deeper
+    # dim-compat probe so doctor surfaces the same dim-mismatch verdict
+    # `atlas asa check` would. Without this hook, doctor reports "pass"
+    # even on a stale vector trained for a different model — the exact
+    # failure mode PC-061 was supposed to surface. Best-effort: if the
+    # asa module or its deps aren't importable, fall back to the
+    # file-presence pass below.
+    try:
+        from atlas.cli.commands import asa as _asa
+        verdict = _asa._check_asa(atlas_root)
+        if verdict.verdict == "needs-build" and "Dim mismatch" in (verdict.reason or ""):
+            return CheckResult("asa_steering", "fail",
+                f"control vector dim mismatch",
+                f"vector at {path} was trained for a different model "
+                f"(dim {verdict.vector_dim}) than llama-server has loaded "
+                f"(dim {verdict.probe.embedding_dim}). Run `atlas asa build` "
+                f"to retrain for the current model.")
+    except Exception:
+        # Doctor keeps running even if the deeper probe fails — asa
+        # isn't a hard dep of doctor, and a check shouldn't crash the
+        # whole diagnostic.
+        pass
+
     return CheckResult("asa_steering", "pass",
         f"ast_edit_steering.gguf ({size_mb:.1f} MB) at {path}")
 

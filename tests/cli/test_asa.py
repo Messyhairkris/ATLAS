@@ -254,6 +254,88 @@ def test_build_refuses_when_docker_missing(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# PC-061 round-2: stale-output + cleanup behavior in _emit_build
+# ---------------------------------------------------------------------------
+
+def _fake_subprocess_run_for_build():
+    """Return a subprocess.run substitute that satisfies asa build's
+    pre-flight checks (docker inspect must report "true" for container
+    running) and succeeds for docker cp. Used by the cleanup-behavior
+    tests below."""
+    def _run(cmd, *a, **kw):
+        # docker inspect for container state — must return "true" to
+        # pass the container-running pre-flight.
+        if isinstance(cmd, list) and len(cmd) >= 2 \
+                and cmd[0] == "docker" and cmd[1] == "inspect":
+            return type("R", (), {"returncode": 0,
+                                  "stdout": "true\n", "stderr": ""})()
+        # Everything else (docker cp) just succeeds with empty stdout.
+        return type("R", (), {"returncode": 0,
+                              "stdout": "", "stderr": ""})()
+    return _run
+
+
+def test_build_dry_run_cleans_up_staged_files(monkeypatch, tmp_path, capsys):
+    """--dry-run shouldn't leave the staged script + pairs in the
+    container's /tmp. Verify _docker_exec gets called with `rm -f` for
+    both staged paths before we return."""
+    monkeypatch.setattr(asa, "_docker_available", lambda: True)
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
+
+    docker_exec_calls = []
+
+    def _spy_docker_exec(container, cmd, capture=False):
+        docker_exec_calls.append((container, cmd))
+        return type("R", (), {"returncode": 0,
+                              "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(asa, "_docker_exec", _spy_docker_exec)
+    rc = asa.main(["build", "--dry-run", "--no-color"])
+    assert rc == 0
+    rm_targets = [cmd[-1] for _, cmd in docker_exec_calls
+                  if cmd[:2] == ["rm", "-f"]]
+    assert "/tmp/build_steering_vector.py" in rm_targets, (
+        "dry-run must clean up the staged script — saw rm calls for: "
+        f"{rm_targets}"
+    )
+    assert "/tmp/contrast_pairs.jsonl" in rm_targets, (
+        "dry-run must clean up staged pairs — saw rm calls for: "
+        f"{rm_targets}"
+    )
+
+
+def test_build_pre_run_nukes_stale_output(monkeypatch, tmp_path, capsys):
+    """Regression for the round-2 blocker: a stale
+    /tmp/ast_edit_steering.gguf from a prior failed run must be deleted
+    BEFORE the new training fires. Otherwise a fresh crash that writes
+    nothing would let `docker cp` return the stale vector as if it were
+    a new build."""
+    monkeypatch.setattr(asa, "_docker_available", lambda: True)
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
+
+    docker_exec_calls = []
+
+    def _spy(container, cmd, capture=False):
+        docker_exec_calls.append((container, cmd))
+        return type("R", (), {"returncode": 0,
+                              "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(asa, "_docker_exec", _spy)
+    asa.main(["build", "--dry-run", "--no-color"])
+    gguf_rm_calls = [cmd for _, cmd in docker_exec_calls
+                     if cmd == ["rm", "-f", "/tmp/ast_edit_steering.gguf"]]
+    assert len(gguf_rm_calls) >= 1, (
+        "expected `rm -f /tmp/ast_edit_steering.gguf` to fire before "
+        "training to prevent stale-output corruption; "
+        f"saw docker_exec calls: {docker_exec_calls}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # atlas asa publish — early-exit paths
 # ---------------------------------------------------------------------------
 

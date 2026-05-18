@@ -74,6 +74,57 @@ def test_no_artifacts_models_have_explanatory_notes():
 
 
 # ---------------------------------------------------------------------------
+# PC-061 round-2: Model accepts asa_* schema fields
+# ---------------------------------------------------------------------------
+
+def test_model_accepts_asa_status_and_artifact_files():
+    """Regression for the round-2 blocker: `atlas asa publish`'s PR body
+    suggests a registry diff using `asa_status=...` and
+    `asa_artifact_files=[...]`. If the dataclass doesn't accept those
+    kwargs, a maintainer pasting the diff verbatim gets a TypeError.
+
+    This test guards the schema by constructing a Model with exactly
+    the kwargs the PR-body template uses."""
+    m = model_registry.Model(
+        name="Test-9B",
+        tier="medium",
+        model_file="Test-9B.gguf",
+        model_display="Test 9B",
+        model_size_gb=6.0,
+        lens_status="supported",
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
+    )
+    assert m.asa_status == "supported"
+    assert m.asa_artifact_files == ["ast_edit_steering.gguf"]
+
+
+def test_asa_status_defaults_to_no_artifacts():
+    """Existing registry entries that predate PC-061 didn't pass
+    asa_status. Default should keep them honest as 'no-artifacts' rather
+    than silently claiming support."""
+    m = model_registry.Model(
+        name="Test-Pre-PC061",
+        tier="small",
+        model_file="x.gguf",
+        model_display="x",
+        model_size_gb=1.0,
+        lens_status="no-artifacts",
+    )
+    assert m.asa_status == "no-artifacts"
+    assert m.asa_artifact_files == []
+
+
+def test_qwen_9b_q6k_claims_asa_supported():
+    """The canonical ATLAS model has both lens + ASA artifacts in the
+    repo and published to HF. Lock in that the registry reflects this."""
+    m = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    assert m is not None
+    assert m.asa_status == "supported"
+    assert "ast_edit_steering.gguf" in m.asa_artifact_files
+
+
+# ---------------------------------------------------------------------------
 # Lookups
 # ---------------------------------------------------------------------------
 

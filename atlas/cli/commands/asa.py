@@ -389,8 +389,14 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         n_pairs_lines = sum(1 for line in fh if line.strip())
     _safe_print(f"  pairs file: {pairs_host} ({n_pairs_lines} non-empty lines)")
 
-    # 3. Stage script + pairs into the container
+    # 3. Stage script + pairs into the container. We also pre-emptively
+    # delete any stale `/tmp/ast_edit_steering.gguf` from a previous
+    # failed run — otherwise a fresh training crash that writes nothing
+    # would let step [4/5] silently `docker cp` the OLD vector back to
+    # the host as if it were a new build. (Silent data corruption bug,
+    # caught in round-2 audit.)
     _safe_print(f"[2/5] Staging script + pairs into {container}…")
+    _docker_exec(container, ["rm", "-f", "/tmp/ast_edit_steering.gguf"])
     for src, dst in [(script_host, "/tmp/build_steering_vector.py"),
                       (pairs_host, "/tmp/contrast_pairs.jsonl")]:
         cp = subprocess.run(["docker", "cp", src, f"{container}:{dst}"],
@@ -405,9 +411,18 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"[3/5] (dry-run) would run build_steering_vector.py "
                     f"with --layer {args.layer} "
                     f"--limit {args.limit if args.limit else 'all'}")
+        # Even in dry-run, clean up the staged script + pairs so we
+        # don't leave them in the container's /tmp. The cleanup loop
+        # in the real-run path uses try/finally; here it's just a
+        # direct pair of removes since we have no run to wrap.
+        for f in ("/tmp/build_steering_vector.py", "/tmp/contrast_pairs.jsonl"):
+            _docker_exec(container, ["rm", "-f", f])
         return 0
 
-    # 4. Run the build inside the container
+    # 4. Run the build inside the container. try/finally so the staged
+    # files in the container's /tmp always get cleaned up — even when
+    # the training run crashes or we hit a sanity-check failure on the
+    # output. Otherwise repeated failed runs would pile up in /tmp.
     _safe_print(f"[3/5] Training (layer {args.layer}, "
                 f"{args.limit or 'all'} pairs). Takes ~25 min for 1000 pairs…")
     cmd = ["python3", "/tmp/build_steering_vector.py",
@@ -416,40 +431,67 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             "--layer", str(args.layer)]
     if args.limit:
         cmd += ["--limit", str(args.limit)]
-    start = time.time()
-    result = _docker_exec(container, cmd)
-    elapsed = time.time() - start
-    if result.returncode != 0:
-        _safe_print(f"  {RED if color else ''}build script exited "
-                    f"{result.returncode}. Check container logs: "
-                    f"docker logs {container}{RESET if color else ''}")
-        return 1
-    _safe_print(f"  build completed in {elapsed:.1f}s")
+    try:
+        start = time.time()
+        result = _docker_exec(container, cmd)
+        elapsed = time.time() - start
+        if result.returncode != 0:
+            _safe_print(f"  {RED if color else ''}build script exited "
+                        f"{result.returncode}. Check container logs: "
+                        f"docker logs {container}{RESET if color else ''}")
+            return 1
+        _safe_print(f"  build completed in {elapsed:.1f}s")
 
-    # 5. Copy result back + save to artifact dir
-    artifact_dir = args.artifact_dir or os.path.dirname(
-        _configured_vector_path())
-    os.makedirs(artifact_dir, exist_ok=True)
-    out_path = args.out or os.path.join(artifact_dir, DEFAULT_VECTOR_NAME)
-    _safe_print(f"[4/5] Copying built vector to {out_path}…")
-    cp = subprocess.run(["docker", "cp",
-                          f"{container}:/tmp/ast_edit_steering.gguf",
-                          out_path],
-                         capture_output=True, text=True)
-    if cp.returncode != 0:
-        _safe_print(f"  {RED if color else ''}docker cp out failed: "
-                    f"{cp.stderr.strip()}{RESET if color else ''}")
-        return 1
-    size = os.path.getsize(out_path)
-    _safe_print(f"  saved: {out_path} ({size} bytes)")
+        # 5. Copy result back + save to artifact dir
+        artifact_dir = args.artifact_dir or os.path.dirname(
+            _configured_vector_path())
+        os.makedirs(artifact_dir, exist_ok=True)
+        out_path = args.out or os.path.join(artifact_dir, DEFAULT_VECTOR_NAME)
+        _safe_print(f"[4/5] Copying built vector to {out_path}…")
+        cp = subprocess.run(["docker", "cp",
+                              f"{container}:/tmp/ast_edit_steering.gguf",
+                              out_path],
+                             capture_output=True, text=True)
+        if cp.returncode != 0:
+            _safe_print(f"  {RED if color else ''}docker cp out failed: "
+                        f"{cp.stderr.strip()}{RESET if color else ''}")
+            return 1
 
-    _safe_print("")
-    _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
-    _safe_print(f"  Next: restart llama-server so it picks up the new vector:")
-    _safe_print(f"    docker compose up -d --build llama-server --no-deps")
-    _safe_print(f"  Then verify: atlas asa check")
-    _safe_print(f"  Or share it: atlas asa publish --repo USER/REPO")
-    return 0
+        # Size sanity check. A real ASA vector for a 4096-dim model is
+        # ~32 KB (1 float32 direction × 4096 dims + GGUF header). A few
+        # hundred bytes means the training script crashed mid-write to
+        # its tempfile and produced a truncated/empty GGUF — reporting
+        # that as success would be worse than a clean failure. 1 KB
+        # floor catches all realistic truncation modes while staying
+        # well below the smallest valid vector.
+        size = os.path.getsize(out_path)
+        if size < 1024:
+            _safe_print(f"  {RED if color else ''}output is suspiciously "
+                        f"small ({size} bytes) — training likely crashed "
+                        f"mid-write. Deleting and aborting.{RESET if color else ''}")
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            return 1
+        _safe_print(f"  saved: {out_path} ({size} bytes)")
+
+        _safe_print("")
+        _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
+        _safe_print(f"  Next: restart llama-server so it picks up the new vector:")
+        _safe_print(f"    docker compose up -d --build llama-server --no-deps")
+        _safe_print(f"  Then verify: atlas asa check")
+        _safe_print(f"  Or share it: atlas asa publish --repo USER/REPO")
+        return 0
+    finally:
+        # Clean up staged inputs + output in the container's /tmp.
+        # Leaving them would (1) waste space across repeated runs and
+        # (2) re-enable the stale-output bug for the NEXT run, since
+        # the pre-flight rm above only catches one prior failure.
+        for f in ("/tmp/build_steering_vector.py",
+                  "/tmp/contrast_pairs.jsonl",
+                  "/tmp/ast_edit_steering.gguf"):
+            _docker_exec(container, ["rm", "-f", f])
 
 
 # ---------------------------------------------------------------------------

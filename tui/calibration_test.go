@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderCalibrationBadge_NilStatus_ShowsPlaceholder(t *testing.T) {
@@ -214,5 +215,36 @@ func TestRenderCalibrationBadge_WarnIncludesHint(t *testing.T) {
 	}
 	if !strings.Contains(got, "PUBLISHING.md") {
 		t.Errorf("rendered badge should reference docs, got %q", got)
+	}
+}
+
+// PC-061 round-2 fix: badge retry tick must converge once we have a
+// real status and must stop after the retry cap.
+func TestScheduleCalibrationRetry_FiresRetryMsgAfterDelay(t *testing.T) {
+	// 1ms tick lets us assert the message type without slowing the
+	// suite down. The shape of the message is what we care about; the
+	// model decides what to do with it.
+	cmd := scheduleCalibrationRetry(time.Millisecond)
+	if cmd == nil {
+		t.Fatal("scheduleCalibrationRetry returned nil cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(calibrationRetryMsg); !ok {
+		t.Errorf("expected calibrationRetryMsg, got %T", msg)
+	}
+}
+
+func TestCalibrationRetryConstants_BoundedAndReasonable(t *testing.T) {
+	// Lock the retry budget so changes are intentional. Too low and a
+	// slow proxy startup never converges; too high and a permanently-
+	// down proxy keeps pinging forever.
+	if maxCalibrationRetries < 3 || maxCalibrationRetries > 10 {
+		t.Errorf("maxCalibrationRetries (%d) outside reasonable range [3,10]",
+			maxCalibrationRetries)
+	}
+	if calibrationRetryInterval < 2*time.Second ||
+		calibrationRetryInterval > 30*time.Second {
+		t.Errorf("calibrationRetryInterval (%v) outside reasonable range",
+			calibrationRetryInterval)
 	}
 }
