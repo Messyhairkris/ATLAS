@@ -98,6 +98,34 @@ Examples:
 - Explain your decisions when disagreeing
 - Request re-review after making changes
 
+### Contributing Trained Artifacts (Lens / ASA)
+
+Code isn't the only thing you can contribute. ATLAS ships per-model
+**Geometric Lens** cost fields (`cost_field.pt`) and **ASA control
+vectors** (`*.gguf`) — these are coupled to the base model they were
+trained against, so every new model needs its own pair before ATLAS
+runs end-to-end against it. If you've trained one, please contribute
+it back!
+
+Artifact contributions follow a different workflow than code changes:
+
+- You train locally with `atlas lens build` / `atlas asa build`
+- You run `atlas lens publish` / `atlas asa publish`, which uploads the
+  binary to a HuggingFace repo you own AND opens a registry PR on this
+  repo containing the HF link + SHA-256 + dim
+- The maintainer pulls the artifact onto a verification VM, runs it
+  against a private trust-gate set, and merges (or asks for changes)
+  on the PR
+
+You do NOT need a GitHub PAT or write access to this repo. The minimum
+requirement is a HuggingFace account + write token. Full walkthrough,
+including credential setup, what happens after submission, and
+troubleshooting:
+
+→ **[docs/PUBLISHING.md](docs/PUBLISHING.md)**
+
+CLI flag reference for the publish commands lives in [docs/CLI.md](docs/CLI.md).
+
 ## Code Style
 
 ### Python
