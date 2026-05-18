@@ -144,6 +144,7 @@ def _kill_stale_proxy() -> None:
             if base == "atlas-proxy-v2" or base.startswith("atlas-proxy-v2"):
                 pids.append(pid)
     except FileNotFoundError:
+        # best-effort: swallow on failure (caller continues)
         pass
 
     # Fallback: anything listening on PROXY_PORT.
@@ -167,6 +168,7 @@ def _kill_stale_proxy() -> None:
                         if pid != os.getpid() and pid not in pids:
                             pids.append(pid)
     except (FileNotFoundError, subprocess.TimeoutExpired):
+        # best-effort: swallow on failure (caller continues)
         pass
 
     for pid in pids:
@@ -191,6 +193,7 @@ def _kill_stale_proxy() -> None:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
+                    # best-effort: swallow on failure (caller continues)
                     pass
 
 
@@ -237,7 +240,13 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
 
     log_path = _proxy_log_path()
     try:
-        log_fd = open(log_path, "ab", buffering=0)
+        # log_fd is intentionally held open for the lifetime of the proxy
+        # child process — Popen below pipes its stdout/stderr into this
+        # descriptor, and closing it here would yank the proxy's output.
+        # The OS reclaims the fd when _stop_local_proxy() reaps the child
+        # at atexit. CodeQL's file-not-closed alert is a false positive
+        # for this pattern.
+        log_fd = open(log_path, "ab", buffering=0)  # noqa: SIM115
     except OSError as e:
         print(f"  WARN: can't open {log_path}: {e}; proxy logs disabled")
         log_fd = subprocess.DEVNULL

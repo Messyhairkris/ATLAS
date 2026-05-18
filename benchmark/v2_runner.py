@@ -92,6 +92,7 @@ def query_v2_signals(prompt):
             data = json.loads(resp.read().decode('utf-8'))
             signals["geometric_energy"] = data.get("energy_normalized", data.get("energy_before", 0.0))
     except Exception:
+        # best-effort: swallow on failure (caller continues)
         pass
     try:
         req = urllib.request.Request(f"{RAG_API_URL}/internal/cache/stats")
@@ -99,6 +100,7 @@ def query_v2_signals(prompt):
             data = json.loads(resp.read().decode('utf-8'))
             signals["cache_score"] = data.get("hit_rate", 0.0)
     except Exception:
+        # best-effort: swallow on failure (caller continues)
         pass
     return signals
 
@@ -140,6 +142,7 @@ def find_completed_tasks(phase_dir):
                     if 'task_id' in data:
                         completed.add(data['task_id'])
             except (json.JSONDecodeError, IOError):
+                # best-effort: swallow on failure (caller continues)
                 pass
     return completed
 
@@ -254,6 +257,7 @@ class V2BenchmarkRunner:
                     data = json.load(fh)
                     results[data['task_id']] = TaskResult.from_dict(data)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         for idx, task in enumerate(remaining):

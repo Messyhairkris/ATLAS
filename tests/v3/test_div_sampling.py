@@ -1,7 +1,6 @@
 """Tests for V3 DivSampling (Feature 1B)."""
 
 import json
-from pathlib import Path
 
 import pytest
 

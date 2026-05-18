@@ -397,7 +397,7 @@ class PlanSearch:
 
         # Step 2: Plan Construction (parallel across constraint sets)
         plans: List[Plan] = [None] * len(constraint_sets)
-        step2_tokens_list = [0] * len(constraint_sets)
+        [0] * len(constraint_sets)
 
         def _build_plan(i, cs):
             plan, tokens, t = self._step2_construct_plan(
@@ -575,4 +575,5 @@ class PlanSearch:
             with open(self._events_file, "a") as f:
                 f.write(json.dumps(event.to_dict()) + "\n")
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass

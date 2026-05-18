@@ -96,6 +96,7 @@ def _check_instruction(response: str, instruction_id: str, kwargs: dict) -> bool
         elif category == "keywords":
             return _check_keywords(response, constraint, kwargs)
     except Exception:
+        # best-effort: swallow on failure (caller continues)
         pass
 
     return True  # Default pass for unimplemented checks

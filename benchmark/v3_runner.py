@@ -187,6 +187,7 @@ def find_completed_tasks(phase_dir):
                     if 'task_id' in data:
                         completed.add(data['task_id'])
             except (json.JSONDecodeError, IOError):
+                # best-effort: swallow on failure (caller continues)
                 pass
     return completed
 
@@ -585,6 +586,7 @@ class V3Pipeline:
                 "ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL", "50",
             ))
         except Exception:
+            # best-effort: swallow on failure (caller continues)
             pass
         return v3
 
@@ -779,6 +781,7 @@ class V3Pipeline:
                 label = "PASS" if probe_passed_sandbox else "FAIL"
                 self._emb_writer.write(task_id, 0, label, emb)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
             result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
 
@@ -846,6 +849,7 @@ class V3Pipeline:
                 categories = self._infer_categories(task)
                 ace_context = self.ace.get_context(categories, task_id=task_id)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         # Generate constraint-diverse candidates via PlanSearch
@@ -988,6 +992,7 @@ class V3Pipeline:
                     categories, task_id=task_id,
                 )
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         latency["phase1_gen_ms"] = (time.time() - phase1_start) * 1000
@@ -1024,6 +1029,7 @@ class V3Pipeline:
                 label = "PASS" if cand.get("passed") else "FAIL"
                 self._emb_writer.write(task_id, cand["index"], label, emb)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
             return cand
 
@@ -1349,6 +1355,7 @@ class V3Pipeline:
                     task_id=task_id,
                 )
         except Exception:
+            # best-effort: swallow on failure (caller continues)
             pass
 
     def _build_generation_prompt(self, task: BenchmarkTask,
@@ -1420,6 +1427,7 @@ class V3Pipeline:
         try:
             append_jsonl(self.telemetry_dir / "v3_events.jsonl", event)
         except Exception:
+            # best-effort: swallow on failure (caller continues)
             pass
 
     def collect_benchmark_results(self, results: Dict[str, Dict]) -> None:
@@ -1439,6 +1447,7 @@ class V3Pipeline:
             llm = LLMAdapter(self.runner)
             self.metacognitive.analyze_benchmark(benchmark_results, llm_call=llm)
         except Exception:
+            # best-effort: swallow on failure (caller continues)
             pass
 
 
@@ -1501,6 +1510,7 @@ class V3BenchmarkRunner:
                     data = json.load(fh)
                     results[data['task_id']] = data
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         parallel_tasks = int(os.environ.get("ATLAS_PARALLEL_TASKS", "4"))

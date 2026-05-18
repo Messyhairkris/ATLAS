@@ -56,6 +56,7 @@ class PatternStore:
             try:
                 self._redis.incr(VERSION_KEY)
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     def store_pattern(self, pattern: Pattern, score: float = 0.0) -> bool:
@@ -280,6 +281,7 @@ class PatternStore:
             try:
                 self._redis.incr("pcache:stats:hits")
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     def record_miss(self):
@@ -288,6 +290,7 @@ class PatternStore:
             try:
                 self._redis.incr("pcache:stats:misses")
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     def record_write(self):
@@ -296,6 +299,7 @@ class PatternStore:
             try:
                 self._redis.incr("pcache:stats:writes")
             except Exception:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
     def flush(self):

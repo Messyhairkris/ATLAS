@@ -209,9 +209,9 @@ class TestLlamaChatCompletion:
             timeout=120.0
         )
         assert response.status_code == 200
-        content = response.json()["choices"][0]["message"]["content"]
-        # Response should stop at or before "5" if present in counting
-        # This is a soft test as model may not count exactly
+        # Soft test — exercises the JSON parse path; the content shape
+        # isn't asserted because Qwen3.5's exact counting behavior varies.
+        _ = response.json()["choices"][0]["message"]["content"]
 
 
 class TestLlamaServerFeatures:
@@ -307,8 +307,10 @@ class TestLlamaChatCompletionAdvanced:
         )
         assert response.status_code == 200
         message = response.json()["choices"][0]["message"]
-        # Qwen3.5-9B may use "content" or "reasoning_content"
-        content = message.get("content", "") or message.get("reasoning_content", "") or ""
+        # Qwen3.5-9B may use "content" or "reasoning_content" — exercise
+        # both lookups for parser coverage; we don't assert the value
+        # because the model's response shape varies across runs.
+        _ = message.get("content", "") or message.get("reasoning_content", "") or ""
         # Model should return a response - don't require "Bob" since model may vary
         assert response.status_code == 200, "Multi-turn should work"
 
@@ -389,8 +391,9 @@ class TestLlamaParameters:
         )
         if response.status_code == 200:
             data = response.json()
-            choices = data.get("choices", [])
-            # n parameter support varies by server
+            # n parameter support varies by server; we don't assert
+            # cardinality, just that the response parses.
+            _ = data.get("choices", [])
 
 
 class TestLlamaResponseValidation:

@@ -73,10 +73,13 @@ def collect_samples():
     # Source 1: V3 ablation condition_a (has code directly)
     for f in sorted(glob.glob(os.path.join(DATA_DIR, "*.json"))):
         try:
-            d = json.load(open(f))
+            with open(f) as fh:
+                d = json.load(fh)
             add_sample(d.get("code", ""), d.get("passed", False),
                        d.get("task_id", os.path.basename(f)))
         except Exception:
+            # Best-effort over hundreds of result files: skip on any
+            # individual parse failure rather than aborting the whole run.
             pass
 
     # Source 2: V2 epoch results (code in attempts[].generated_code)
@@ -85,12 +88,14 @@ def collect_samples():
     for d in v2_dirs:
         for f in sorted(glob.glob(os.path.join(d, "*.json"))):
             try:
-                data = json.load(open(f))
+                with open(f) as fh:
+                    data = json.load(fh)
                 for a in data.get("attempts", []):
                     code = a.get("generated_code", "")
                     add_sample(code, a.get("passed", False),
                                a.get("task_id", os.path.basename(f)))
             except Exception:
+                # Same best-effort guard as Source 1.
                 pass
 
     return samples
@@ -207,7 +212,7 @@ def train_model(embeddings, labels):
             model.eval()
             with torch.no_grad():
                 val_pred = model(X_val).squeeze(-1)
-                val_loss = ((val_pred - Y_val) ** 2).mean().item()
+                ((val_pred - Y_val) ** 2).mean().item()
 
                 # Compute AUC
                 val_auc = compute_auc(val_pred.numpy(), labels_val)

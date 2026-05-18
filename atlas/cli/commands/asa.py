@@ -46,7 +46,6 @@ from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
 from atlas.cli.commands import lens as lens_module  # for shared helpers
-from atlas.cli.commands import model_registry
 
 
 # Output primitives — mirror lens.py for cross-module UX consistency.

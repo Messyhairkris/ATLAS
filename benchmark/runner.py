@@ -307,6 +307,7 @@ def execute_code_stdio(
         try:
             os.unlink(temp_path)
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
 
     return (

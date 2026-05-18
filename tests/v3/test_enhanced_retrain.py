@@ -20,7 +20,6 @@ torch = pytest.importorskip("torch")
 # geometric-lens is a separate service; add it to path for direct imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
-from geometric_lens.cost_field import CostField
 from geometric_lens.ewc import ElasticWeightConsolidation
 from geometric_lens.replay_buffer import ReplayBuffer
 from geometric_lens.training import retrain_cost_field_bce, compute_energy_auc
@@ -231,7 +230,8 @@ class TestCrossDomainRetention:
             embeddings=embs_a, labels=labels_a,
             epochs=30, replay_buffer=buf, ewc=ewc, domain="DomainA",
         )
-        model_state = result_a["model"].state_dict()
+        # Snapshot state_dict for EWC penalty calc (called by retrain_cost_field_bce below).
+        _ = result_a["model"].state_dict()
         auc_a_baseline = result_a["best_test_auc"]
 
         # Domain B: retrain, check Domain A AUC retention

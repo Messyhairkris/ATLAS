@@ -520,6 +520,7 @@ def check_tier_match() -> CheckResult:
                     f"or set ATLAS_LENS_MODELS to point at a dir that "
                     f"has them.")
         except (ImportError, AttributeError):
+            # best-effort: swallow on failure (caller continues)
             pass
         return CheckResult("tier_match", "pass",
             f"{recommended.tier} tier matches configured model "
@@ -587,6 +588,7 @@ def check_tier_match() -> CheckResult:
                     f"or set ATLAS_LENS_MODELS to point at a dir that "
                     f"has them.")
     except (ImportError, AttributeError):
+        # best-effort: swallow on failure (caller continues)
         pass
     return CheckResult("tier_match", "pass",
         f"running {actual_tier_name}-tier model on {recommended.tier}-tier "

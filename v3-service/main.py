@@ -1017,9 +1017,9 @@ class V3PipelineService:
                 name = fn.group(1)
                 return (code + "\nimport ast as _a\n"
                     + f"_i={repr(inp)}\n_e={repr(exp)}\n"
-                    + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: safe literal parse
+                    + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
                     + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
-                    + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: safe literal parse
+                    + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
                     + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
             return (
                 "import sys as _s,io as _o\n"
@@ -1623,7 +1623,7 @@ class BuildVerifier:
         """Build a Python script that writes the file and runs verification."""
         import shlex
         cmds = self.get_commands()
-        safe_code = code.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        code.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
 
         lines = [
             "import subprocess, tempfile, os, sys",
@@ -2493,7 +2493,7 @@ def _failing_function_from_stderr(stderr: str):
     matches = _TRACEBACK_FRAME_RE.findall(stderr)
     if not matches:
         return None
-    last = matches[-1]
+    matches[-1]
     # Filter sentinels — `<module>`, `<lambda>`, `<genexpr>` aren't
     # callable names we can look up. Walk back until we find one.
     for name in reversed(matches):
@@ -2820,6 +2820,7 @@ class V3Handler(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {event}\n\n".encode())
                     self.wfile.flush()
                 except Exception:
+                    # best-effort: swallow on failure (caller continues)
                     pass
 
             result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
@@ -2907,6 +2908,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 # Also log for debugging
                 print(f"  [SSE] {stage}: {detail[:80]}", flush=True)
             except BrokenPipeError:
+                # best-effort: swallow on failure (caller continues)
                 pass
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
@@ -3000,6 +3002,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 print(f"  [SSE plan] {stage}: {detail[:80]}", flush=True)
             except BrokenPipeError:
+                # best-effort: swallow on failure (caller continues)
                 pass
             except Exception as e:
                 print(f"  [SSE plan ERROR] {e}", flush=True)
@@ -3028,6 +3031,7 @@ class V3Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
+            # best-effort: swallow on failure (caller continues)
             pass
 
     def _handle_ast_edit(self):

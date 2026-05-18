@@ -23,7 +23,6 @@ torch = pytest.importorskip("torch")
 # geometric-lens is a separate service
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
-from geometric_lens.cost_field import CostField
 from geometric_lens.ewc import ElasticWeightConsolidation
 from geometric_lens.replay_buffer import ReplayBuffer
 from geometric_lens.training import retrain_cost_field_bce, compute_energy_auc

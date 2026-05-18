@@ -1,8 +1,6 @@
 """Tests for V3 Blend-ASC (Feature 2A) — Adaptive Sampling Budget."""
 
 import json
-import math
-from pathlib import Path
 
 import pytest
 

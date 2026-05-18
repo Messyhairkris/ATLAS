@@ -88,7 +88,8 @@ def verify_file_structure():
     # Check .gitignore entries
     gitignore_path = ".gitignore"
     if os.path.isfile(gitignore_path):
-        content = open(gitignore_path).read()
+        with open(gitignore_path) as fh:
+            content = fh.read()
         check(".gitignore has datasets/.cache",
               ".cache" in content or "datasets/.cache" in content,
               f"Searched .gitignore for cache exclusion")

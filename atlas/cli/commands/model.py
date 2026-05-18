@@ -508,6 +508,7 @@ def _release_install_lock(lock_path: Optional[str]) -> None:
     try:
         os.unlink(lock_path)
     except OSError:
+        # best-effort: swallow on failure (caller continues)
         pass
 
 
@@ -607,6 +608,7 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
         try:
             os.unlink(tmp)
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
 
     bytes_seen = range_start  # for progress
@@ -717,6 +719,7 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
         try:
             os.unlink(tmp)
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
         return 1
 
@@ -735,6 +738,7 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
             try:
                 os.unlink(tmp)
             except OSError:
+                # best-effort: swallow on failure (caller continues)
                 pass
             return 1
         _safe_print(f"  {GREEN if color else ''}SHA256 verified.{RESET if color else ''} "

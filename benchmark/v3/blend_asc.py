@@ -238,4 +238,5 @@ class BlendASC:
             with open(self._events_file, "a") as f:
                 f.write(json.dumps(event.to_dict()) + "\n")
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass

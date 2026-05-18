@@ -1,7 +1,6 @@
 """Tests for V3 PlanSearch (Feature 1A)."""
 
 import json
-from pathlib import Path
 from typing import Optional, Tuple
 
 import pytest

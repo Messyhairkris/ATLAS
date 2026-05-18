@@ -74,7 +74,12 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     # Final results
     if results_dir.exists():
         results = list(results_dir.glob("*.json"))
-        p = sum(1 for f in results if json.load(open(f)).get("passed"))
+        # Read each result via context manager so handles close promptly
+        # even when we hit a large results dir on a long benchmark run.
+        def _load(f):
+            with open(f) as fh:
+                return json.load(fh)
+        p = sum(1 for f in results if _load(f).get("passed"))
         total = len(results)
         rate = p / max(total, 1) * 100
         display.separator()

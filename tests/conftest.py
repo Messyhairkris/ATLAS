@@ -10,8 +10,6 @@ This module provides shared fixtures for testing all ATLAS services including:
 """
 
 import os
-import sys
-import json
 import uuid
 import time
 import tempfile

@@ -3,6 +3,23 @@ Multi-language sandbox execution server.
 
 Supports: Python, JavaScript/TypeScript, Go, Rust, C/C++, Bash/Shell
 Provides isolated code execution with resource limits and structured error reporting.
+
+Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
+    This service IS the trust boundary. Its entire purpose is to execute
+    agent-supplied code and shell commands on behalf of ATLAS. The
+    container provides isolation (tmpfs workspace, read-only root,
+    network-locked-down, per-call resource limits via MAX_EXECUTION_TIME
+    and MAX_MEMORY_MB). The Python code in this file does NOT need to
+    sanitize inputs to subprocess.run, validate user-controlled paths
+    inside the workspace, or treat agent-supplied code as untrusted —
+    that's the container's job.
+
+    CodeQL routinely flags `py/command-line-injection` and
+    `py/path-injection` here. Those alerts are by-design false positives:
+    accepting + executing user-controlled commands is the requirement,
+    and the cmd-list form (no shell=True at the Python layer) prevents
+    Python-level injection. Don't add input validation that would break
+    the sandbox's purpose; dismiss the alerts with rationale instead.
 """
 
 import os

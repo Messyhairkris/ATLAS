@@ -143,6 +143,7 @@ def parse_patterns(response: str) -> List[FailurePattern]:
                 if fp.frequency > 1.0:
                     fp.frequency /= 100.0  # Convert percentage
             except ValueError:
+                # best-effort: swallow on failure (caller continues)
                 pass
 
         comp_match = re.search(r'(?:COMPENSATION|CONSTRAINT)[:\s]*(.*?)$',
@@ -357,6 +358,7 @@ class MetacognitiveProfile:
                     FailurePattern.from_dict(e) for e in entries
                 ]
         except (OSError, json.JSONDecodeError):
+            # best-effort: swallow on failure (caller continues)
             pass
 
     def _save(self, path: str) -> None:
@@ -365,6 +367,7 @@ class MetacognitiveProfile:
             with open(path, 'w') as f:
                 json.dump(self.to_dict(), f, indent=2)
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
 
     def _log_event(self, event: MetacognitiveEvent) -> None:
@@ -374,4 +377,5 @@ class MetacognitiveProfile:
             with open(self._events_file, "a") as f:
                 f.write(json.dumps(event.to_dict()) + "\n")
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass

@@ -75,7 +75,8 @@ def main():
     skipped = 0
 
     for i, f in enumerate(task_files):
-        d = json.load(open(f))
+        with open(f) as fh:
+            d = json.load(fh)
         task_id = d.get("task_id", os.path.basename(f))
         code = d.get("code", "")
         passed = d.get("passed", False)
@@ -89,7 +90,7 @@ def main():
         status = "PASS" if passed else "FAIL"
 
         # Build the same text format as score_candidate
-        task_prompt = d.get("task_prompt", "")  # might not be stored
+        d.get("task_prompt", "")  # might not be stored
         text = f"SOLUTION: {code}"
 
         print(f"  [{i+1}/{len(task_files)}] {task_id}: {status} ({len(code)} chars)...", end=" ", flush=True)

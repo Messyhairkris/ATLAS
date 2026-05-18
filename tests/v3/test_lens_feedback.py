@@ -1,8 +1,6 @@
 """Tests for V3 Lens Feedback — online recalibration during benchmarks."""
 
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

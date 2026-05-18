@@ -178,4 +178,5 @@ class LensFeedbackCollector:
             with open(path, "a") as f:
                 f.write(json.dumps(event) + "\n")
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass

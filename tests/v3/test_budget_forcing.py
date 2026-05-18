@@ -1,19 +1,14 @@
 """Tests for V3 Budget Forcing (Feature 1C)."""
 
 import json
-import math
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from benchmark.v3.budget_forcing import (
     BUDGET_TIERS,
-    VALID_TIERS,
     WAIT_INJECTION_TEXT,
     BudgetForcing,
     BudgetForcingConfig,
-    BudgetForcingEvent,
     build_continuation_prompt,
     estimate_thinking_tokens,
     extract_thinking,

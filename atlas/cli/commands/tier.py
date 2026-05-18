@@ -375,6 +375,7 @@ def _read_system_ram_gb() -> float:
                     kb = int(line.split()[1])
                     return kb / (1024 * 1024)
     except (FileNotFoundError, ValueError, IndexError):
+        # best-effort: swallow on failure (caller continues)
         pass
     # Fallback for macOS (sysctl) or other
     try:
@@ -383,6 +384,7 @@ def _read_system_ram_gb() -> float:
         if p.returncode == 0:
             return int(p.stdout.strip()) / (1024 ** 3)
     except (subprocess.TimeoutExpired, FileNotFoundError):
+        # best-effort: swallow on failure (caller continues)
         pass
     return 0.0
 

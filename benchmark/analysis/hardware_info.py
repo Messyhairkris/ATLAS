@@ -86,6 +86,7 @@ def get_gpu_info() -> Dict[str, Any]:
             try:
                 info["power_draw_watts"] = float(power.split('\n')[0].strip())
             except ValueError:
+                # best-effort: swallow on failure (caller continues)
                 pass
     elif info["vendor"] == "amd":
         # rocm-smi --showdriverversion prints "ROCm Driver Version: 6.x.x"

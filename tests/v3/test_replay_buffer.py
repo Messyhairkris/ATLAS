@@ -9,7 +9,6 @@ Validates:
 - Save/load persistence
 """
 
-import json
 import os
 import random
 import sys

@@ -526,11 +526,13 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
         try:
             os.close(fd)
         except OSError:
+            # best-effort: swallow on failure (caller continues)
             pass
         raise
     try:
         os.chmod(keys_path, 0o600)
     except PermissionError:
+        # best-effort: swallow on failure (caller continues)
         pass
 
     _safe_print(f"  Wrote {keys_path} (mode 0600)")

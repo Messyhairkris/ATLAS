@@ -283,6 +283,7 @@ def run_benchmark_suite(
                         result = TaskResult.from_dict(data)
                         run.results[result.task_id] = result
             except (json.JSONDecodeError, IOError):
+                # best-effort: swallow on failure (caller continues)
                 pass
         logger.info(f"Loaded {len(run.results)} existing results from previous run(s)")
 

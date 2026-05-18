@@ -1,7 +1,6 @@
 """Tests for V3 Failure Analysis (Feature 3A)."""
 
 import json
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import pytest

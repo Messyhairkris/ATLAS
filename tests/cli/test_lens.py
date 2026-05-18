@@ -11,8 +11,6 @@ Coverage strategy:
 """
 
 import json
-import os
-import sys
 
 import pytest
 
