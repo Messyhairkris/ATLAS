@@ -456,6 +456,11 @@ class LLMAdapter:
                     time.sleep(2 * (attempt + 1))
                 else:
                     raise
+        # Unreachable: the for loop above always either returns inside
+        # the success branch or raises on the 5th failure. Explicit
+        # for py/mixed-returns (the implicit fall-through returns None,
+        # which violates the -> dict signature).
+        raise RuntimeError("unreachable: _send loop must return or raise")
 
 
 # --- Sandbox Adapter (calls sandbox /execute) ---------------------------------

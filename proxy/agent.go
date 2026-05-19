@@ -468,7 +468,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
 			if !ctx.YoloMode && shouldCheck {
 				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
-					log.Printf("[agent] claim-check gate: bouncing done at turn %d — %s",
+					log.Printf("[agent] claim-check gate: bouncing done at turn %d — %q",
 						turn, truncateStr(gap, 200))
 					ctx.Messages = append(ctx.Messages, AgentMessage{
 						Role:    "assistant",
@@ -684,7 +684,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var rb RunBackgroundInput
 				if json.Unmarshal(parsed.Args, &rb) == nil {
 					if rejection := validateRunCommand(rb.Command, ctx.WorkingDir); rejection != "" {
-						log.Printf("[agent] rejecting run_background %q: %s",
+						log.Printf("[agent] rejecting run_background %q: %q",
 							truncateStr(rb.Command, 80), rejection)
 						ctx.Messages = append(ctx.Messages, AgentMessage{
 							Role:    "assistant",
@@ -1118,7 +1118,7 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 	messages = append(messages, AgentMessage{Role: "user", Content: note})
 
 	grammar := buildGBNFGrammarForTools(excluded)
-	log.Printf("[agent] step-restriction active: banning %v from tool-name enum (ext=%s) — BiasBusters #2/#3", excluded, ext)
+	log.Printf("[agent] step-restriction active: banning %v from tool-name enum (ext=%q) — BiasBusters #2/#3", excluded, ext)
 	return messages, grammar
 }
 
@@ -2073,7 +2073,7 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cancel()
-	log.Printf("[agent] cancelled session %s via /cancel", req.SessionID)
+	log.Printf("[agent] cancelled session %q via /cancel", req.SessionID)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
 }
 

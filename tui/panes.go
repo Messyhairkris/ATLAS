@@ -827,7 +827,9 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		lines:     chatAll,
 	})
 	eventsTopY := yCursor + chatH + 2
-	yCursor += chatH
+	// (yCursor isn't bumped past chat — same reason as the events block
+	// below: no downstream pane reads it. stats + input are positioned
+	// from the bottom, not yCursor.)
 
 	eventsBox := ""
 	if !hideEvents {

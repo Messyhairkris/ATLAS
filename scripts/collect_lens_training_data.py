@@ -53,6 +53,9 @@ def extract_embedding(text: str, max_retries: int = 5) -> Optional[list]:
             else:
                 print(f"  FAILED after {max_retries} retries: {e}")
                 return None
+    # max_retries <= 0 falls through here; explicit return for
+    # py/mixed-returns. The caller already handles None.
+    return None
 
 
 def main():

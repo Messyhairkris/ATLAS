@@ -24,8 +24,12 @@ MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
 DATA_DIR = "" + ATLAS_DIR + "/docs/reports/ablation/condition_a"
 
 
-def get_llama_embedding(text: str, retries=2) -> list:
-    """Get 4096-dim embedding from llama-server (Qwen3.5-9B)."""
+def get_llama_embedding(text: str, retries: int = 2) -> list:
+    """Get 4096-dim embedding from llama-server (Qwen3.5-9B).
+
+    Returns the pooled embedding list, or raises the underlying urlopen
+    exception after exhausting retries.
+    """
     payload = json.dumps({"content": text}).encode()
     req = Request(LLAMA_EMBED_URL, data=payload, headers={"Content-Type": "application/json"})
     for attempt in range(retries + 1):
@@ -50,6 +54,10 @@ def get_llama_embedding(text: str, retries=2) -> list:
                 time.sleep(1)
             else:
                 raise
+    # Unreachable: range(retries+1) always iterates at least once with
+    # the default retries=2; making the falloff explicit so the
+    # function's return contract matches its signature (py/mixed-returns).
+    raise RuntimeError("unreachable: retries must be >= 0")
 
 
 def collect_samples():
