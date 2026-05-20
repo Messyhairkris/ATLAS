@@ -261,6 +261,13 @@ def _step_probe(args: argparse.Namespace, color: bool
     _safe_print(f"    System: {probe.system_ram_gb:.1f} GB RAM, "
                 f"{probe.cpu_cores} cores, "
                 f"{probe.disk_free_gb:.1f} GB free")
+    # #115: surface arch when it's not the default. arm64 hosts (DGX Spark,
+    # Snapdragon X Elite, Apple Silicon, Jetson, Pi 5) have a different
+    # backend matrix — no rocm, vulkan as universal fallback, cuda needs
+    # the sbsa/l4t base image swap.
+    if probe.system_arch != "x86_64":
+        _safe_print(f"    Architecture: {probe.system_arch} (see "
+                    f"docs/SETUP.md#arm64 for backend availability)")
     selected = _pick_gpu(probe, args, color)
     if selected is not None and probe.gpu_count > 1:
         _safe_print(f"    Selected: {selected.name} "
@@ -274,6 +281,7 @@ def _step_probe(args: argparse.Namespace, color: bool
 
 def _step_select_model(profile: tier.TierProfile,
                         selected_gpu: Optional[tier.GPUInfo],
+                        probe: tier.Probe,
                         args: argparse.Namespace,
                         color: bool) -> Optional[model_registry.Model]:
     """Pick a model for the user. Tier default if `supported`, otherwise
@@ -286,7 +294,11 @@ def _step_select_model(profile: tier.TierProfile,
 
     V3.1.1 addition: refuse on unsupported backends (Metal, SYCL) — the
     Dockerfile for that backend hasn't shipped yet, so `docker compose up`
-    would fail at image pull. Better to refuse with a clear message."""
+    would fail at image pull. Better to refuse with a clear message.
+
+    #115 addition: arch-aware backend filtering. AMD ROCm has no aarch64
+    release, so on arm64 hosts with an AMD GPU we treat rocm as
+    not-supported and offer the Vulkan fallback (Mesa RADV is multi-arch)."""
     if profile.tier == "cpu":
         _safe_print(f"  {RED if color else ''}No GPU detected. "
                     f"ATLAS requires a CUDA, ROCm, or Metal-capable GPU for "
@@ -298,6 +310,17 @@ def _step_select_model(profile: tier.TierProfile,
 
     if selected_gpu is not None:
         backend_id, backend_name, supported = _backend_for(selected_gpu.vendor)
+        # #115: rocm has no aarch64 release. Strip support on non-x86_64
+        # so the wizard falls through to the Vulkan fallback rather than
+        # writing ATLAS_BACKEND=rocm + failing at image pull. Mesa RADV
+        # under vulkan covers AMD GPUs on arm64 (slower than rocm would
+        # be, but it actually exists).
+        if backend_id == "rocm" and probe.system_arch != "x86_64":
+            supported = False
+            _safe_print(f"  {YELLOW if color else ''}Note: ROCm has no "
+                        f"{probe.system_arch} release.{RESET if color else ''} "
+                        f"Vulkan-via-Mesa-RADV is the path for AMD GPUs on "
+                        f"arm64 hosts (see #115).")
         # Operator-forced backend (--backend vulkan) short-circuits the
         # vendor probe entirely. Useful for users who want the universal
         # fallback even when their card has native support, or to test
@@ -677,7 +700,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Step 2
     _safe_print("[2/5] Selecting model…")
-    chosen = _step_select_model(profile, selected_gpu, args, color)
+    chosen = _step_select_model(profile, selected_gpu, probe, args, color)
     if chosen is None:
         _safe_print(f"  {RED if color else ''}No installable model found "
                     f"for tier={profile.tier}.{RESET if color else ''}")

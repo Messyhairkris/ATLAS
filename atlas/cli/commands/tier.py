@@ -48,6 +48,7 @@ Invoke:
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -131,6 +132,11 @@ class Probe:
     cpu_cores: int = 1          # logical cores (incl. SMT)
     disk_free_gb: float = 0.0
     platform: str = "other"  # 'linux' | 'darwin' | 'windows' | 'other'
+    # CPU architecture — drives backend availability (rocm is x86_64-only,
+    # vulkan is multi-arch). Values: 'x86_64' | 'aarch64' | 'other'.
+    # 'aarch64' covers DGX Spark, Snapdragon X Elite, Apple Silicon, Jetson,
+    # Pi 5. See #115 for the multi-arch build matrix.
+    system_arch: str = "x86_64"
 
     @property
     def description(self) -> str:
@@ -332,6 +338,34 @@ def detect_gpu() -> List[GPUInfo]:
     return gpus
 
 
+def arch_detect() -> str:
+    """Normalize the host CPU architecture string.
+
+    Returns one of:
+      'x86_64'  — Intel/AMD 64-bit (covers x86_64, amd64, x64)
+      'aarch64' — ARM 64-bit (covers aarch64, arm64; DGX Spark, Apple
+                  Silicon, Snapdragon X Elite, Jetson, Pi 5)
+      'other'   — anything else (armv7l, ppc64le, riscv64, etc.)
+
+    Drives backend availability:
+      x86_64   — all backends (cuda, rocm, vulkan, cpu fallback)
+      aarch64  — cuda (NVIDIA sbsa/l4t base images required), vulkan,
+                 cpu fallback. NO rocm (AMD ROCm has no arm64 release).
+      other    — vulkan only at best; arch is too niche for ATLAS to
+                 promise anything.
+
+    Used by `atlas init` to filter the offered backend list so users
+    on aarch64 don't get rocm suggested at them, and to surface a
+    warning when the host arch + vendor combo has no native path.
+    """
+    raw = platform.machine().lower()
+    if raw in ("x86_64", "amd64", "x64"):
+        return "x86_64"
+    if raw in ("aarch64", "arm64"):
+        return "aarch64"
+    return "other"
+
+
 def vulkan_available() -> bool:
     """Probe whether the Vulkan universal backend (PC-114) can run on
     this host. Used by the `atlas init` wizard to decide whether to
@@ -464,6 +498,7 @@ def probe(install_dir: Optional[str] = None) -> Probe:
     disk_free = _read_disk_free_gb(disk_path)
     plat = sys.platform if sys.platform in ("linux", "darwin", "win32") else "other"
     plat = "windows" if plat == "win32" else plat
+    arch = arch_detect()
     return Probe(
         has_gpu=primary is not None,
         gpu_name=primary.name if primary else None,
@@ -475,6 +510,7 @@ def probe(install_dir: Optional[str] = None) -> Probe:
         cpu_cores=cpu_cores,
         disk_free_gb=disk_free,
         platform=plat,
+        system_arch=arch,
     )
 
 

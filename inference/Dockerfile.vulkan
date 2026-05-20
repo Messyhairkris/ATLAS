@@ -14,6 +14,17 @@
 # Bring up via:
 #   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
 #
+# arm64 (#115): this Dockerfile is multi-arch ready. The ubuntu:22.04
+# base image and all apt packages (libvulkan-dev, mesa-vulkan-drivers,
+# glslang-tools, vulkan-tools) ship native arm64 builds. To produce a
+# multi-arch image manually:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t atlas-llama-server:vulkan -f Dockerfile.vulkan .
+# Targets: Apple Silicon (via MoltenVK in Docker Desktop), Snapdragon X
+# Elite (via Adreno vulkan driver), Raspberry Pi 5 (via V3D mesa driver),
+# Jetson + DGX Spark (via NVIDIA arm64 vulkan ICD), and Ampere Altra /
+# AWS Graviton workstations (via lavapipe CPU fallback).
+#
 # Tradeoff vs the native backends: typically 20–40% slower than CUDA on
 # the same NVIDIA card (compute shaders have more overhead than tuned
 # CUDA kernels). Worth it for the long-tail hardware coverage; not worth

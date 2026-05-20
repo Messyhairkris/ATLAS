@@ -562,3 +562,101 @@ def test_vulkan_available_false_when_no_signal(monkeypatch):
     monkeypatch.setattr(tier, "detect_gpu", lambda: [])
     monkeypatch.setattr("sys.platform", "linux")
     assert tier.vulkan_available() is False
+
+
+# ---------------------------------------------------------------------------
+# arm64 multi-arch (#115)
+# ---------------------------------------------------------------------------
+
+def test_amd_on_aarch64_falls_through_to_vulkan(tmp_path, monkeypatch, capsys):
+    """AMD GPU + aarch64 host: ROCm has no arm64 release, so the wizard
+    must NOT write ATLAS_BACKEND=rocm. Instead it should fall through to
+    the Vulkan fallback (Mesa RADV is multi-arch) — same code path as
+    the Apple Silicon offer."""
+    amd_gpu = tier.GPUInfo(vendor="amd", name="AMD Radeon RX 7900 XTX",
+                            vram_gb=24.0, compute_target="gfx1100", index=0)
+    amd_probe = tier.Probe(
+        has_gpu=True, gpu_name=amd_gpu.name, gpu_vendor="amd",
+        vram_gb=24.0, gpu_count=1, gpus=[amd_gpu],
+        system_ram_gb=32.0, cpu_cores=8, disk_free_gb=200.0,
+        platform="linux", system_arch="aarch64")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: amd_probe)
+    monkeypatch.setattr(tier, "vulkan_available", lambda: True)
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    out = capsys.readouterr().out
+    # The aarch64-rocm message must surface so the user understands why
+    # they're being steered to vulkan instead of rocm.
+    assert "aarch64" in out
+    assert "ROCm" in out or "rocm" in out
+    assert rc == 0
+    body = pathlib.Path(root, ".env").read_text()
+    # Should land on vulkan, not rocm.
+    assert "ATLAS_BACKEND=vulkan" in body
+    assert "ATLAS_BACKEND=rocm" not in body
+
+
+def test_amd_on_x86_64_still_picks_rocm(tmp_path, monkeypatch, capsys):
+    """Regression guard: the aarch64 carve-out must NOT affect the
+    normal x86_64 AMD path. RX 7900 XTX on a normal AMD desktop should
+    still write ATLAS_BACKEND=rocm."""
+    amd_gpu = tier.GPUInfo(vendor="amd", name="AMD Radeon RX 7900 XTX",
+                            vram_gb=24.0, compute_target="gfx1100", index=0)
+    amd_probe = tier.Probe(
+        has_gpu=True, gpu_name=amd_gpu.name, gpu_vendor="amd",
+        vram_gb=24.0, gpu_count=1, gpus=[amd_gpu],
+        system_ram_gb=32.0, cpu_cores=8, disk_free_gb=200.0,
+        platform="linux", system_arch="x86_64")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: amd_probe)
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    assert rc == 0
+    body = pathlib.Path(root, ".env").read_text()
+    assert "ATLAS_BACKEND=rocm" in body
+
+
+def test_aarch64_arch_surfaces_in_probe_output(tmp_path, monkeypatch, capsys):
+    """The Step 1 probe banner should print the architecture line when
+    it's not the default x86_64. This is the breadcrumb that tells arm64
+    users to read the SETUP.md#arm64 section."""
+    nvidia_gpu = tier.GPUInfo(vendor="nvidia", name="NVIDIA GB10",
+                               vram_gb=128.0, compute_target="120", index=0)
+    spark_probe = tier.Probe(
+        has_gpu=True, gpu_name=nvidia_gpu.name, gpu_vendor="nvidia",
+        vram_gb=128.0, gpu_count=1, gpus=[nvidia_gpu],
+        system_ram_gb=128.0, cpu_cores=20, disk_free_gb=2000.0,
+        platform="linux", system_arch="aarch64")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: spark_probe)
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    out = capsys.readouterr().out
+    assert "Architecture: aarch64" in out
+    assert "SETUP.md#arm64" in out
+    # DGX Spark CUDA path is supported, so this should succeed.
+    assert rc == 0
+
+
+def test_x86_64_does_not_surface_arch_line(tmp_path, monkeypatch, capsys):
+    """Negative: on the default x86_64 host, the architecture line must
+    NOT appear (it would be noise for the 99% case). This is the
+    counterpoint to test_aarch64_arch_surfaces_in_probe_output."""
+    nvidia_gpu = tier.GPUInfo(vendor="nvidia", name="NVIDIA RTX 5060 Ti",
+                               vram_gb=16.0, compute_target="120", index=0)
+    normal_probe = tier.Probe(
+        has_gpu=True, gpu_name=nvidia_gpu.name, gpu_vendor="nvidia",
+        vram_gb=16.0, gpu_count=1, gpus=[nvidia_gpu],
+        system_ram_gb=32.0, cpu_cores=8, disk_free_gb=500.0,
+        platform="linux", system_arch="x86_64")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: normal_probe)
+
+    root = _make_atlas_root(tmp_path)
+    _run(monkeypatch, root,
+         ["--yes", "--skip-download", "--no-color"])
+    out = capsys.readouterr().out
+    assert "Architecture:" not in out

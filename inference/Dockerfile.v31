@@ -1,4 +1,20 @@
-FROM docker.io/nvidia/cuda:12.9.0-devel-rockylinux9 AS builder
+# arm64 (#115): default base image is rockylinux9, which is x86_64-only.
+# Override on aarch64 hosts (DGX Spark = sbsa, Jetson = l4t) by passing
+# --build-arg BUILDER_IMAGE=... + --build-arg RUNTIME_IMAGE=... pointing
+# at the NVIDIA arm64 variant. Recipes:
+#   DGX Spark / Grace-Blackwell (sbsa):
+#     --build-arg BUILDER_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu22.04
+#     --build-arg RUNTIME_IMAGE=nvidia/cuda:12.9.0-runtime-ubuntu22.04
+#     (ubuntu variants ship both amd64 and arm64-sbsa via buildx)
+#   Jetson Orin (l4t):
+#     --build-arg BUILDER_IMAGE=nvcr.io/nvidia/l4t-jetpack:r36.3.0
+#     --build-arg RUNTIME_IMAGE=nvcr.io/nvidia/l4t-jetpack:r36.3.0
+# Then build with `--platform linux/arm64` via buildx. The dnf -> apt
+# differences are handled by the package install step below (the recipe
+# uses apt if dnf isn't present).
+ARG BUILDER_IMAGE=docker.io/nvidia/cuda:12.9.0-devel-rockylinux9
+ARG RUNTIME_IMAGE=docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9
+FROM ${BUILDER_IMAGE} AS builder
 # CUDA compute capability of the target GPU. Override at build time:
 #   podman build --build-arg CUDA_ARCH=89 -f Dockerfile.v31
 # Common values:
@@ -6,12 +22,22 @@ FROM docker.io/nvidia/cuda:12.9.0-devel-rockylinux9 AS builder
 #   70    = Volta (V100)
 #   75    = Turing (RTX 20xx, T4)
 #   80,86 = Ampere (A100, RTX 30xx)
+#   87    = Orin/Jetson AGX
 #   89    = Ada Lovelace (RTX 40xx, L4)
 #   90    = Hopper (H100)
-#   100,120,121 = Blackwell (B100, RTX 50xx)
+#   100,120,121 = Blackwell (B100, RTX 50xx, DGX Spark GB10)
 # Multiple archs can be passed semicolon-separated, e.g. "86;89;90".
 ARG CUDA_ARCH=120;121
-RUN dnf install -y git cmake gcc-c++ && dnf clean all
+# Install build deps. Default rockylinux9 uses dnf; ubuntu/l4t variants
+# use apt. Try dnf first, fall back to apt-get so the same Dockerfile
+# works across base-image overrides (#115).
+RUN if command -v dnf >/dev/null 2>&1; then \
+        dnf install -y git cmake gcc-c++ && dnf clean all; \
+    else \
+        apt-get update && apt-get install -y --no-install-recommends \
+            git cmake build-essential ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion
 ENV TMPDIR=/llama.cpp/tmp
 # Patches applied to llama.cpp before build. Keep this stage cache-friendly:
@@ -43,7 +69,10 @@ RUN git -c http.postBuffer=524288000 \
     cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" && \
     cmake --build build --config Release -j5
 
-FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9
+FROM ${RUNTIME_IMAGE}
+# Re-declare ARG after FROM so the runtime stage can reference it if
+# needed; Docker scopes ARGs per-stage unless re-declared.
+ARG RUNTIME_IMAGE
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 RUN mkdir -p /models /templates

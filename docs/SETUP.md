@@ -236,6 +236,56 @@ What's different from CUDA/ROCm:
 
 If you hit `vulkaninfo` showing only the `llvmpipe` CPU device when you expected a GPU, the kernel-side device passthrough failed — verify `/dev/dri/renderD*` exists on the host and your user is in the `video` + `render` groups (same as the ROCm requirement above).
 
+#### arm64 hosts (#115) {#arm64}
+
+ATLAS targets two CPU architectures: `x86_64` (default, all backends available) and `aarch64` (a subset of backends). Verify with `atlas doctor` — the `arch` check surfaces your architecture and which backends are available before the GPU check fires.
+
+**Backend availability by architecture:**
+
+| Backend | x86_64 | aarch64 | Notes |
+|---|---|---|---|
+| CUDA | yes (rockylinux9 base) | yes (sbsa or l4t base, build-arg swap) | DGX Spark = sbsa, Jetson = l4t |
+| ROCm | yes | **no** | AMD has no arm64 ROCm release. Use Vulkan instead. |
+| Vulkan | yes | yes (Mesa is multi-arch) | Universal fallback for all arm64 GPUs |
+| CPU (lavapipe) | yes | yes | Slow but always works |
+
+**Targeted arm64 devices:**
+
+- **NVIDIA DGX Spark** (Grace-Blackwell GB10) — CUDA via sbsa base image, compute cap 12.0/12.1
+- **NVIDIA Jetson Orin / AGX / Nano** — CUDA via l4t base image, compute cap 8.7
+- **Apple Silicon (M1/M2/M3/M4)** — Vulkan via MoltenVK in Docker Desktop (slow path); native Metal install tracked at [#32](https://github.com/itigges22/ATLAS/issues/32) for the fast path
+- **Snapdragon X Elite** (Windows on ARM laptops) — Vulkan via the Adreno driver
+- **Raspberry Pi 5** — Vulkan via Mesa V3D driver, expect CPU-tier performance
+- **Ampere Altra / AWS Graviton workstations** — Vulkan via lavapipe (CPU fallback, since no consumer arm64 dGPU yet)
+
+**Building the Vulkan image for arm64:**
+
+```bash
+# Multi-arch build that produces a single image manifest covering both archs:
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t atlas-llama-server:vulkan \
+  -f inference/Dockerfile.vulkan inference/
+```
+
+**Building the CUDA image for arm64** (DGX Spark example):
+
+```bash
+# Swap to the sbsa-capable ubuntu base, build with --platform linux/arm64:
+docker buildx build --platform linux/arm64 \
+  --build-arg BUILDER_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu22.04 \
+  --build-arg RUNTIME_IMAGE=nvidia/cuda:12.9.0-runtime-ubuntu22.04 \
+  -t atlas-llama-server:cuda-arm64 \
+  -f inference/Dockerfile.v31 inference/
+```
+
+For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t ships JetPack + CUDA + cuDNN as one image).
+
+**Known gaps (#115 tracks these):**
+
+- No prebuilt arm64 images on GHCR yet — arm64 users must build locally with the recipes above. Prebuilt multi-arch images will land once at least one arm64 device has been validated end-to-end.
+- Bootstrap installer (`scripts/atlas-install.sh`) hasn't been audited for arm64 paths.
+- Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/itigges22/ATLAS/issues/115).
+
 ### What Happens on First Run
 
 1. Docker pulls 5 prebuilt container images from

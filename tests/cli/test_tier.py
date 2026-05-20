@@ -309,3 +309,53 @@ def test_model_recommendation_reverse_lookup_roundtrip():
 def test_model_recommendation_unknown_returns_none():
     assert model_recommendations.for_tier("nonexistent") is None
     assert model_recommendations.tier_for_model("not-a-real.gguf") is None
+
+
+# ---------------------------------------------------------------------------
+# arch_detect (#115) — arm64 multi-arch foundation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("machine_raw, expected", [
+    ("x86_64",  "x86_64"),
+    ("amd64",   "x86_64"),
+    ("x64",     "x86_64"),
+    ("X86_64",  "x86_64"),   # case-insensitive
+    ("aarch64", "aarch64"),
+    ("arm64",   "aarch64"),
+    ("ARM64",   "aarch64"),
+    ("armv7l",  "other"),
+    ("ppc64le", "other"),
+    ("riscv64", "other"),
+    ("",        "other"),
+])
+def test_arch_detect_normalizes_machine_string(monkeypatch, machine_raw, expected):
+    """Cover the platform.machine() output forms we've actually seen
+    across NVIDIA sbsa (aarch64), Mac arm64, Windows amd64, and the
+    long tail of niche arches."""
+    monkeypatch.setattr(tier.platform, "machine", lambda: machine_raw)
+    assert tier.arch_detect() == expected
+
+
+def test_probe_includes_system_arch(monkeypatch):
+    """Probe must surface system_arch so init.py + doctor.py can filter
+    backends without re-implementing the platform detection logic."""
+    monkeypatch.setattr(tier, "detect_gpu", lambda: [])
+    monkeypatch.setattr(tier, "_read_system_ram_gb", lambda: 16.0)
+    monkeypatch.setattr(tier, "_read_cpu_cores", lambda: 4)
+    monkeypatch.setattr(tier, "_read_disk_free_gb", lambda *_: 50.0)
+    monkeypatch.setattr(tier.platform, "machine", lambda: "aarch64")
+    p = tier.probe()
+    assert p.system_arch == "aarch64"
+
+
+def test_probe_default_arch_is_x86_64_on_typical_host(monkeypatch):
+    """Sanity: don't accidentally flip the default arch when the host
+    is a normal x86 box. This guards against a regression where a None
+    or empty machine string silently became 'aarch64'."""
+    monkeypatch.setattr(tier, "detect_gpu", lambda: [])
+    monkeypatch.setattr(tier, "_read_system_ram_gb", lambda: 16.0)
+    monkeypatch.setattr(tier, "_read_cpu_cores", lambda: 4)
+    monkeypatch.setattr(tier, "_read_disk_free_gb", lambda *_: 50.0)
+    monkeypatch.setattr(tier.platform, "machine", lambda: "x86_64")
+    p = tier.probe()
+    assert p.system_arch == "x86_64"

@@ -134,10 +134,36 @@ def check_compose() -> CheckResult:
     return CheckResult("compose", "pass", f"v{out.strip()}")
 
 
+def check_arch() -> CheckResult:
+    """Surface the host CPU architecture so users see why a given backend
+    is or isn't available. Pass-status on x86_64 (default ATLAS target);
+    warn on aarch64 with a hint about the arm64 backend matrix; warn on
+    anything else since ATLAS doesn't promise coverage outside x86_64 +
+    aarch64. See #115 for the multi-arch build status.
+    """
+    arch = tier.arch_detect()
+    if arch == "x86_64":
+        return CheckResult("arch", "pass", "x86_64")
+    if arch == "aarch64":
+        return CheckResult("arch", "warn",
+            "aarch64 — vulkan + cuda (sbsa/l4t) only, no rocm",
+            "AMD ROCm has no arm64 release. Use ATLAS_BACKEND=vulkan for "
+            "AMD GPUs on arm64. NVIDIA CUDA needs the sbsa (DGX Spark) or "
+            "l4t (Jetson) base image swap, see docs/SETUP.md#arm64.")
+    return CheckResult("arch", "warn",
+        f"unsupported arch '{arch}'",
+        "ATLAS officially supports x86_64 and aarch64. Other arches may "
+        "work via vulkan + lavapipe but are untested. See #115.")
+
+
 def check_gpu() -> CheckResult:
     """Dispatcher: pick the right vendor-specific GPU check or warn if no
     GPU is detected. V3.1.1 — replaces the old check_nvidia() entry
     point. NVIDIA + AMD supported; Metal/SYCL not yet packaged.
+
+    #115 addition: AMD GPU on aarch64 -> warn rather than dispatch to the
+    rocm container check, since rocm has no arm64 release. The check would
+    just fail with a confusing image-pull error otherwise.
     """
     gpus = tier.detect_gpu()
     if not gpus:
@@ -149,9 +175,15 @@ def check_gpu() -> CheckResult:
         return CheckResult("gpu", "warn",
             "GPUs detected but none selectable",
             "tier.primary_gpu returned None")
+    arch = tier.arch_detect()
     if primary.vendor == "nvidia":
         return _check_nvidia_via_docker()
     if primary.vendor == "amd":
+        if arch != "x86_64":
+            return CheckResult("gpu", "warn",
+                f"AMD GPU on {arch}: ROCm has no {arch} release, use "
+                f"ATLAS_BACKEND=vulkan instead (#115)",
+                f"primary GPU: {primary.name}")
         return _check_amd_via_docker()
     return CheckResult("gpu", "warn",
         f"vendor '{primary.vendor}' detected but Docker integration not yet supported "
@@ -873,6 +905,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 2. Docker compose v2
     results.append(check_compose())
+
+    # 2.5. CPU architecture (#115) — surface aarch64 + the backend
+    # availability matrix for arm64 hosts before the GPU check, so
+    # users see why rocm gets steered to vulkan on DGX Spark / Snapdragon
+    # X Elite / Apple Silicon / Jetson / Pi 5.
+    results.append(check_arch())
 
     # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
     # AMD: /dev/kfd passthrough). Slow on first run since each vendor

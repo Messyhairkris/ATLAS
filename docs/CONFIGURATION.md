@@ -34,7 +34,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
-| `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1), `metal` (Apple Silicon, V3.1.2 planned — native install only), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm also requires bringing up the stack with `-f docker-compose.rocm.yml` (the wizard prints the right command). |
+| `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback, PC-114), `metal` (Apple Silicon, V3.1.2 planned — native install only), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan also require bringing up the stack with `-f docker-compose.rocm.yml` or `-f docker-compose.vulkan.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Apple Silicon, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64) and [#115](https://github.com/itigges22/ATLAS/issues/115). |
 | `ATLAS_GPU_VENDOR` | (auto-detected) | Vendor of the GPU ATLAS should use: `nvidia`, `amd`, `apple`, `intel`. Only meaningful on multi-vendor hosts; auto-detect picks the largest-VRAM GPU. |
 | `ATLAS_GPU_INDEX` | `0` | Vendor-local index of the GPU ATLAS should use. The entrypoint sets `CUDA_VISIBLE_DEVICES` (NVIDIA) or `HIP_VISIBLE_DEVICES` + `ROCR_VISIBLE_DEVICES` (AMD) from this value. Multi-GPU hosts pick a specific card with this. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm-v311). |
@@ -49,6 +49,7 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 |---|---|
 | `cuda` (default) | `docker compose up -d` |
 | `rocm` | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d` |
+| `vulkan` | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d` |
 | `metal` / `sycl` | Not supported via Docker — see [SETUP.md § Method 1](SETUP.md) for native paths (V3.1.2+) |
 
 `atlas init` prints the right invocation as part of its "Next steps" summary. `atlas-bootstrap.sh` picks it automatically based on `tier.detect_gpu()`.
