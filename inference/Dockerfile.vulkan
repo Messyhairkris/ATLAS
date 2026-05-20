@@ -56,14 +56,19 @@ ENV TMPDIR=/llama.cpp/tmp
 # patch is on the server-side request/response shape, not the GPU kernels.
 COPY patches/ /patches/
 
-# Shallow + single-branch clone (rationale: same as Dockerfile.v31 —
-# full history is ~1GB and chokes on flaky connections).
-RUN git -c http.postBuffer=524288000 \
+# Pin llama.cpp to a known-good SHA (same rationale as Dockerfile.v31 —
+# upstream context drift breaks the PC-202 patch periodically). Keep
+# this aligned with the other Dockerfiles.
+ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
+# Init + shallow-fetch a single SHA: avoids the ~1GB full-history clone.
+RUN git init /llama.cpp && \
+    cd /llama.cpp && \
+    git remote add origin https://github.com/ggml-org/llama.cpp && \
+    git -c http.postBuffer=524288000 \
         -c http.lowSpeedLimit=1000 \
         -c http.lowSpeedTime=60 \
-        clone --depth 1 --single-branch \
-        https://github.com/ggml-org/llama.cpp /llama.cpp && \
-    cd /llama.cpp && \
+        fetch --depth 1 origin ${LLAMA_CPP_REV} && \
+    git checkout FETCH_HEAD && \
     mkdir -p /llama.cpp/tmp && \
     # ATLAS patch: prevent --embeddings from poisoning the draft model context.
     # Same defensive sed as the CUDA/ROCm builds — harmless when absent.

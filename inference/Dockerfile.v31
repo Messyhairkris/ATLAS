@@ -43,17 +43,29 @@ ENV TMPDIR=/llama.cpp/tmp
 # Patches applied to llama.cpp before build. Keep this stage cache-friendly:
 # patches changes -> rebuild; everything else stays cached.
 COPY patches/ /patches/
-# Shallow + single-branch clone: full history is ~1GB and chokes flaky
-# connections (saw an 11-minute SSL read timeout on a full clone). The
-# build doesn't need history. http.postBuffer bump helps large packs;
-# lowSpeedLimit/Time abort fast on dead connections instead of hanging.
+# Pin llama.cpp to a known-good SHA so the PC-202 hidden-states patch
+# applies cleanly. Without this pin, every build pulls master HEAD and
+# upstream context drift periodically breaks the patch (saw this break
+# the publish workflow on 2026-05-20 when upstream removed a blank line
+# in server-context.cpp, shifting the patch's line numbers by 1).
+# Bump this when:
+#   1. There's a llama.cpp release with a feature/fix we want
+#   2. The PC-202 patch has been regenerated against the new upstream
+# Override at build time: --build-arg LLAMA_CPP_REV=<sha>
+ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
+# Init + shallow-fetch a single SHA: avoids the ~1GB full-history clone
+# while still letting us pin to a specific commit (GitHub supports
+# uploadpack.allowReachableSHA1InWant). http.postBuffer bump helps
+# large packs; lowSpeedLimit/Time abort fast on dead connections.
 # See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
-RUN git -c http.postBuffer=524288000 \
+RUN git init /llama.cpp && \
+    cd /llama.cpp && \
+    git remote add origin https://github.com/ggml-org/llama.cpp && \
+    git -c http.postBuffer=524288000 \
         -c http.lowSpeedLimit=1000 \
         -c http.lowSpeedTime=60 \
-        clone --depth 1 --single-branch \
-        https://github.com/ggml-org/llama.cpp /llama.cpp && \
-    cd /llama.cpp && \
+        fetch --depth 1 origin ${LLAMA_CPP_REV} && \
+    git checkout FETCH_HEAD && \
     mkdir -p /llama.cpp/tmp && \
     # ATLAS patch: prevent --embeddings from poisoning the draft model context.
     # Kept for compatibility — harmless when no draft model is used (Qwen3.5).

@@ -40,15 +40,20 @@ ENV TMPDIR=/llama.cpp/tmp
 # patches changes -> rebuild; everything else stays cached.
 COPY patches/ /patches/
 
-# Shallow + single-branch clone (same rationale as Dockerfile.v31 — full
-# history is ~1GB and chokes on flaky connections). See docs/TROUBLESHOOTING.md
-# "llama.cpp clone times out".
-RUN git -c http.postBuffer=524288000 \
+# Pin llama.cpp to a known-good SHA (same rationale as Dockerfile.v31 —
+# upstream context drift breaks the PC-202 patch periodically). Keep
+# this aligned with the other Dockerfiles.
+ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
+# Init + shallow-fetch a single SHA: avoids the ~1GB full-history clone.
+# See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
+RUN git init /llama.cpp && \
+    cd /llama.cpp && \
+    git remote add origin https://github.com/ggml-org/llama.cpp && \
+    git -c http.postBuffer=524288000 \
         -c http.lowSpeedLimit=1000 \
         -c http.lowSpeedTime=60 \
-        clone --depth 1 --single-branch \
-        https://github.com/ggml-org/llama.cpp /llama.cpp && \
-    cd /llama.cpp && \
+        fetch --depth 1 origin ${LLAMA_CPP_REV} && \
+    git checkout FETCH_HEAD && \
     mkdir -p /llama.cpp/tmp && \
     # ATLAS patch: prevent --embeddings from poisoning the draft model context.
     # Kept for compatibility — harmless when no draft model is used (Qwen3.5).
