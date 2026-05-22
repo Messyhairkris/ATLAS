@@ -4,6 +4,30 @@ Four deployment methods: **one-shot bootstrap** (recommended for new installs), 
 
 ---
 
+## Pick your install path
+
+The install steps depend on your hardware + OS. Find the row that matches your setup, then jump to the linked section.
+
+| Your hardware | OS | Recommended path |
+|---|---|---|
+| NVIDIA GPU (RTX 20/30/40/50, datacenter) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap-pc-051) (auto-detects) or [Method 1: Docker](#method-1-docker-compose-recommended) |
+| NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) |
+| AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](SETUP_MACOS.md)** (dedicated guide — hybrid native Metal + Docker) |
+| Intel Arc / Iris Xe | Linux/Windows | [Method 1: Docker — Vulkan](#vulkan--the-universal-fallback-pc-114) |
+| Snapdragon X Elite (laptops) | Windows on ARM / Linux | [Method 1: Docker — Vulkan](#vulkan--the-universal-fallback-pc-114) + [arm64 section](#arm64) |
+| Older AMD GPU (Vega, RDNA1, no ROCm 6.x support) | Linux | [Method 1: Docker — Vulkan](#vulkan--the-universal-fallback-pc-114) |
+| NVIDIA on ARM64 (DGX Spark, Jetson) | Linux | [Method 1: Docker — arm64 section](#arm64) (CUDA via sbsa/l4t base swap) |
+| Raspberry Pi 5 | Linux | [Method 1: Docker — Vulkan + arm64](#arm64) (expect CPU-tier perf) |
+| Intel Mac (pre-2020) | macOS | [Method 1: Docker — Vulkan](#vulkan--the-universal-fallback-pc-114) (Metal is Apple-Silicon-only) |
+| CPU only, no GPU | any | [Method 1: Docker — Vulkan + lavapipe](#vulkan--the-universal-fallback-pc-114) (slow, smoke-test only) |
+| Kubernetes cluster | Linux | [Method 3: K3s](#method-3-k3s) |
+| Bare-metal / development | Linux | [Method 2: Bare Metal](#method-2-bare-metal) |
+
+Don't see your setup? File an issue with `uname -a` output and `lspci | grep -i vga` (Linux) / `system_profiler SPDisplaysDataType` (Mac) and we'll add a row.
+
+---
+
 ## Method 0: One-shot bootstrap (PC-051)
 
 Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, sets sysctl knobs, downloads model weights, and brings the stack up. Idempotent — safe to re-run.

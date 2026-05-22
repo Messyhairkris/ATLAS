@@ -138,7 +138,7 @@ def _choose(prompt: str, choices: List[str], default: str,
 _BACKEND_BY_VENDOR = {
     "nvidia": ("cuda",  "CUDA",          True),   # supported in V3.1.0
     "amd":    ("rocm",  "ROCm",          True),   # supported in V3.1.1
-    "apple":  ("metal", "Metal",         False),  # V3.1.2 planned (native only)
+    "apple":  ("metal", "Metal",         True),   # supported in V3.1.2 (hybrid: native llama-server + docker for the rest, #32)
     "intel":  ("sycl",  "SYCL",          False),  # roadmap
 }
 
@@ -321,6 +321,36 @@ def _step_select_model(profile: tier.TierProfile,
                         f"{probe.system_arch} release.{RESET if color else ''} "
                         f"Vulkan-via-Mesa-RADV is the path for AMD GPUs on "
                         f"arm64 hosts (see #115).")
+        # #32: Apple Silicon hybrid path — native llama-server (Metal) +
+        # Docker for the rest of the stack. This is the FAST path; the
+        # docker-only Vulkan-via-MoltenVK path is the slow fallback (kept
+        # available via --backend vulkan). Surface the setup-script
+        # prerequisite so users know they need to run it before bringing
+        # the stack up.
+        if (backend_id == "metal" and probe.platform == "darwin"
+                and not args.backend):
+            _safe_print(f"  {GREEN if color else ''}Apple Silicon detected — "
+                        f"recommending the hybrid Metal path (V3.1.2 / #32)."
+                        f"{RESET if color else ''}")
+            _safe_print("  llama-server will run NATIVELY on macOS with Metal "
+                        "(5-10x faster than the Docker-via-MoltenVK fallback). "
+                        "Everything else (proxy, v3, lens, sandbox) stays in "
+                        "Docker. No core component changes.")
+            _safe_print("")
+            _safe_print(f"  {BOLD if color else ''}Prereq:{RESET if color else ''} "
+                        f"run ./scripts/atlas-setup-macos.sh first if you haven't "
+                        f"already. It installs brew deps + builds llama.cpp with "
+                        f"Metal. See docs/SETUP_MACOS.md for the full walkthrough.")
+            _safe_print("")
+            _safe_print("  Alternatives:")
+            _safe_print("    --backend vulkan   slow Docker-only path "
+                        "(uses MoltenVK, no native build needed)")
+            if not _confirm("Proceed with hybrid Metal path?",
+                            default_yes=True, args=args):
+                _safe_print("  Refusing rather than writing a .env that won't "
+                            "boot. Re-run with --backend vulkan for the "
+                            "Docker-only path, or run the setup script + retry.")
+                return None
         # Operator-forced backend (--backend vulkan) short-circuits the
         # vendor probe entirely. Useful for users who want the universal
         # fallback even when their card has native support, or to test
@@ -338,8 +368,11 @@ def _step_select_model(profile: tier.TierProfile,
                         f"'{selected_gpu.vendor}' uses the {backend_name} backend, "
                         f"which is not yet packaged.{RESET if color else ''}")
             roadmap = {
-                "metal": "V3.1.2 (planned) — Apple Silicon will require a "
-                         "native install path (brew + uv), not Docker.",
+                # 'metal' no longer in this dict — apple+darwin is handled
+                # by the hybrid-metal branch above. 'metal' only lands here
+                # if the vendor is apple but the host is NOT darwin (very
+                # unusual, e.g. someone forced ATLAS_GPU_VENDOR=apple on
+                # Linux), in which case Vulkan is the right fallback.
                 "sycl":  "Roadmap (Intel Arc / oneAPI SYCL backend).",
                 "unknown": "Vendor not recognized — file an issue with "
                            "your GPU details.",
@@ -461,7 +494,9 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         # Pretty name for the .env header — keep aligned with the
         # backend-id values the entrypoint dispatches on.
         backend_name = {"cuda": "CUDA", "rocm": "ROCm",
-                        "vulkan": "Vulkan"}.get(backend_override, backend_override)
+                        "vulkan": "Vulkan",
+                        "metal": "Metal (native + hybrid Docker)"}.get(
+                            backend_override, backend_override)
     else:
         backend_id, backend_name, _ = _backend_for(vendor)
     gpu_index = str(selected_gpu.index) if selected_gpu else "0"
@@ -512,6 +547,23 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         lines.append(
             "# Vulkan is the universal fallback (~20-40% slower than tuned "
             "native backends) — works on AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU.")
+        lines.append("")
+    elif backend_id == "metal":
+        lines.append(
+            "# NOTE (Metal, V3.1.2 / #32): hybrid Mac path — native llama-server "
+            "+ Docker for everything else.")
+        lines.append(
+            "# Bring the stack up in TWO steps:")
+        lines.append(
+            "#   1. ./scripts/atlas-llama-macos.sh        # native llama-server "
+            "(uses Metal, 5-10x faster than MoltenVK)")
+        lines.append(
+            "#   2. docker compose -f docker-compose.yml "
+            "-f docker-compose.macos.yml up -d   # proxy + v3 + lens + sandbox")
+        lines.append(
+            "# Run ./scripts/atlas-setup-macos.sh first if you haven't already "
+            "(installs brew deps + builds llama.cpp with Metal). See "
+            "docs/SETUP_MACOS.md.")
         lines.append("")
     for k, v in keys.items():
         lines.append(f"{k}={v}")
@@ -664,11 +716,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ghcr-owner", default="itigges22",
         help="ATLAS_GHCR_OWNER to write into .env (default: itigges22)")
     parser.add_argument("--backend", default=None,
-        choices=["cuda", "rocm", "vulkan"],
+        choices=["cuda", "rocm", "vulkan", "metal"],
         help="force a specific llama-server backend instead of "
              "auto-detecting from GPU vendor. `vulkan` is the universal "
              "fallback (PC-114, #114) — works on basically any GPU + "
-             "CPU lavapipe, ~30%% slower than the native backends.")
+             "CPU lavapipe, ~30%% slower than the native backends. "
+             "`metal` is the macOS hybrid path (#32) — native llama-server "
+             "+ Docker for the rest. Requires running ./scripts/"
+             "atlas-setup-macos.sh first. See docs/SETUP_MACOS.md.")
     parser.add_argument("--no-color", action="store_true")
     args = parser.parse_args(argv)
 
@@ -734,16 +789,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.dry_run:
         _safe_print(f"{GREEN if color else ''}Setup complete.{RESET if color else ''}")
         _safe_print("Next:")
-        if backend_id == "rocm":
-            _safe_print("  1. docker compose -f docker-compose.yml "
-                        "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
-        elif backend_id == "vulkan":
-            _safe_print("  1. docker compose -f docker-compose.yml "
-                        "-f docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
+        if backend_id == "metal":
+            # #32 hybrid path — four steps because llama-server runs
+            # natively on macOS while the rest stay in Docker. Setup
+            # script is idempotent so re-runs are cheap.
+            _safe_print("  1. ./scripts/atlas-setup-macos.sh    "
+                        "# one-time: brew + build llama.cpp with Metal "
+                        "(skip if already done)")
+            _safe_print("  2. ./scripts/atlas-llama-macos.sh    "
+                        "# starts native llama-server (run in its own terminal)")
+            _safe_print("  3. docker compose -f docker-compose.yml "
+                        "-f docker-compose.macos.yml up -d   "
+                        "# proxy + v3 + lens + sandbox")
+            _safe_print("  4. atlas doctor               # verify install health")
+            _safe_print("  5. atlas                      # start using ATLAS")
+            _safe_print("")
+            _safe_print("  See docs/SETUP_MACOS.md for the full walkthrough.")
         else:
-            _safe_print("  1. docker compose up -d        # bring up the stack")
-        _safe_print("  2. atlas doctor               # verify install health")
-        _safe_print("  3. atlas                      # start using ATLAS")
+            if backend_id == "rocm":
+                _safe_print("  1. docker compose -f docker-compose.yml "
+                            "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
+            elif backend_id == "vulkan":
+                _safe_print("  1. docker compose -f docker-compose.yml "
+                            "-f docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
+            else:
+                _safe_print("  1. docker compose up -d        # bring up the stack")
+            _safe_print("  2. atlas doctor               # verify install health")
+            _safe_print("  3. atlas                      # start using ATLAS")
 
     if args.json:
         out = {

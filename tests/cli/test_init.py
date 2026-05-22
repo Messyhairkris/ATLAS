@@ -257,91 +257,104 @@ def test_amd_probe_renders_rocm_backend(tmp_path, monkeypatch, capsys):
     assert "docker-compose.rocm.yml" in body
 
 
-def test_apple_silicon_probe_offers_vulkan_fallback(tmp_path, monkeypatch, capsys):
-    """Apple Silicon hosts get the Vulkan-via-MoltenVK fallback offered
-    when Metal isn't packaged (PC-114). The Metal-is-V3.1.2 message
-    still appears so the user knows the fast path exists, but the
-    wizard no longer hard-refuses — Vulkan-on-darwin lets them at
-    least boot the stack via Docker."""
-    apple_gpu = tier.GPUInfo(vendor="apple", name="Apple M3 Pro",
-                              vram_gb=18.0, compute_target=None, index=0)
-    apple_probe = tier.Probe(
+def _apple_probe(vram_gb: float = 32.0) -> tier.Probe:
+    """Helper: build a darwin + Apple Silicon Probe for the macOS tests."""
+    apple_gpu = tier.GPUInfo(vendor="apple", name=f"Apple M3 Max {int(vram_gb)}GB",
+                              vram_gb=vram_gb, compute_target=None, index=0)
+    return tier.Probe(
         has_gpu=True, gpu_name=apple_gpu.name, gpu_vendor="apple",
-        vram_gb=18.0, gpu_count=1, gpus=[apple_gpu],
-        system_ram_gb=18.0, cpu_cores=11, disk_free_gb=200.0, platform="darwin")
-    monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple_probe)
-    # Force vulkan_available() True on this fake darwin host — the
-    # production tier.vulkan_available checks sys.platform but we're
-    # running these tests on Linux.
-    monkeypatch.setattr(tier, "vulkan_available", lambda: True)
+        vram_gb=vram_gb, gpu_count=1, gpus=[apple_gpu],
+        system_ram_gb=vram_gb, cpu_cores=12, disk_free_gb=500.0,
+        platform="darwin", system_arch="aarch64")
+
+
+def test_apple_silicon_probe_recommends_metal_hybrid(tmp_path, monkeypatch, capsys):
+    """#32: Apple Silicon hosts get the hybrid Metal path recommended
+    (native llama-server + Docker for the rest). The wizard surfaces
+    the setup-script prereq + the docs reference, and --yes accepts
+    the recommendation."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: _apple_probe(32.0))
 
     root = _make_atlas_root(tmp_path)
     rc = _run(monkeypatch, root,
               ["--yes", "--skip-download", "--no-color"])
     out = capsys.readouterr().out
-    # Metal-is-V3.1.2 message still emitted so the user knows the fast
-    # native path exists (the slow Vulkan-via-MoltenVK fallback isn't
-    # the recommended end state for Mac users).
-    assert "Metal" in out
-    assert "V3.1.2" in out
-    # New behavior — --yes accepts the Vulkan fallback offer.
-    assert "Vulkan" in out
+    # The hybrid Metal recommendation must appear with its prereq pointer.
+    assert "Apple Silicon detected" in out
+    assert "hybrid Metal" in out or "Metal" in out
+    assert "atlas-setup-macos.sh" in out
+    assert "SETUP_MACOS.md" in out
     assert rc == 0
     body = pathlib.Path(root, ".env").read_text()
-    assert "ATLAS_BACKEND=vulkan" in body
+    # The .env should carry ATLAS_BACKEND=metal (not vulkan, not refuse).
+    assert "ATLAS_BACKEND=metal" in body
+    # And the metal-specific bring-up hint should be in the .env header
+    # so users know about the two-step start (native launcher + docker).
+    assert "atlas-llama-macos.sh" in body
+    assert "docker-compose.macos.yml" in body
 
 
-def test_apple_silicon_refuses_when_vulkan_fallback_declined(
+def test_apple_silicon_refuses_when_metal_hybrid_declined(
     tmp_path, monkeypatch, capsys
 ):
-    """When the user says no to the Vulkan fallback offer, the wizard
-    still refuses (writes nothing) rather than proceeding with an
-    unsupported backend. This is the explicit-decline path."""
-    apple_gpu = tier.GPUInfo(vendor="apple", name="Apple M3 Pro",
-                              vram_gb=18.0, compute_target=None, index=0)
-    apple_probe = tier.Probe(
-        has_gpu=True, gpu_name=apple_gpu.name, gpu_vendor="apple",
-        vram_gb=18.0, gpu_count=1, gpus=[apple_gpu],
-        system_ram_gb=18.0, cpu_cores=11, disk_free_gb=200.0, platform="darwin")
-    monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple_probe)
-    monkeypatch.setattr(tier, "vulkan_available", lambda: True)
-    # Interactive mode but stdin returns "n" to the Vulkan prompt.
+    """When the user says no to the hybrid Metal prompt, the wizard
+    refuses (writes nothing). The user can re-run with --backend vulkan
+    for the Docker-only path, or run setup script first then retry."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: _apple_probe(18.0))
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "n")
 
     root = _make_atlas_root(tmp_path)
-    # Note: NO --yes here so the prompt actually runs and gets the "n".
+    # No --yes so the prompt actually fires and gets the "n".
     rc = _run(monkeypatch, root,
               ["--skip-download", "--no-color"])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "Vulkan" in out
-    # .env must NOT be written when the user explicitly declines.
+    # The decline path should mention both fallback options (vulkan +
+    # re-run setup) so the user knows how to recover.
+    assert "vulkan" in out or "Vulkan" in out
+    # .env must NOT be written when declined.
     assert not os.path.isfile(os.path.join(root, ".env"))
 
 
-def test_apple_silicon_refuses_when_vulkan_unavailable(
+def test_apple_silicon_backend_vulkan_override_skips_metal_prompt(
     tmp_path, monkeypatch, capsys
 ):
-    """Edge: Apple Silicon + vulkan_available()=False (e.g. some weird
-    container build that strips MoltenVK) → no fallback exists, wizard
-    must refuse rather than write a broken .env."""
-    apple_gpu = tier.GPUInfo(vendor="apple", name="Apple M3 Pro",
-                              vram_gb=18.0, compute_target=None, index=0)
-    apple_probe = tier.Probe(
-        has_gpu=True, gpu_name=apple_gpu.name, gpu_vendor="apple",
-        vram_gb=18.0, gpu_count=1, gpus=[apple_gpu],
-        system_ram_gb=18.0, cpu_cores=11, disk_free_gb=200.0, platform="darwin")
-    monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple_probe)
-    monkeypatch.setattr(tier, "vulkan_available", lambda: False)
+    """Mac users who explicitly want the slow Docker-only path (e.g.
+    CI runs, or they don't want to install brew) can pass --backend
+    vulkan. The metal-hybrid prompt should NOT fire and .env should
+    land on vulkan."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: _apple_probe(18.0))
+    monkeypatch.setattr(tier, "vulkan_available", lambda: True)
 
     root = _make_atlas_root(tmp_path)
     rc = _run(monkeypatch, root,
-              ["--yes", "--skip-download", "--no-color"])
+              ["--yes", "--skip-download", "--no-color",
+               "--backend", "vulkan"])
     out = capsys.readouterr().out
-    assert rc == 1
-    assert "Vulkan fallback isn't available" in out
-    assert not os.path.isfile(os.path.join(root, ".env"))
+    # The hybrid Metal banner must NOT appear when --backend is forced.
+    assert "Apple Silicon detected" not in out
+    assert rc == 0
+    body = pathlib.Path(root, ".env").read_text()
+    assert "ATLAS_BACKEND=vulkan" in body
+    assert "ATLAS_BACKEND=metal" not in body
+
+
+def test_apple_silicon_backend_metal_override_explicit(tmp_path, monkeypatch):
+    """Mac users who want the metal hybrid path without going through
+    the prompt can pass --backend metal directly. Should write the same
+    .env as the auto-detected path."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: _apple_probe(32.0))
+
+    root = _make_atlas_root(tmp_path)
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color",
+               "--backend", "metal"])
+    assert rc == 0
+    body = pathlib.Path(root, ".env").read_text()
+    assert "ATLAS_BACKEND=metal" in body
+    assert "atlas-llama-macos.sh" in body
+    assert "docker-compose.macos.yml" in body
 
 
 # ---------------------------------------------------------------------------

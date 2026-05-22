@@ -325,6 +325,68 @@ def _check_vulkan_via_docker() -> CheckResult:
     return CheckResult("vulkan", "pass", f"[vulkan] {len(devices)} ICD(s): {summary}")
 
 
+def _check_metal_native() -> CheckResult:
+    """Verify the macOS hybrid path (#32) is wired correctly: the native
+    llama-server binary exists where the setup script puts it, and the
+    docker stack is configured to forward to it via host.docker.internal.
+
+    Three failure modes we surface here:
+      1. Setup script never ran   -> binary missing at $HOME/.atlas/macos/bin/
+      2. Setup ran but binary won't execute (corrupt download, wrong arch)
+      3. The macos compose overlay isn't applied (so docker is trying to
+         pull/build a normal llama-server image that won't work on Mac)
+
+    Only fires when ATLAS_BACKEND=metal. On Linux + Windows this would
+    just be noise. NOT a Docker check (the binary lives on the host),
+    so it's cheap (~1ms) and runs unconditionally for Mac users.
+    """
+    if sys.platform != "darwin":
+        return CheckResult("metal-native", "skip",
+            "not on macOS — metal hybrid path doesn't apply", "")
+
+    # Expected setup-script output location. Keep aligned with
+    # scripts/atlas-setup-macos.sh DEFAULT_PREFIX.
+    prefix = os.path.expanduser("~/.atlas/macos")
+    binary = os.path.join(prefix, "bin", "llama-server-metal")
+
+    if not os.path.isfile(binary):
+        return CheckResult("metal-native", "fail",
+            "native llama-server not found — run scripts/atlas-setup-macos.sh",
+            f"expected at {binary}. See docs/SETUP_MACOS.md.")
+
+    if not os.access(binary, os.X_OK):
+        return CheckResult("metal-native", "fail",
+            "native llama-server is not executable — re-run "
+            "scripts/atlas-setup-macos.sh --rebuild",
+            f"{binary} exists but lacks +x. Likely a botched copy or "
+            f"transferred over a filesystem that strips perms (smb/nfs).")
+
+    # Sanity-check it actually runs and reports something. `llama-server
+    # --help` is quick (no model load) and exits 0 when the binary is
+    # healthy. Catches the corrupt-build case (rare but happens after
+    # interrupted builds).
+    rc, out, err = _run([binary, "--help"], timeout=5)
+    if rc != 0:
+        return CheckResult("metal-native", "fail",
+            "native llama-server exists but won't run "
+            f"(exit {rc}) — try --rebuild",
+            (err or out).strip()[:300])
+
+    # Optional: try to confirm the host port is listening. If the user
+    # ran setup but hasn't started atlas-llama-macos.sh yet, surface
+    # that as a warn (not fail) — they may just not be ready yet.
+    port_check_rc, _, _ = _run(["nc", "-z", "localhost", "8080"], timeout=2)
+    if port_check_rc != 0:
+        return CheckResult("metal-native", "warn",
+            f"native llama-server installed at {binary} but nothing "
+            f"listening on :8080 — start it with scripts/atlas-llama-macos.sh",
+            "Open a separate terminal and run the launcher; this check "
+            "will turn green once the server is up and serving.")
+
+    return CheckResult("metal-native", "pass",
+        f"native llama-server up at {binary}, listening on :8080")
+
+
 def _compose_ps(project_dir: str) -> List[Dict]:
     """Run `docker compose ps --format json` and parse (handles both NDJSON and array forms).
 
@@ -924,6 +986,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # would add ~30s for no signal.
     if os.environ.get("ATLAS_BACKEND") == "vulkan":
         results.append(_check_vulkan_via_docker())
+
+    # 3.6. macOS hybrid path (#32) — verify native llama-server binary
+    # exists at the setup-script's install prefix, is executable, and
+    # is listening on :8080 (so the socat compose forward will succeed).
+    # Only fires when ATLAS_BACKEND=metal so it's noise-free on
+    # cuda/rocm/vulkan hosts.
+    if os.environ.get("ATLAS_BACKEND") == "metal":
+        results.append(_check_metal_native())
 
     # 4. Compose stack — pass atlas_root as cwd so compose finds
     # docker-compose.yml even when doctor is invoked from elsewhere
