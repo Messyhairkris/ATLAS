@@ -394,7 +394,151 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
         _safe_print("    Auth: HF_TOKEN present (will send Authorization header)")
     _safe_print()
 
-    return _stream_download(m, target, color, resume=not args.no_resume)
+    rc = _stream_download(m, target, color, resume=not args.no_resume)
+    if rc != 0:
+        return rc
+
+    # After the gguf lands, fetch lens + asa artifacts if their URL bases
+    # are populated and the corresponding *_status is supported. Without
+    # this the user has a model that loads but with G(x) scoring no-op'd
+    # and ASA steering disabled — the doctor flags both as failures and
+    # the user has to know to download them by hand. This closes that gap.
+    if not args.no_artifacts:
+        artifact_rc = _install_artifacts(m, models_dir, color, args)
+        if artifact_rc != 0:
+            # Non-fatal: gguf is installed, just artifacts failed. Warn
+            # and continue so the user can still run the model (G(x) will
+            # no-op, ASA steering disabled, both surfaced by atlas doctor).
+            _safe_print(f"  {YELL if color else ''}Warning: artifact "
+                        f"download had failures. Run `atlas model "
+                        f"install-artifacts {m.name}` to retry.{RESET if color else ''}")
+    return 0
+
+
+def _emit_install_artifacts(args: argparse.Namespace, color: bool) -> int:
+    """`atlas model install-artifacts <name>` — fetch lens + asa artifacts
+    without re-downloading the gguf. Recovery path for users who got the
+    model before auto-artifact-download landed.
+    """
+    m = model_registry.by_name(args.name)
+    if m is None:
+        _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
+                    f"{RESET if color else ''}")
+        return 1
+    models_dir = _resolve_models_dir(args.models_dir)
+    try:
+        os.makedirs(models_dir, exist_ok=True)
+    except OSError as e:
+        _safe_print(f"  {RED if color else ''}Cannot create models dir "
+                    f"`{models_dir}`: {e}{RESET if color else ''}")
+        return 1
+    # Reuse the same _install_artifacts helper used by the gguf-install
+    # path. Need to inject the flags the helper expects.
+    args.force_artifacts = getattr(args, "force_artifacts", False)
+    rc = _install_artifacts(m, models_dir, color, args)
+    if rc == 0:
+        _safe_print(f"  {GREEN if color else ''}Artifacts for {m.name} "
+                    f"installed.{RESET if color else ''}")
+    return rc
+
+
+def _install_artifacts(m: model_registry.Model, models_dir: str,
+                        color: bool, args: argparse.Namespace) -> int:
+    """Download lens + asa artifacts for the given model. Returns 0 if
+    everything either succeeded or had no URL to attempt, non-zero if
+    any download we DID attempt failed.
+
+    Skip rules:
+      - lens_status != 'supported' AND lens_status != 'unverified': skip
+        lens. The 'no-artifacts' case has nothing to download.
+      - lens_artifact_url_base is None: skip lens (e.g. for models where
+        artifacts must be trained locally — `atlas lens build`).
+      - Same logic for ASA via asa_*.
+    """
+    failures = 0
+    attempted = 0
+
+    # ----- Lens artifacts ---------------------------------------------
+    if (m.lens_status in ("supported", "unverified")
+            and m.lens_artifact_url_base
+            and m.lens_artifact_files):
+        # Target dir: lens_artifact_dir override OR the global
+        # ATLAS_LENS_MODELS dir. Default matches the rest of the lens
+        # code's expectations (geometric-lens/geometric_lens/models/).
+        lens_dir = (m.lens_artifact_dir or
+                    os.environ.get("ATLAS_LENS_MODELS",
+                                    os.path.join(os.path.dirname(models_dir),
+                                                  "geometric-lens",
+                                                  "geometric_lens", "models")))
+        try:
+            os.makedirs(lens_dir, exist_ok=True)
+        except OSError as e:
+            _safe_print(f"  Lens dir {lens_dir} not writable: {e}")
+            return 1
+        _safe_print(f"  Fetching {len(m.lens_artifact_files)} Lens artifact(s) "
+                    f"→ {lens_dir}")
+        for fname in m.lens_artifact_files:
+            target_path = os.path.join(lens_dir, fname)
+            if os.path.isfile(target_path) and not args.force_artifacts:
+                _safe_print(f"    [skip] {fname} already present")
+                continue
+            attempted += 1
+            url = m.lens_artifact_url_base + fname
+            if _download_artifact(url, target_path, color) != 0:
+                failures += 1
+
+    # ----- ASA artifacts ----------------------------------------------
+    if (m.asa_status in ("supported", "unverified")
+            and m.asa_artifact_url_base
+            and m.asa_artifact_files):
+        # ASA vectors live alongside the gguf in models_dir — llama-server's
+        # --control-vector-scaled takes a path relative to its model dir.
+        _safe_print(f"  Fetching {len(m.asa_artifact_files)} ASA artifact(s) "
+                    f"→ {models_dir}")
+        for fname in m.asa_artifact_files:
+            target_path = os.path.join(models_dir, fname)
+            if os.path.isfile(target_path) and not args.force_artifacts:
+                _safe_print(f"    [skip] {fname} already present")
+                continue
+            attempted += 1
+            url = m.asa_artifact_url_base + fname
+            if _download_artifact(url, target_path, color) != 0:
+                failures += 1
+
+    if attempted == 0:
+        return 0  # nothing to do or everything already present
+    if failures:
+        return 1
+    _safe_print(f"  {GREEN if color else ''}All artifacts present.{RESET if color else ''}")
+    return 0
+
+
+def _download_artifact(url: str, target_path: str, color: bool) -> int:
+    """Download a single artifact file (lens .pt or asa .gguf). These
+    are small (KB to a few MB) compared to the model gguf, so no
+    progress bar or resume — just a one-shot urlretrieve-style fetch
+    with the HF token header if available.
+    """
+    token = _hf_token()
+    req = _build_request(url, range_start=0, token=token)
+    fname = os.path.basename(target_path)
+    tmp_path = target_path + ".part"
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            with open(tmp_path, "wb") as out:
+                shutil.copyfileobj(resp, out, length=64 * 1024)
+        os.replace(tmp_path, target_path)
+        size_kb = os.path.getsize(target_path) / 1024
+        _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB)")
+        return 0
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        _safe_print(f"    [fail] {fname}: {e}")
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return 1
 
 
 def _build_request(url: str, range_start: int = 0,
@@ -959,7 +1103,28 @@ def main(argv: Optional[List[str]] = None) -> int:
              "from byte 0 (default: resume from .part if present)")
     p_inst.add_argument("--models-dir", default=None,
         help="override ATLAS_MODELS_DIR")
+    p_inst.add_argument("--no-artifacts", action="store_true",
+        help="skip auto-download of Lens + ASA artifacts after the "
+             "gguf lands. Useful for air-gapped installs or when you "
+             "want to train Lens locally via `atlas lens build`.")
+    p_inst.add_argument("--force-artifacts", action="store_true",
+        help="re-download artifacts even when they're already present "
+             "on disk (default: skip already-present files)")
     p_inst.add_argument("--no-color", action="store_true")
+
+    # `atlas model install-artifacts <name>` — fetch lens + asa artifacts
+    # without re-downloading the gguf. The recovery path for users who
+    # installed the model before auto-artifact-download landed (or who
+    # used --no-artifacts and now want them).
+    p_artifacts = sub.add_parser("install-artifacts",
+        help="download Lens + ASA artifacts for a model without "
+             "re-downloading the gguf")
+    p_artifacts.add_argument("name", help="model name (see `atlas model list`)")
+    p_artifacts.add_argument("--models-dir", default=None,
+        help="override ATLAS_MODELS_DIR")
+    p_artifacts.add_argument("--force-artifacts", action="store_true",
+        help="re-download even when files are already present")
+    p_artifacts.add_argument("--no-color", action="store_true")
 
     p_ver = sub.add_parser("verify",
         help="recompute SHA256 of installed file(s) vs the registry "
@@ -993,6 +1158,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit_recommend(args, color)
     if args.subcommand == "install":
         return _emit_install(args, color)
+    if args.subcommand == "install-artifacts":
+        return _emit_install_artifacts(args, color)
     if args.subcommand == "verify":
         return _emit_verify(args, color)
     if args.subcommand == "remove":

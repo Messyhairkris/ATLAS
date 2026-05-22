@@ -98,6 +98,13 @@ class Model:
     # `supported` claim to be honest. doctor.check_tier_match
     # cross-checks this — registered "supported" + missing files = warn.
     lens_artifact_files: List[str] = field(default_factory=list)
+    # Base URL where the lens_artifact_files live for download. The
+    # installer appends each filename to this base. None = no auto-
+    # download path; user has to train locally via `atlas lens build`
+    # or fetch manually. Used by `atlas model install` to pull lens
+    # weights after the gguf so a fresh install gets a complete
+    # working stack without follow-up steps.
+    lens_artifact_url_base: Optional[str] = None
     # PC-061: ASA control vector tracking. Mirrors the lens_* shape
     # because the per-model coupling problem is identical (a vector
     # trained on Qwen residuals won't steer Llama correctly).
@@ -114,6 +121,12 @@ class Model:
     # open for multi-vector setups (per-layer banks) without a schema
     # change. doctor cross-checks alongside lens_artifact_files.
     asa_artifact_files: List[str] = field(default_factory=list)
+    # Base URL where the asa_artifact_files live for download. Same
+    # contract as lens_artifact_url_base — installer appends each
+    # filename and downloads to models_dir (NOT lens dir; ASA vectors
+    # are loaded by llama-server via --control-vector-scaled, paths
+    # are relative to the model gguf).
+    asa_artifact_url_base: Optional[str] = None
     notes: str = ""
 
     def env_vars(self) -> Dict[str, str]:
@@ -231,9 +244,23 @@ REGISTRY: List[Model] = [
         # lens_artifact_dir=None means "use the global ATLAS_LENS_MODELS
         # dir" — current single-model layout.
         lens_artifact_files=["cost_field.pt", "metric_tensor.pt"],
+        # Lens artifacts live on the public itigges22/ATLAS dataset on
+        # HF (no token needed). Installer appends each filename in
+        # lens_artifact_files to this base. Note: *.pt is gitignored in
+        # this repo by design (they're MB-sized binary blobs) — HF is
+        # the canonical distribution path. Updates ship by re-uploading
+        # to this dataset; users pick them up on next `atlas model install`.
+        lens_artifact_url_base=(
+            "https://huggingface.co/datasets/itigges22/ATLAS/"
+            "resolve/main/models/"
+        ),
         # PC-061: ASA control vector trained + published 2026-05-12.
         asa_status="supported",
         asa_artifact_files=["ast_edit_steering.gguf"],
+        asa_artifact_url_base=(
+            "https://huggingface.co/datasets/itigges22/ATLAS/"
+            "resolve/main/models/"
+        ),
         notes="ATLAS development target. Lens artifacts trained and "
               "shipped in the repo (cost_field.pt + metric_tensor.pt). "
               "ASA control vector built + published to HF 2026-05-12. "

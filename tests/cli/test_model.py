@@ -20,7 +20,7 @@ mocked filesystem state:
 import json
 from typing import Optional
 
-from atlas.cli.commands import model, tier
+from atlas.cli.commands import model, model_registry, tier
 
 
 # ---------------------------------------------------------------------------
@@ -808,3 +808,130 @@ def test_download_401_keeps_part_for_retry(tmp_path, monkeypatch, capsys):
 import hashlib
 import urllib.error
 import urllib.request
+
+
+# ---------------------------------------------------------------------------
+# Artifact auto-download (#32 follow-up: lens + ASA fetched after gguf)
+# ---------------------------------------------------------------------------
+
+def test_registry_has_lens_and_asa_urls_for_qwen_9b_q6k():
+    """The Q6_K record is the lead's reference setup — Lens + ASA both
+    'supported' status MUST have download URLs populated, otherwise
+    `atlas model install` can't fetch them and the user ends up with
+    cost_field.pt + metric_tensor.pt + ast_edit_steering.gguf missing."""
+    m = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    assert m.lens_status == "supported"
+    assert m.lens_artifact_url_base is not None
+    assert "huggingface.co" in m.lens_artifact_url_base
+    assert m.asa_status == "supported"
+    assert m.asa_artifact_url_base is not None
+
+
+def test_install_artifacts_uses_url_base_plus_filename(tmp_path, monkeypatch):
+    """`atlas model install-artifacts <name>` should hit
+    lens_artifact_url_base + each filename for the lens files, and
+    asa_artifact_url_base + filename for the ASA file. Cheap to verify
+    by capturing the URL of each Request that hits urlopen."""
+    captured: list = []
+    _install_with_fake_urlopen(monkeypatch, body=b"FAKE_BLOB", status=200,
+                                captured=captured)
+
+    # Force lens dir into tmp_path so we don't pollute the repo.
+    lens_dir = tmp_path / "lens"
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(lens_dir))
+
+    rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+    # Should have fetched 2 lens files + 1 asa file = 3 requests.
+    urls = [r.full_url for r in captured]
+    assert any("cost_field.pt" in u for u in urls)
+    assert any("metric_tensor.pt" in u for u in urls)
+    assert any("ast_edit_steering.gguf" in u for u in urls)
+    # All URLs should be rooted at the registered base, not random.
+    for u in urls:
+        assert u.startswith("https://huggingface.co/datasets/itigges22/ATLAS/")
+    # Files should land in the right dirs.
+    assert (lens_dir / "cost_field.pt").is_file()
+    assert (lens_dir / "metric_tensor.pt").is_file()
+    assert (tmp_path / "ast_edit_steering.gguf").is_file()
+
+
+def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
+                                                         capsys):
+    """If lens / asa files already exist on disk, the default behavior
+    is skip them (don't re-download). --force-artifacts overrides."""
+    lens_dir = tmp_path / "lens"
+    lens_dir.mkdir()
+    (lens_dir / "cost_field.pt").write_bytes(b"already here")
+    (lens_dir / "metric_tensor.pt").write_bytes(b"already here")
+    (tmp_path / "ast_edit_steering.gguf").write_bytes(b"already here")
+
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(lens_dir))
+    captured: list = []
+    _install_with_fake_urlopen(monkeypatch, body=b"NEW", status=200,
+                                captured=captured)
+
+    rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+    # Default behavior: no urlopen calls because all files were present.
+    assert len(captured) == 0
+    # Existing content untouched.
+    assert (lens_dir / "cost_field.pt").read_bytes() == b"already here"
+
+    # --force-artifacts: re-download even though files exist.
+    rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path),
+                     "--force-artifacts", "--no-color"])
+    assert rc == 0
+    assert len(captured) == 3  # all 3 re-fetched
+    assert (lens_dir / "cost_field.pt").read_bytes() == b"NEW"
+
+
+def test_install_no_artifacts_flag_skips_artifact_download(tmp_path, monkeypatch,
+                                                              capsys):
+    """`--no-artifacts` on the main `install` command skips lens + ASA
+    fetch. Useful for air-gapped installs or when training Lens locally."""
+    body = b"\0" * (101 * 1024 * 1024)
+    expected_sha = hashlib.sha256(body).hexdigest()
+    import atlas.cli.commands.model_registry as reg
+    original = reg.by_name("Qwen3.5-9B-Q6_K")
+    patched = type(original)(
+        name=original.name, tier=original.tier,
+        model_file=original.model_file, model_display=original.model_display,
+        model_size_gb=0.11,
+        lens_status=original.lens_status,
+        download_url=original.download_url, sha256=expected_sha,
+        license=original.license, requires_hf_token=False,
+        lens_artifact_dir=original.lens_artifact_dir,
+        lens_artifact_files=original.lens_artifact_files,
+        lens_artifact_url_base=original.lens_artifact_url_base,
+        asa_status=original.asa_status,
+        asa_artifact_files=original.asa_artifact_files,
+        asa_artifact_url_base=original.asa_artifact_url_base,
+        notes=original.notes,
+    )
+    monkeypatch.setattr(reg, "by_name",
+                         lambda n: patched if n == original.name else None)
+    monkeypatch.setattr(reg, "for_tier",
+                         lambda t: patched if t == "medium" else None)
+
+    captured: list = []
+    _install_with_fake_urlopen(monkeypatch, body=body, status=200,
+                                captured=captured)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color",
+                     "--no-artifacts"])
+    assert rc == 0
+    # Only the gguf was downloaded — no artifact requests.
+    assert len(captured) == 1
+    assert "Qwen3.5-9B-Q6_K.gguf" in captured[0].full_url
+
+
+def test_install_artifacts_unknown_model_returns_error(tmp_path, capsys):
+    """Pass-through error path: install-artifacts NoSuchModel -> 1."""
+    rc = model.main(["install-artifacts", "NoSuchModelHere",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    assert "Unknown model" in capsys.readouterr().out
