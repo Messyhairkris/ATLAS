@@ -329,23 +329,19 @@ def _step_select_model(profile: tier.TierProfile,
         # the stack up.
         if (backend_id == "metal" and probe.platform == "darwin"
                 and not args.backend):
-            _safe_print(f"  {GREEN if color else ''}Apple Silicon detected — "
-                        f"recommending the hybrid Metal path (V3.1.2 / #32)."
-                        f"{RESET if color else ''}")
-            _safe_print("  llama-server will run NATIVELY on macOS with Metal "
-                        "(5-10x faster than the Docker-via-MoltenVK fallback). "
-                        "Everything else (proxy, v3, lens, sandbox) stays in "
-                        "Docker. No core component changes.")
+            _safe_print(f"  {GREEN if color else ''}Apple Silicon detected. "
+                        f"Recommended setup: native Metal inference + Docker "
+                        f"for the supporting services.{RESET if color else ''}")
             _safe_print("")
-            _safe_print(f"  {BOLD if color else ''}Prereq:{RESET if color else ''} "
-                        f"run ./scripts/atlas-setup-macos.sh first if you haven't "
-                        f"already. It installs brew deps + builds llama.cpp with "
-                        f"Metal. See docs/SETUP_MACOS.md for the full walkthrough.")
+            _safe_print(f"  {BOLD if color else ''}Before you continue:{RESET if color else ''} "
+                        f"run ./scripts/atlas-setup-macos.sh if you haven't. "
+                        f"It installs the build tools and compiles llama.cpp "
+                        f"with Metal. Full instructions in docs/SETUP_MACOS.md.")
             _safe_print("")
-            _safe_print("  Alternatives:")
-            _safe_print("    --backend vulkan   slow Docker-only path "
-                        "(uses MoltenVK, no native build needed)")
-            if not _confirm("Proceed with hybrid Metal path?",
+            _safe_print("  Other options:")
+            _safe_print("    --backend vulkan   Docker-only (no native build, "
+                        "slower)")
+            if not _confirm("Continue with the recommended setup?",
                             default_yes=True, args=args):
                 _safe_print("  Refusing rather than writing a .env that won't "
                             "boot. Re-run with --backend vulkan for the "
