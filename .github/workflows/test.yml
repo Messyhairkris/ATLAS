@@ -145,3 +145,89 @@ jobs:
           # Only lint workflow YAML — docker-compose.yml is validated
           # by compose-validate above; broader yamllint can come later.
           yamllint -d "{rules: {line-length: disable, document-start: disable}}" .github/workflows/
+
+  llama-patches-apply:
+    # Smoke test: verifies the PC-202 hidden-states + spec-decode
+    # patches still apply cleanly against the pinned LLAMA_CPP_REV.
+    # Added after 2026-05-20 build failure where upstream llama.cpp
+    # drift shifted server-context.cpp by 1 line and broke the patch
+    # silently — caught only when the 36-min Docker build tried to
+    # apply it. This job catches the same class of failure in ~30s
+    # before the publish workflow burns runner time on a doomed build.
+    #
+    # When this fails: see docs/TROUBLESHOOTING.md § "llama.cpp patch
+    # drift" for the bump runbook.
+    name: llama.cpp patches apply to pinned SHA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: extract LLAMA_CPP_REV + check Dockerfiles agree
+        id: sha
+        # All four Dockerfiles (Dockerfile, Dockerfile.v31, Dockerfile.rocm,
+        # Dockerfile.vulkan) must agree on the pinned SHA. Disagreement
+        # would mean a bump landed in one place but not the others,
+        # which would publish inconsistent llama-server binaries across
+        # backends.
+        run: |
+          SHA=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' inference/Dockerfile.v31 | head -1)
+          if [ -z "$SHA" ]; then
+            echo "::error::could not extract LLAMA_CPP_REV from inference/Dockerfile.v31"
+            exit 1
+          fi
+          echo "Pinned SHA: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          for f in inference/Dockerfile inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
+            if ! grep -q "LLAMA_CPP_REV=$SHA" "$f"; then
+              actual=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' "$f" | head -1)
+              echo "::error file=$f::LLAMA_CPP_REV mismatch — found '$actual', expected '$SHA' (matches Dockerfile.v31). Bump all 4 Dockerfiles together."
+              exit 1
+            fi
+          done
+          echo "All 4 Dockerfiles agree on LLAMA_CPP_REV=$SHA"
+
+      - name: fetch pinned llama.cpp
+        # Mirror the production fetch pattern: init + shallow-fetch a
+        # specific SHA, not a full clone. GitHub supports
+        # uploadpack.allowReachableSHA1InWant so this is cheap (~30s).
+        run: |
+          git init -q llama.cpp
+          cd llama.cpp
+          git remote add origin https://github.com/ggml-org/llama.cpp
+          git -c http.postBuffer=524288000 \
+              fetch --depth 1 origin ${{ steps.sha.outputs.sha }}
+          git checkout -q FETCH_HEAD
+
+      - name: apply patches dry-run
+        # Two things the Dockerfiles actually do on the cloned llama.cpp
+        # tree before cmake; we mirror them both here:
+        #   1. `git apply` of expose-hidden-states.patch (PC-202).
+        #      Hard-fails the Docker build if it doesn't apply.
+        #   2. `sed -i '/auto params_dft = params_base;/a ...'` for the
+        #      spec-decode embeddings fix. The sed has `|| true`, so a
+        #      missing target line would silently no-op... we verify the
+        #      target line exists so that doesn't go unnoticed.
+        #
+        # NOTE: inference/patches/fix-embeddings-spec-decode.patch is
+        # NOT checked here. It's malformed (blank context lines lack
+        # leading space) and unused — the sed is what actually applies.
+        # That patch file should be either fixed or removed in a
+        # future cleanup; tracked informally for now.
+        run: |
+          cd llama.cpp
+          # 1. PC-202 hidden-states patch
+          patch_path=../inference/patches/expose-hidden-states.patch
+          if git apply --check "$patch_path" 2>&1; then
+            echo "  OK: expose-hidden-states.patch applies to ${{ steps.sha.outputs.sha }}"
+          else
+            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+            exit 1
+          fi
+          # 2. spec-decode embeddings fix (sed target must exist)
+          if grep -q 'auto params_dft = params_base;' tools/server/server-context.cpp; then
+            echo "  OK: spec-decode sed target present in server-context.cpp"
+          else
+            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
+            exit 1
+          fi
+          echo "All patch checks passed."

@@ -257,6 +257,49 @@ fatal: fetch-pack: invalid index-pack output
    ```
 3. Long term: prebuilt llama-server images on GHCR will skip this step entirely (Phase 0 roadmap item).
 
+### llama.cpp patch drift (when the publish workflow fails at "patch does not apply")
+
+**Symptom:** The `Build & publish container images` workflow fails in the `llama` job with:
+
+```
+error: patch failed: tools/server/server-context.cpp:36
+error: tools/server/server-context.cpp: patch does not apply
+```
+
+**Cause:** The PC-202 hidden-states patch (`inference/patches/expose-hidden-states.patch`) is pinned against a specific llama.cpp SHA via the `LLAMA_CPP_REV` build arg in all four Dockerfiles. When upstream llama.cpp shifts context around the patch target (e.g. a blank line removed, an include reordered), the patch's expected line numbers stop matching even though the SHA pin is still valid. This usually means someone bumped `LLAMA_CPP_REV` without regenerating the patch against the new SHA.
+
+The CI smoke test (`tests` workflow, `llama.cpp patches apply to pinned SHA` job) catches this in ~30 seconds before the 30+ minute publish workflow burns runner time. If you see this fail locally instead of in CI, follow the bump runbook below.
+
+**Bump runbook** — when you need to move `LLAMA_CPP_REV` forward (new llama.cpp feature, security fix, or an old SHA you no longer want to pin):
+
+1. **Find a candidate SHA.** Browse [ggml-org/llama.cpp commits](https://github.com/ggml-org/llama.cpp/commits/master) — pick something recent that includes the feature/fix you want.
+
+2. **Verify the existing patch still applies.** Fast check, no Docker needed:
+   ```bash
+   mkdir -p /tmp/llama-check && cd /tmp/llama-check
+   git init -q llama.cpp && cd llama.cpp
+   git remote add origin https://github.com/ggml-org/llama.cpp
+   git fetch --depth 1 origin <NEW_SHA>
+   git checkout -q FETCH_HEAD
+   git apply --check $REPO/inference/patches/expose-hidden-states.patch
+   git apply --check $REPO/inference/patches/fix-embeddings-spec-decode.patch
+   ```
+
+3. **If both apply cleanly:** great, just bump `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) to the new SHA. The CI smoke test will verify all four agree.
+
+4. **If a patch fails:** regenerate it against the new SHA.
+   ```bash
+   cd /tmp/llama-check/llama.cpp
+   # Apply the OLD patch's intent manually (look at the patch body to see
+   # what hunks should land), then:
+   git diff > $REPO/inference/patches/expose-hidden-states.patch
+   ```
+   Re-run step 2 to verify, then bump the four Dockerfiles.
+
+5. **Walk forward, not backward.** If you can't find a recent SHA where the patch applies, prefer regenerating the patch over pinning to an older SHA — pinning further into the past means missing upstream fixes.
+
+**Why no automatic patch-against-master CI?** That would notify us of upstream drift as soon as it happens, but it would also notify us constantly (llama.cpp moves fast) and there's nothing actionable until we want to bump. The pinned SHA + smoke test pattern gates on intent: drift becomes a problem only when someone tries to move forward.
+
 ### SELinux Blocking Container Access (Fedora/RHEL)
 
 **Symptom:** Containers can't read mounted volumes, permission denied on model files.
