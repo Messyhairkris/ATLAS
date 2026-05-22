@@ -50,6 +50,14 @@ services:
     # a clean tiny container.
     volumes: !reset []
     environment: !reset []
+    # Don't publish 8080 to the host. The native llama-server is
+    # already bound to host :8080 — publishing socat there too would
+    # collide (and conceptually wouldn't make sense, since callers on
+    # the host should hit the native server directly, not loop back
+    # through socat -> host.docker.internal -> host). The 4 docker
+    # services reach socat via the docker network as `llama-server:8080`
+    # without any host publish needed.
+    ports: !reset []
     # The actual forwarding: listen on every interface port 8080 inside
     # the container, forward TCP to host.docker.internal:8080 (Docker
     # Desktop for Mac auto-resolves this to the host's loopback).
@@ -59,15 +67,14 @@ services:
     command: >
       TCP-LISTEN:8080,fork,reuseaddr
       TCP:host.docker.internal:8080
-    # Health check: socat itself doesn't expose anything; the simplest
-    # check is "is the listen socket bound". `nc -z` is the lightest
-    # touch. If the native llama-server isn't running, the docker
-    # services will fail at first request rather than at startup,
-    # which matches the existing CUDA/ROCm failure mode (llama loads
-    # the model in 1-2 min, services that depend on it wait at health
-    # check until it's ready).
+    # Health check: alpine/socat is minimal — no nc, no wget, no
+    # ss/netstat. The only thing we're guaranteed to have is socat
+    # itself + /proc. Checking that PID 1 is socat is the cheapest
+    # and most portable signal that the container is doing its job.
+    # If socat dies, PID 1 dies, container exits → docker restart
+    # policy kicks in (or compose marks the dep as unhealthy).
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8080 || exit 1"]
+      test: ["CMD-SHELL", "grep -q socat /proc/1/cmdline"]
       interval: 10s
       timeout: 3s
       retries: 3
