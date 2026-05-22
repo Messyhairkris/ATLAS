@@ -144,11 +144,14 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 green "  OK: $(brew --version | head -1)"
 
-# cmake + git + python are the hard requirements. uv is the
-# recommended Python package manager (10-100x faster than pip for
-# resolving) but optional — fall back to pip if missing.
+# cmake + git + python are the hard requirements. pipx is required on
+# macOS because Homebrew Python enforces PEP 668 (externally-managed-
+# environment) which blocks `pip install` and even `pip install --user`.
+# pipx creates an isolated venv per app and exposes the entrypoint on
+# PATH, which is exactly what we need for the atlas CLI. uv is an
+# optional but recommended replacement that's 10-100x faster than pip.
 NEED=()
-for pkg in cmake git python@3.12; do
+for pkg in cmake git python@3.12 pipx; do
   if ! brew list --formula "$pkg" >/dev/null 2>&1; then
     NEED+=("$pkg")
   fi
@@ -161,12 +164,18 @@ if [[ ${#NEED[@]} -gt 0 ]]; then
 fi
 green "  OK: cmake $(cmake --version | head -1 | awk '{print $3}'), git $(git --version | awk '{print $3}')"
 
-# uv is optional — only install if user wants it. We don't auto-install
-# any optional dep to keep the script's surface area small.
+# Ensure pipx's bin dir is on PATH for THIS shell. `pipx ensurepath`
+# writes the export to ~/.zprofile / ~/.bashrc for future shells; we
+# also export it inline so the install step below uses a PATH that
+# actually finds the freshly-installed atlas binary.
+pipx ensurepath >/dev/null 2>&1 || true
+export PATH="$HOME/.local/bin:$PATH"
+
+# uv is optional but recommended for faster atlas-cli installs in dev
+# workflows. Suggest without auto-installing.
 if ! command -v uv >/dev/null 2>&1; then
   yellow "  Optional: 'uv' (fast Python installer) not found."
-  yellow "    brew install uv     # recommended for atlas-cli install"
-  yellow "    or fall back to pip — both work."
+  yellow "    brew install uv     # recommended if you'll do a lot of dev"
 fi
 
 # ---------------------------------------------------------------------------
@@ -269,22 +278,43 @@ if [[ $NEED_BUILD -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7 — Install atlas CLI. Prefer uv if installed, fall back to pip.
-# Both end up putting `atlas` on PATH (via the user's pip install location).
+# Step 7 — Install atlas CLI. macOS Homebrew Python enforces PEP 668
+# (externally-managed-environment), which makes `pip install` and even
+# `pip install --user` fail with a refusal message. The only paths that
+# work without --break-system-packages are pipx and uv, both of which
+# create an isolated venv. We prefer pipx (installed in step 3) because
+# it's the standard PEP 668 recommendation and creates a separate venv
+# for atlas instead of mingling with other tools.
 # ---------------------------------------------------------------------------
 
 step "7/7" "Installing atlas CLI"
 
-if command -v uv >/dev/null 2>&1; then
-  (cd "$ATLAS_ROOT" && uv pip install --system -e .)
-  green "  Installed via uv."
-elif command -v pip3 >/dev/null 2>&1; then
-  (cd "$ATLAS_ROOT" && pip3 install --user -e .)
-  green "  Installed via pip3."
-  yellow "  Make sure ~/.local/bin (or python's user bin dir) is on your PATH."
+# pipx install --force is idempotent — re-running upgrades in place.
+# --editable so 'git pull' picks up changes without reinstall.
+if command -v pipx >/dev/null 2>&1; then
+  (cd "$ATLAS_ROOT" && pipx install --force --editable .)
+  green "  Installed via pipx (isolated venv, atlas binary on PATH)."
+elif command -v uv >/dev/null 2>&1; then
+  # uv tool install is uv's pipx equivalent — also creates an
+  # isolated venv. Use --system as a last resort, dodges PEP 668 by
+  # uv's own override but pollutes the brew Python environment.
+  (cd "$ATLAS_ROOT" && uv tool install --editable .)
+  green "  Installed via uv tool install."
 else
-  red "neither uv nor pip3 found. Install one and re-run."
+  red "neither pipx nor uv found. PEP 668 blocks plain pip on Homebrew Python."
+  red "  Install one with:"
+  red "    brew install pipx     # recommended"
+  red "    brew install uv       # faster alternative"
+  red "  Then re-run this script."
   exit 1
+fi
+
+# Sanity-check that atlas landed on PATH. pipx installs to
+# ~/.local/bin by default but the user's shell may not have picked
+# that up yet (we exported it in step 3 but only for THIS shell).
+if ! command -v atlas >/dev/null 2>&1; then
+  yellow "  Warning: 'atlas' not on current PATH despite install succeeding."
+  yellow "  Open a new terminal or run:  source ~/.zprofile"
 fi
 
 # ---------------------------------------------------------------------------

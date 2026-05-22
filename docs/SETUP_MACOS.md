@@ -18,6 +18,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 | 16 GB unified memory | medium tier minimum (9B-Q6 + KV cache) | 32 GB+ recommended for full context |
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |
 | Homebrew | brew package manager | https://brew.sh |
+| pipx | install atlas CLI in an isolated venv (Homebrew Python enforces PEP 668, plain `pip install` is blocked) | `brew install pipx` (the setup script handles this automatically) |
 | Docker Desktop | runs the 4 non-inference services | https://docker.com/products/docker-desktop |
 
 Notes:
@@ -233,6 +234,27 @@ Unified memory is shared with the OS. Realistic GPU budget on Apple Silicon is ~
 - 64 GB+ Mac: 32B-Q5 (~22 GB) or larger
 
 Run `atlas tier` to see the recommendation for your hardware.
+
+### Setup script fails at step 7 with `error: externally-managed-environment`
+
+This is Homebrew Python's PEP 668 enforcement — `pip install` and `pip install --user` are blocked on macOS because they could break the brew install. The setup script already handles this by using `pipx` (installed in step 3), so this error means you're on an older version of the setup script. Two recovery paths:
+
+1. **Re-run the latest setup script** (it now installs `pipx` automatically and uses it for the atlas install):
+   ```bash
+   git pull origin dev
+   ./scripts/atlas-setup-macos.sh
+   ```
+
+2. **Manual fix without re-running setup** (skip the cmake rebuild):
+   ```bash
+   brew install pipx
+   pipx ensurepath
+   cd ~/ATLAS
+   pipx install --force --editable .
+   source ~/.zprofile     # reload PATH
+   ```
+
+Either path puts the `atlas` binary in `~/.local/bin/` with its dependencies isolated in a pipx-managed venv. `git pull` upgrades atlas in place because we used `--editable`.
 
 ### Setup script fails at `PC-202 patch does not apply`
 
