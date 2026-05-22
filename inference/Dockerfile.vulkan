@@ -33,7 +33,14 @@
 # `atlas init` should pick native first, fall back to Vulkan only when
 # the vendor isn't covered by the other Dockerfiles.
 
-ARG UBUNTU_TAG=22.04
+# UBUNTU_TAG=24.04: ubuntu 22.04 ships vulkan-headers 1.3.204 which is
+# too old for current llama.cpp — the build fails with errors about
+# VkPhysicalDevicePipelineRobustnessFeaturesEXT and friends (Vulkan 1.3
+# extensions added in SDK 1.3.246, March 2023). Ubuntu 24.04 ships
+# vulkan-headers 1.3.275 which covers everything llama.cpp uses today.
+# Override via --build-arg UBUNTU_TAG=22.04 if you need to pin (and
+# pin LLAMA_CPP_REV to a 2024 SHA that pre-dates the new vk-hpp usage).
+ARG UBUNTU_TAG=24.04
 FROM ubuntu:${UBUNTU_TAG} AS builder
 
 # Build deps:

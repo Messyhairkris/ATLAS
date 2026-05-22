@@ -37,9 +37,12 @@ ARG CUDA_ARCH=120;121
 # works across base-image overrides (#115). ccache is added so the
 # cmake build below can persist compiler outputs across LLAMA_CPP_REV
 # bumps (#117) — content-addressed object cache means 80%+ hit rate
-# for typical upstream churn.
+# for typical upstream churn. Note: ccache lives in EPEL on rockylinux,
+# not the default repos, so we enable EPEL before the install.
 RUN if command -v dnf >/dev/null 2>&1; then \
-        dnf install -y git cmake gcc-c++ ccache && dnf clean all; \
+        dnf install -y epel-release && \
+        dnf install -y git cmake gcc-c++ ccache && \
+        dnf clean all; \
     else \
         apt-get update && apt-get install -y --no-install-recommends \
             git cmake build-essential ccache ca-certificates && \
