@@ -124,7 +124,22 @@ def main(argv: List[str]) -> int:
         os.environ.pop("ATLAS_TUI_LOG", None)
 
     # exec, not run — the TUI takes over the terminal and we want
-    # signals (Ctrl+C, window resize) routed to it directly.
+    # signals (Ctrl+C, window resize) routed to it directly. CAVEAT:
+    # execv replaces the Python process image, so atexit handlers
+    # registered by the wrapper (notably _stop_local_proxy in repl.py)
+    # never fire. Any local proxy launched by _ensure_proxy() gets
+    # orphaned and keeps running until something else (reboot, manual
+    # kill, or this wrapper's own _kill_stale_proxy on the next run)
+    # cleans it up. That orphan owns :8090 and collides with subsequent
+    # `docker compose up` on the macOS hybrid path (#118). Stop it
+    # explicitly here before exec so the cleanup actually runs.
+    try:
+        from atlas.cli import repl as _repl
+        _repl._stop_local_proxy()
+    except ImportError:
+        # repl import failed for some reason — best-effort cleanup,
+        # not worth blocking the TUI launch.
+        pass
     try:
         os.execv(binary, [binary, *args])
     except OSError as e:

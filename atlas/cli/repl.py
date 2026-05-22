@@ -403,22 +403,99 @@ def _align_workspace(atlas_dir: str) -> None:
         print("  Continuing with the existing workspace — file operations may not see your project.")
 
 
+def _docker_compose_owns_proxy(atlas_dir: Optional[str]) -> bool:
+    """True if a docker-compose stack rooted at atlas_dir defines an
+    atlas-proxy service. Used by _ensure_proxy() to avoid auto-launching
+    a competing local proxy when the user's expected deployment is the
+    docker stack (Linux + CUDA/ROCm, macOS hybrid #32). The check is
+    cheap (~10ms) and silently false when docker isn't installed.
+
+    Note: this only tells us "the user has docker-compose configured
+    for atlas-proxy" — it doesn't tell us whether the stack is up
+    YET. That distinction matters: if the stack is configured but
+    down, the user might be mid-bringup → we should refuse to launch
+    a local proxy (which would collide with the container when it
+    binds :8090) rather than help them shoot their foot.
+    """
+    if not atlas_dir or not shutil.which("docker"):
+        return False
+    compose_file = os.path.join(atlas_dir, "docker-compose.yml")
+    if not os.path.exists(compose_file):
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "config", "--services"],
+            cwd=atlas_dir, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        return "atlas-proxy" in result.stdout.split()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def _wait_for_proxy(timeout: float = 60.0) -> bool:
+    """Poll PROXY_URL until it responds or timeout elapses. Used when
+    the docker stack owns atlas-proxy and we're waiting for it to come
+    up (e.g. user just ran `docker compose up -d` and the container
+    is mid-startup)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _check_url(PROXY_URL, timeout=1):
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def _ensure_proxy() -> bool:
     """Ensure atlas-proxy is running, launching it locally if needed.
 
     Strategy:
     1. Already running on PROXY_PORT → use it (and align its workspace
        to the user's CWD if it's a Docker proxy — PC-038)
-    2. Go available → build (if needed) and launch locally from CWD
-    3. Nothing available → return False
+    2. Docker-compose stack OWNS atlas-proxy (#118) → don't compete.
+       Either wait for it to come up (it's starting) or tell the user
+       to bring the stack up. Launching a local proxy here would
+       collide with the container on :8090.
+    3. Go available + no docker stack → build (if needed) and launch
+       locally from CWD
+    4. Nothing available → return False
     """
     # Already running?
     if _check_url(PROXY_URL):
         _align_workspace(_find_atlas_dir())
         return True
 
-    # Try to find or build and launch locally
     atlas_dir = _find_atlas_dir()
+
+    # #118: macOS hybrid + Linux + CUDA/ROCm all run atlas-proxy in
+    # docker. If the user's compose stack defines it, the stack owns
+    # :8090 — don't auto-launch a competing local proxy. Two sub-cases:
+    if _docker_compose_owns_proxy(atlas_dir):
+        # The stack is configured. Wait for the proxy to bind — it
+        # may be mid-startup (we polled too early).
+        print(f"  Docker compose stack owns atlas-proxy. Waiting for it to come up...")
+        if _wait_for_proxy(timeout=60):
+            print(f"  Proxy responded on port {PROXY_PORT}")
+            _align_workspace(atlas_dir)
+            return True
+        # Still nothing after 60s — the stack probably isn't running.
+        # Tell the user how to start it instead of silently launching a
+        # local proxy that would collide later.
+        print(f"  Proxy never responded. The docker stack is probably not running.")
+        print(f"  Start it with one of:")
+        print(f"    docker compose up -d                                      "
+              f"# Linux + NVIDIA")
+        print(f"    docker compose -f docker-compose.yml "
+              f"-f docker-compose.rocm.yml up -d   # Linux + AMD")
+        print(f"    docker compose -f docker-compose.yml "
+              f"-f docker-compose.vulkan.yml up -d # Vulkan")
+        print(f"    docker compose -f docker-compose.yml "
+              f"-f docker-compose.macos.yml up -d  # macOS hybrid (#32)")
+        print(f"  Then re-run atlas.")
+        return False
+
+    # Try to find or build and launch locally (dev workflow, no docker).
     proxy_bin = _find_proxy_binary(atlas_dir)
 
     if not proxy_bin and _find_go():

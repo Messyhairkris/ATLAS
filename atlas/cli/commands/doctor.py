@@ -134,17 +134,58 @@ def check_compose() -> CheckResult:
     return CheckResult("compose", "pass", f"v{out.strip()}")
 
 
+def _resolve_backend(atlas_root: Optional[str] = None) -> Optional[str]:
+    """Resolve which ATLAS_BACKEND the user has configured. Reads the
+    shell env first (canonical), then falls back to .env in atlas_root.
+
+    The shell-env-only check in main() missed the macOS hybrid case
+    (#32): atlas init writes ATLAS_BACKEND=metal into .env but the user
+    rarely sources .env before running atlas doctor, so the env-var
+    check returns None and check_metal_native is skipped — leaving Mac
+    users wondering why the metal-native diagnostic never appears.
+
+    Returns the backend id string ('cuda' | 'rocm' | 'vulkan' | 'metal')
+    or None if no backend is configured anywhere.
+    """
+    val = os.environ.get("ATLAS_BACKEND")
+    if val:
+        return val.strip().lower()
+    if not atlas_root:
+        return None
+    env_path = os.path.join(atlas_root, ".env")
+    if not os.path.isfile(env_path):
+        return None
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("ATLAS_BACKEND="):
+                    return line.split("=", 1)[1].strip().strip("'\"").lower()
+    except OSError:
+        return None
+    return None
+
+
 def check_arch() -> CheckResult:
     """Surface the host CPU architecture so users see why a given backend
     is or isn't available. Pass-status on x86_64 (default ATLAS target);
-    warn on aarch64 with a hint about the arm64 backend matrix; warn on
-    anything else since ATLAS doesn't promise coverage outside x86_64 +
-    aarch64. See #115 for the multi-arch build status.
+    warn on aarch64 Linux with a hint about the arm64 backend matrix;
+    pass on Apple Silicon (the macOS hybrid Metal path is shipped, #32).
+
+    See #115 for the multi-arch Docker build status.
     """
     arch = tier.arch_detect()
     if arch == "x86_64":
         return CheckResult("arch", "pass", "x86_64")
     if arch == "aarch64":
+        # Apple Silicon gets a different message from arm64 Linux. On
+        # macOS the path is native Metal (#32 hybrid), not vulkan-or-
+        # cuda-sbsa-l4t. The Linux arm64 matrix doesn't apply here.
+        if sys.platform == "darwin":
+            return CheckResult("arch", "pass",
+                "aarch64 (Apple Silicon) — Metal hybrid path supported (#32)")
         return CheckResult("arch", "warn",
             "aarch64 — vulkan + cuda (sbsa/l4t) only, no rocm",
             "AMD ROCm has no arm64 release. Use ATLAS_BACKEND=vulkan for "
@@ -185,9 +226,19 @@ def check_gpu() -> CheckResult:
                 f"ATLAS_BACKEND=vulkan instead (#115)",
                 f"primary GPU: {primary.name}")
         return _check_amd_via_docker()
+    # #32: Apple Silicon ships the Metal hybrid path. Defer the deeper
+    # validation to check_metal_native (which fires when ATLAS_BACKEND
+    # is metal) — at the gpu-dispatcher level just acknowledge that
+    # Apple GPUs ARE supported now, the install just happens to live
+    # outside Docker. Don't emit the old "not yet supported" warning.
+    if primary.vendor == "apple":
+        return CheckResult("gpu", "pass",
+            f"[apple] {primary.name} ({primary.vram_gb:.1f} GB unified) "
+            f"— Metal hybrid path supported (#32). "
+            f"See metal-native check for native llama-server status.")
     return CheckResult("gpu", "warn",
         f"vendor '{primary.vendor}' detected but Docker integration not yet supported "
-        f"(Metal -> V3.1.2 native install; SYCL -> roadmap)",
+        f"(SYCL -> roadmap)",
         f"primary GPU: {primary.name}")
 
 
@@ -569,7 +620,16 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
 
 
 def check_overcommit() -> CheckResult:
-    """PC-011: Redis warns and AOF rewrite can fail without overcommit_memory=1."""
+    """PC-011: Redis warns and AOF rewrite can fail without overcommit_memory=1.
+
+    Linux-only — /proc/sys/vm/overcommit_memory doesn't exist on macOS
+    or Windows. Short-circuit on non-Linux platforms with a clean skip
+    instead of trying to read /proc and emitting a noisy 'could not
+    read' message.
+    """
+    if sys.platform != "linux":
+        return CheckResult("vm.overcommit_memory", "skip",
+            f"not applicable on {sys.platform}", "")
     try:
         with open("/proc/sys/vm/overcommit_memory") as f:
             val = f.read().strip()
@@ -579,9 +639,9 @@ def check_overcommit() -> CheckResult:
             f"= {val} (Redis prefers 1 — see PC-011)",
             "Fix: sudo sysctl vm.overcommit_memory=1 && "
             "echo 'vm.overcommit_memory=1' | sudo tee /etc/sysctl.d/99-atlas.conf")
-    except Exception as e:
+    except OSError as e:
         return CheckResult("vm.overcommit_memory", "skip",
-            "could not read /proc/sys (non-Linux?)", str(e))
+            "could not read /proc/sys", str(e))
 
 
 def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
@@ -979,20 +1039,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
     results.append(check_gpu())
 
+    # Resolve which backend the user has configured. Reads shell env
+    # first, then .env in atlas_root. Without the .env fallback, the
+    # macOS hybrid case (#32) misses the metal-native check because
+    # atlas init writes ATLAS_BACKEND into .env and users rarely
+    # source it before running doctor.
+    backend = _resolve_backend(atlas_root)
+
     # 3.5. Vulkan ICD passthrough (PC-114) — only fires when the user
-    # has explicitly opted into the Vulkan backend via ATLAS_BACKEND.
-    # Skipping by default keeps doctor cheap on CUDA/ROCm hosts where
-    # the apt-install-vulkan-tools step inside the check container
-    # would add ~30s for no signal.
-    if os.environ.get("ATLAS_BACKEND") == "vulkan":
+    # has explicitly opted into the Vulkan backend. Skipping by default
+    # keeps doctor cheap on CUDA/ROCm hosts where the apt-install-
+    # vulkan-tools step inside the check container would add ~30s for
+    # no signal.
+    if backend == "vulkan":
         results.append(_check_vulkan_via_docker())
 
     # 3.6. macOS hybrid path (#32) — verify native llama-server binary
     # exists at the setup-script's install prefix, is executable, and
     # is listening on :8080 (so the socat compose forward will succeed).
-    # Only fires when ATLAS_BACKEND=metal so it's noise-free on
+    # Only fires when backend == metal so it's noise-free on
     # cuda/rocm/vulkan hosts.
-    if os.environ.get("ATLAS_BACKEND") == "metal":
+    if backend == "metal":
         results.append(_check_metal_native())
 
     # 4. Compose stack — pass atlas_root as cwd so compose finds
