@@ -19,6 +19,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |
 | Homebrew | brew package manager | https://brew.sh |
 | pipx | install atlas CLI in an isolated venv (Homebrew Python enforces PEP 668, plain `pip install` is blocked) | `brew install pipx` (the setup script handles this automatically) |
+| Go 1.24+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
 | Docker Desktop | runs the 4 non-inference services | https://docker.com/products/docker-desktop |
 
 Notes:
@@ -67,12 +68,13 @@ What this does (idempotent, re-runs are cheap):
 1. Verifies macOS + Apple Silicon (errors out on Intel + offers Vulkan as alternative)
 2. Checks Xcode Command Line Tools are installed
 3. Verifies Homebrew is installed
-4. Installs missing brew packages: `cmake`, `git`, `python@3.12`
+4. Installs missing brew packages: `cmake`, `git`, `python@3.12`, `pipx`, `go`
 5. Reads `LLAMA_CPP_REV` from `inference/Dockerfile.v31` (the pinned SHA used by the Docker images — keeps the native build in lockstep with the linux + cuda/rocm builds)
 6. Fetches llama.cpp at that exact SHA, applies the PC-202 hidden-states patch + spec-decode embeddings fix
 7. Builds `llama-server` with `-DGGML_METAL=ON -DGGML_METAL_USE_BF16=ON` (Apple GPU compute backend, bf16 support for M3/M4)
 8. Installs the binary to `~/.atlas/macos/bin/llama-server-metal` (plus `llama-cli-metal` and `llama-cvector-generator-metal` for ASA workflows)
-9. Installs the `atlas` Python CLI via `uv pip install` (or `pip3 install --user` if uv isn't installed)
+9. Installs the `atlas` Python CLI via `pipx install --editable` (isolated venv, dodges Homebrew Python's PEP 668 enforcement)
+10. Builds the `atlas-tui` Go binary and installs it to `~/.local/bin/atlas-tui` (the Bubbletea TUI client that `atlas` shells out to for the interactive session)
 
 Optional flags:
 
@@ -234,6 +236,24 @@ Unified memory is shared with the OS. Realistic GPU budget on Apple Silicon is ~
 - 64 GB+ Mac: 32B-Q5 (~22 GB) or larger
 
 Run `atlas tier` to see the recommendation for your hardware.
+
+### `atlas --help` says `atlas-tui binary not found and Go is not available to build it`
+
+You ran an older setup script that didn't install Go + build the TUI. Two recovery paths:
+
+1. **Re-run the latest setup script** (it installs `go` via brew + runs the build in step 8):
+   ```bash
+   git pull origin dev
+   ./scripts/atlas-setup-macos.sh
+   ```
+
+2. **Manual fix without re-running setup** (skip the cmake rebuild):
+   ```bash
+   brew install go
+   cd <ATLAS-repo>/tui && go build -o ~/.local/bin/atlas-tui .
+   ```
+
+Either way, `atlas --help` should then show the CLI usage without errors.
 
 ### Setup script fails at step 7 with `error: externally-managed-environment`
 

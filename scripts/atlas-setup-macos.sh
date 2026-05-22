@@ -93,7 +93,7 @@ extract_llama_rev() {
 # Step 1 — sanity check: macOS + Apple Silicon
 # ---------------------------------------------------------------------------
 
-step "1/7" "Verifying macOS + Apple Silicon"
+step "1/8" "Verifying macOS + Apple Silicon"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   red "this script is for macOS only — got $(uname -s)."
@@ -117,7 +117,7 @@ green "  OK: $(uname -s) $(uname -m), $(sw_vers -productVersion)"
 # Apple's metal-cpp headers).
 # ---------------------------------------------------------------------------
 
-step "2/7" "Checking Xcode Command Line Tools"
+step "2/8" "Checking Xcode Command Line Tools"
 
 if ! xcode-select -p >/dev/null 2>&1; then
   yellow "  Xcode CLT not installed. Triggering installer (a GUI dialog will appear)."
@@ -132,7 +132,7 @@ green "  OK: $(xcode-select -p)"
 # run a third-party install script unattended). Tell the user how.
 # ---------------------------------------------------------------------------
 
-step "3/7" "Checking Homebrew + dependencies"
+step "3/8" "Checking Homebrew + dependencies"
 
 if ! command -v brew >/dev/null 2>&1; then
   red "Homebrew not installed. Install it manually before re-running:"
@@ -148,10 +148,12 @@ green "  OK: $(brew --version | head -1)"
 # macOS because Homebrew Python enforces PEP 668 (externally-managed-
 # environment) which blocks `pip install` and even `pip install --user`.
 # pipx creates an isolated venv per app and exposes the entrypoint on
-# PATH, which is exactly what we need for the atlas CLI. uv is an
-# optional but recommended replacement that's 10-100x faster than pip.
+# PATH, which is exactly what we need for the atlas CLI. go is needed
+# to build the atlas-tui binary (Bubbletea TUI client invoked by the
+# atlas wrapper). uv is an optional but recommended replacement for
+# pip that's 10-100x faster.
 NEED=()
-for pkg in cmake git python@3.12 pipx; do
+for pkg in cmake git python@3.12 pipx go; do
   if ! brew list --formula "$pkg" >/dev/null 2>&1; then
     NEED+=("$pkg")
   fi
@@ -182,7 +184,7 @@ fi
 # Step 4 — Pin LLAMA_CPP_REV
 # ---------------------------------------------------------------------------
 
-step "4/7" "Reading LLAMA_CPP_REV from inference/Dockerfile.v31"
+step "4/8" "Reading LLAMA_CPP_REV from inference/Dockerfile.v31"
 
 LLAMA_CPP_REV=$(extract_llama_rev)
 green "  Pinned SHA: $LLAMA_CPP_REV"
@@ -206,7 +208,7 @@ fi
 # ---------------------------------------------------------------------------
 
 if [[ $NEED_BUILD -eq 1 ]]; then
-  step "5/7" "Fetching llama.cpp at $LLAMA_CPP_REV + applying patches"
+  step "5/8" "Fetching llama.cpp at $LLAMA_CPP_REV + applying patches"
 
   # Clean state — easiest way to guarantee a known-good build. Cheap
   # too: shallow fetch is ~30s.
@@ -247,7 +249,7 @@ if [[ $NEED_BUILD -eq 1 ]]; then
 
   popd >/dev/null
 
-  step "6/7" "Building llama.cpp with Metal (this is the slow step, ~5-10min)"
+  step "6/8" "Building llama.cpp with Metal (this is the slow step, ~5-10min)"
 
   pushd "$LLAMA_BUILD_DIR" >/dev/null
     # Build flags:
@@ -287,7 +289,7 @@ fi
 # for atlas instead of mingling with other tools.
 # ---------------------------------------------------------------------------
 
-step "7/7" "Installing atlas CLI"
+step "7/8" "Installing atlas CLI"
 
 # pipx install --force is idempotent — re-running upgrades in place.
 # --editable so 'git pull' picks up changes without reinstall.
@@ -316,6 +318,32 @@ if ! command -v atlas >/dev/null 2>&1; then
   yellow "  Warning: 'atlas' not on current PATH despite install succeeding."
   yellow "  Open a new terminal or run:  source ~/.zprofile"
 fi
+
+# ---------------------------------------------------------------------------
+# Step 8 — Build the atlas-tui binary. The Python `atlas` wrapper
+# shells out to atlas-tui (Bubbletea TUI client) for the interactive
+# session. Without this, `atlas` errors out telling the user to
+# install Go + build manually. We install go via brew in step 3 so
+# the build itself is one command. Output goes to ~/.local/bin which
+# is already on PATH (pipx puts atlas there too).
+# ---------------------------------------------------------------------------
+
+step "8/8" "Building atlas-tui (Go Bubbletea client)"
+
+TUI_OUT="$HOME/.local/bin/atlas-tui"
+mkdir -p "$(dirname "$TUI_OUT")"
+
+if [[ ! -d "$ATLAS_ROOT/tui" ]]; then
+  red "tui/ directory not found at $ATLAS_ROOT/tui"
+  red "  Are you running this from inside a complete ATLAS checkout?"
+  exit 1
+fi
+
+# go build is idempotent and fast (~10s on M-series). No need to
+# skip when --rebuild is unset; the cost is negligible vs the llama
+# rebuild, and it picks up any tui/ code changes on git pull.
+(cd "$ATLAS_ROOT/tui" && go build -o "$TUI_OUT" .)
+green "  Built and installed: $TUI_OUT"
 
 # ---------------------------------------------------------------------------
 # Done
