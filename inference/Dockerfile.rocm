@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # ATLAS llama-server inference image — AMD ROCm / HIP backend.
 #
 # Parallel to Dockerfile.v31 (NVIDIA CUDA). Same llama.cpp build with the
@@ -27,10 +28,12 @@ FROM docker.io/rocm/dev-ubuntu-22.04:${ROCM_TAG} AS builder
 #   Vega  — gfx900  (older, may need separate build)
 ARG GFX_TARGET=gfx1100;gfx1101;gfx1102;gfx1030;gfx90a
 
-# Ubuntu base, not RHEL — apt instead of dnf for build deps.
+# Ubuntu base, not RHEL — apt instead of dnf for build deps. ccache
+# is added so the cmake build below can persist compiled object files
+# across LLAMA_CPP_REV bumps (#117).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        git cmake build-essential ca-certificates && \
+        git cmake build-essential ccache ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion.
@@ -44,8 +47,13 @@ COPY patches/ /patches/
 # upstream context drift breaks the PC-202 patch periodically). Keep
 # this aligned with the other Dockerfiles.
 ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
-# Init + shallow-fetch a single SHA: avoids the ~1GB full-history clone.
-# See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
+# #117: Split fetch -> patch -> build into three RUN layers so a
+# LLAMA_CPP_REV bump or a patches/ change invalidates only the affected
+# layer. ccache mount (below) further mitigates SHA bumps by caching
+# compiled object files keyed on source content hash.
+
+# 1. Fetch llama.cpp at the pinned SHA. Invalidated by LLAMA_CPP_REV.
+#    See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
 RUN git init /llama.cpp && \
     cd /llama.cpp && \
     git remote add origin https://github.com/ggml-org/llama.cpp && \
@@ -54,28 +62,34 @@ RUN git init /llama.cpp && \
         -c http.lowSpeedTime=60 \
         fetch --depth 1 origin ${LLAMA_CPP_REV} && \
     git checkout FETCH_HEAD && \
-    mkdir -p /llama.cpp/tmp && \
-    # ATLAS patch: prevent --embeddings from poisoning the draft model context.
-    # Kept for compatibility — harmless when no draft model is used (Qwen3.5).
-    # If the patch target line doesn't exist in newer versions, the sed is a no-op.
+    mkdir -p /llama.cpp/tmp
+
+# 2. Apply patches. Invalidated by /patches contents OR LLAMA_CPP_REV.
+RUN cd /llama.cpp && \
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp 2>/dev/null || true && \
-    # ATLAS PC-202: expose per-layer residual hidden states from /embedding.
-    # Adds an optional `layers: [int]` request param; response gains
-    # `hidden_states` (base64 float32 per layer) for PC-203 SAE + PC-207
-    # lens-as-PRM. No-op when `layers` is omitted. See ISSUES.md PC-202.
     git apply --check /patches/expose-hidden-states.patch && \
-    git apply         /patches/expose-hidden-states.patch && \
-    # GGML_HIP=ON enables the AMD backend (was GGML_HIPBLAS in older llama.cpp).
-    # CMAKE_C/CXX_COMPILER=hipcc is required so the HIP kernels compile.
-    # AMDGPU_TARGETS scopes which gfx targets are baked into the binary.
+    git apply         /patches/expose-hidden-states.patch
+
+# 3. Build with HIP/ROCm + ccache mount (#117).
+#    GGML_HIP=ON enables the AMD backend (was GGML_HIPBLAS in older).
+#    CMAKE_C/CXX_COMPILER=hipcc is required so the HIP kernels compile.
+#    AMDGPU_TARGETS scopes which gfx targets are baked into the binary.
+#    Note: ccache wraps hipcc the same way it wraps gcc/g++ — the
+#    HIP compiler invocations are normal cc-style commands with HIP
+#    kernels passed as source.
+RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
+    cd /llama.cpp && \
     cmake -B build \
         -DGGML_HIP=ON \
         -DAMDGPU_TARGETS="${GFX_TARGET}" \
         -DCMAKE_C_COMPILER=/opt/rocm/bin/hipcc \
         -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DBUILD_SHARED_LIBS=OFF && \
-    cmake --build build --config Release -j5
+    cmake --build build --config Release -j5 && \
+    ccache --show-stats || true
 
 # ---------------------------------------------------------------------------
 # Runtime stage — same ROCm base image. There is no slim 'runtime'

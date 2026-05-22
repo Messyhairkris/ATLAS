@@ -1,3 +1,7 @@
+# syntax=docker/dockerfile:1.4
+# (Enables RUN --mount=type=cache for the ccache persist below. Native
+# in BuildKit since 1.0 but explicit is clearer.)
+
 # arm64 (#115): default base image is rockylinux9, which is x86_64-only.
 # Override on aarch64 hosts (DGX Spark = sbsa, Jetson = l4t) by passing
 # --build-arg BUILDER_IMAGE=... + --build-arg RUNTIME_IMAGE=... pointing
@@ -30,12 +34,15 @@ FROM ${BUILDER_IMAGE} AS builder
 ARG CUDA_ARCH=120;121
 # Install build deps. Default rockylinux9 uses dnf; ubuntu/l4t variants
 # use apt. Try dnf first, fall back to apt-get so the same Dockerfile
-# works across base-image overrides (#115).
+# works across base-image overrides (#115). ccache is added so the
+# cmake build below can persist compiler outputs across LLAMA_CPP_REV
+# bumps (#117) — content-addressed object cache means 80%+ hit rate
+# for typical upstream churn.
 RUN if command -v dnf >/dev/null 2>&1; then \
-        dnf install -y git cmake gcc-c++ && dnf clean all; \
+        dnf install -y git cmake gcc-c++ ccache && dnf clean all; \
     else \
         apt-get update && apt-get install -y --no-install-recommends \
-            git cmake build-essential ca-certificates && \
+            git cmake build-essential ccache ca-certificates && \
         rm -rf /var/lib/apt/lists/*; \
     fi
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion
@@ -53,11 +60,18 @@ COPY patches/ /patches/
 #   2. The PC-202 patch has been regenerated against the new upstream
 # Override at build time: --build-arg LLAMA_CPP_REV=<sha>
 ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
-# Init + shallow-fetch a single SHA: avoids the ~1GB full-history clone
-# while still letting us pin to a specific commit (GitHub supports
-# uploadpack.allowReachableSHA1InWant). http.postBuffer bump helps
-# large packs; lowSpeedLimit/Time abort fast on dead connections.
-# See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
+# #117: Split fetch -> patch -> build into three RUN layers so a
+# LLAMA_CPP_REV bump or a patches/ change invalidates only the affected
+# layer + everything below, not the whole giant step. The build is the
+# expensive one; ccache (mounted below) further mitigates SHA bumps by
+# preserving compiled object files keyed on source content hash.
+
+# 1. Fetch llama.cpp at the pinned SHA. Invalidated by LLAMA_CPP_REV.
+#    Init + shallow-fetch a single SHA avoids the ~1GB full-history
+#    clone while still letting us pin to a specific commit (GitHub
+#    supports uploadpack.allowReachableSHA1InWant). http.postBuffer
+#    bump helps large packs; lowSpeedLimit/Time abort fast on dead
+#    connections. See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
 RUN git init /llama.cpp && \
     cd /llama.cpp && \
     git remote add origin https://github.com/ggml-org/llama.cpp && \
@@ -66,20 +80,42 @@ RUN git init /llama.cpp && \
         -c http.lowSpeedTime=60 \
         fetch --depth 1 origin ${LLAMA_CPP_REV} && \
     git checkout FETCH_HEAD && \
-    mkdir -p /llama.cpp/tmp && \
-    # ATLAS patch: prevent --embeddings from poisoning the draft model context.
-    # Kept for compatibility — harmless when no draft model is used (Qwen3.5).
-    # If the patch target line doesn't exist in newer versions, the sed is a no-op.
+    mkdir -p /llama.cpp/tmp
+
+# 2. Apply patches. Invalidated by /patches contents OR LLAMA_CPP_REV
+#    (latter via the previous layer). Cheap step (~1s) so re-running
+#    on patch tweaks is fine.
+#    - sed: spec-decode embeddings fix. Kept for compatibility, harmless
+#      when no draft model is used (Qwen3.5). Falls through silently if
+#      the target line doesn't exist in newer upstream.
+#    - git apply: PC-202 hidden-states patch. Adds optional `layers:
+#      [int]` request param; response gains `hidden_states` (base64
+#      float32 per layer) for PC-203 SAE + PC-207 lens-as-PRM. No-op
+#      when `layers` is omitted. See ISSUES.md PC-202.
+RUN cd /llama.cpp && \
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp 2>/dev/null || true && \
-    # ATLAS PC-202: expose per-layer residual hidden states from /embedding.
-    # Adds an optional `layers: [int]` request param; response gains
-    # `hidden_states` (base64 float32 per layer) for PC-203 SAE + PC-207
-    # lens-as-PRM. No-op when `layers` is omitted. See ISSUES.md PC-202.
     git apply --check /patches/expose-hidden-states.patch && \
-    git apply         /patches/expose-hidden-states.patch && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" && \
-    cmake --build build --config Release -j5
+    git apply         /patches/expose-hidden-states.patch
+
+# 3. Build. The slow one (~5-30min depending on host + GPU arch count).
+#    --mount=type=cache for /root/.ccache persists compiled object
+#    files across builds — ccache is content-addressed so even after a
+#    SHA bump invalidates this layer, the unchanged source files still
+#    hit the on-disk cache. id=llama-ccache shares the cache across
+#    all Dockerfile.* in this dir; sharing=locked prevents concurrent
+#    writes if multiple builds run in parallel. #117.
+RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
+    cd /llama.cpp && \
+    cmake -B build \
+        -DGGML_CUDA=ON \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache && \
+    cmake --build build --config Release -j5 && \
+    ccache --show-stats || true
 
 FROM ${RUNTIME_IMAGE}
 # Re-declare ARG after FROM so the runtime stage can reference it if

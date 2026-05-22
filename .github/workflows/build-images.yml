@@ -1,6 +1,6 @@
 # Builds and publishes ATLAS service images to GHCR.
 #
-# Image names: ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,sandbox}
+# Image names: ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,llama-vulkan,sandbox}
 #
 # Tag scheme:
 #   - main branch push  -> :latest, :sha-<short>
@@ -8,9 +8,17 @@
 #   - git tag vX.Y.Z    -> :X.Y.Z,  :X.Y,  :latest
 #   - manual dispatch   -> :sha-<short>
 #
-# All builds are amd64 only for v1 (CUDA on llama-server is the constraining
-# dimension; the other four services are small enough that adding arm64 later
-# is a single matrix entry. PC-052.)
+# Platform matrix:
+#   - llama (CUDA, NVIDIA): amd64 only — CUDA arm64 needs base image swaps
+#     (sbsa for DGX Spark, l4t for Jetson) that are tracked separately;
+#     the default rockylinux9 base is x86_64-only.
+#   - llama-vulkan (universal): amd64 always, +arm64 on tag pushes only
+#     (#116). arm64 emulation via QEMU is 5-10x slower than native build,
+#     so we only pay that cost when producing a release. Dev iteration
+#     stays fast with amd64-only builds on every push.
+#   - other services (proxy/v3/lens/sandbox): amd64 only for now; they're
+#     small Python/Go images so adding arm64 later is a one-line change
+#     to this matrix.
 
 name: Build & publish container images
 
@@ -65,13 +73,20 @@ jobs:
           - name: llama
             context: ./inference
             dockerfile: ./inference/Dockerfile.v31
+          # #116: universal Vulkan llama image. Same llama.cpp inside,
+          # different backend at the cmake step. Multi-arch via QEMU on
+          # tag pushes (see Set up QEMU step). Image name is suffixed
+          # to keep it distinguishable from the CUDA llama on GHCR.
+          - name: llama-vulkan
+            context: ./inference
+            dockerfile: ./inference/Dockerfile.vulkan
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space (llama only)
-        if: matrix.service.name == 'llama'
+      - name: Free disk space (large llama builds)
+        if: matrix.service.name == 'llama' || matrix.service.name == 'llama-vulkan'
         # CUDA devel base (~9 GB) + runtime base (~4 GB) + llama.cpp build
         # artifacts (~5-8 GB) can peak at ~22-25 GB during a llama build.
         # ubuntu-latest has ~14 GB free out of the box. The community
@@ -87,6 +102,16 @@ jobs:
           large-packages: false  # apt large-pkg removal is slow + low payoff
           docker-images: true
           swap-storage: false
+
+      # #116: QEMU is required for the linux/arm64 build of llama-vulkan
+      # on tag pushes. Skipping for everyone else keeps the setup time
+      # negligible on dev/main pushes (binfmt registration is ~5s on
+      # cold cache). Tag pushes are the only ones that include arm64.
+      - name: Set up QEMU (multi-arch llama-vulkan only)
+        if: matrix.service.name == 'llama-vulkan' && startsWith(github.ref, 'refs/tags/v')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -124,12 +149,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref, '-') }}
 
       # Cache strategy:
-      #   llama  -> registry-based cache (CUDA build is ~6 GB; GHA cache is
-      #             capped at 10 GB total per repo, so 5 services × mode=max
-      #             would thrash. Registry cache has no size limit and lives
-      #             alongside the published image.)
+      #   llama / llama-vulkan -> registry-based cache (CUDA/Vulkan builds
+      #             are ~6 GB; GHA cache is capped at 10 GB total per repo,
+      #             so 6 services × mode=max would thrash. Registry cache
+      #             has no size limit and lives alongside the published
+      #             image.) mode=max also persists --mount=type=cache
+      #             contents (#117 ccache) across runs.
       #   others -> GHA cache (small, fast, no extra registry write).
-      - name: Build & push (llama, registry cache)
+      - name: Build & push (llama CUDA, registry cache)
         if: matrix.service.name == 'llama'
         uses: docker/build-push-action@v5
         with:
@@ -142,8 +169,26 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache,mode=max
           provenance: false
 
+      # #116: llama-vulkan with conditional arm64. The platforms
+      # expression evaluates to amd64+arm64 only on tag pushes (releases),
+      # amd64-only otherwise — keeps dev iteration fast since arm64
+      # emulation via QEMU is 5-10x slower.
+      - name: Build & push (llama Vulkan, registry cache, arch-conditional)
+        if: matrix.service.name == 'llama-vulkan'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache,mode=max
+          provenance: false
+
       - name: Build & push (small services, GHA cache)
-        if: matrix.service.name != 'llama'
+        if: matrix.service.name != 'llama' && matrix.service.name != 'llama-vulkan'
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}
