@@ -134,6 +134,20 @@ def check_compose() -> CheckResult:
     return CheckResult("compose", "pass", f"v{out.strip()}")
 
 
+def _port_listening(host: str, port: int, timeout: float = 2.0) -> bool:
+    """True if a TCP server is accepting connections at host:port.
+    Portable replacement for `nc -z` which has different flag conventions
+    across GNU netcat / BSD nc / nmap-ncat / busybox nc — and may not be
+    on PATH at all (notably alpine/socat doesn't ship it).
+    """
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, socket.timeout):
+        return False
+
+
 def _resolve_backend(atlas_root: Optional[str] = None) -> Optional[str]:
     """Resolve which ATLAS_BACKEND the user has configured. Reads the
     shell env first (canonical), then falls back to .env in atlas_root.
@@ -412,22 +426,29 @@ def _check_metal_native() -> CheckResult:
             f"{binary} exists but lacks +x. Likely a botched copy or "
             f"transferred over a filesystem that strips perms (smb/nfs).")
 
-    # Sanity-check it actually runs and reports something. `llama-server
-    # --help` is quick (no model load) and exits 0 when the binary is
-    # healthy. Catches the corrupt-build case (rare but happens after
-    # interrupted builds).
+    # Sanity-check the binary at least loads. Exit code alone isn't
+    # reliable: llama-server treats `--help` as a parse failure (prints
+    # usage, exits 1) by convention. Instead look for usage markers in
+    # the combined output — anything matching means the binary's main
+    # ran and printed the help text. No usage markers + nonzero exit =
+    # the binary never reached main (dyld failure, missing dylib,
+    # corrupt build from an interrupted cmake).
     rc, out, err = _run([binary, "--help"], timeout=5)
-    if rc != 0:
+    combined = (out + err).lower()
+    usage_markers = ("usage", "options", "--ctx-size", "llama-server")
+    looks_like_usage = any(m in combined for m in usage_markers)
+    if rc != 0 and not looks_like_usage:
         return CheckResult("metal-native", "fail",
             "native llama-server exists but won't run "
-            f"(exit {rc}) — try --rebuild",
-            (err or out).strip()[:300])
+            f"(exit {rc}, no usage output) — try --rebuild",
+            (err or out).strip()[:300] or "binary produced no output")
 
-    # Optional: try to confirm the host port is listening. If the user
-    # ran setup but hasn't started atlas-llama-macos.sh yet, surface
-    # that as a warn (not fail) — they may just not be ready yet.
-    port_check_rc, _, _ = _run(["nc", "-z", "localhost", "8080"], timeout=2)
-    if port_check_rc != 0:
+    # Confirm the host port is listening. If the user ran setup but
+    # hasn't started atlas-llama-macos.sh yet, surface that as a warn
+    # (not fail) — they may just not be ready yet. Use a small Python
+    # socket probe instead of `nc` since macOS / BSD nc has different
+    # flags than GNU nc and may not be on PATH at all.
+    if not _port_listening("127.0.0.1", 8080, timeout=2):
         return CheckResult("metal-native", "warn",
             f"native llama-server installed at {binary} but nothing "
             f"listening on :8080 — start it with scripts/atlas-llama-macos.sh",

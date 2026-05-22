@@ -85,14 +85,11 @@ def test_check_metal_native_warn_when_port_not_listening(monkeypatch, tmp_path):
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
 
-    # Mock _run so the `nc -z localhost 8080` probe reports nothing
-    # listening (non-zero exit). The binary --help probe must still
-    # return 0 — so we discriminate by argv.
-    def fake_run(argv, *args, **kwargs):
-        if argv[:2] == ["nc", "-z"]:
-            return (1, "", "")  # port not listening
-        return (0, "", "")      # binary --help works
-    monkeypatch.setattr(doctor, "_run", fake_run)
+    # Binary --help works; _port_listening returns False (port not up).
+    monkeypatch.setattr(doctor, "_run",
+                        lambda argv, *args, **kwargs: (0, "", ""))
+    monkeypatch.setattr(doctor, "_port_listening",
+                        lambda host, port, timeout=2.0: False)
 
     result = doctor._check_metal_native()
     assert result.status == "warn"
@@ -112,12 +109,42 @@ def test_check_metal_native_pass_when_everything_healthy(monkeypatch, tmp_path):
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
 
-    # All shell calls succeed: --help returns 0, nc -z returns 0
-    # (port is listening).
+    # --help returns 0; _port_listening returns True (port is up).
     monkeypatch.setattr(doctor, "_run",
                         lambda argv, *args, **kwargs: (0, "", ""))
+    monkeypatch.setattr(doctor, "_port_listening",
+                        lambda host, port, timeout=2.0: True)
 
     result = doctor._check_metal_native()
+    assert result.status == "pass"
+    assert "listening on :8080" in result.message
+
+
+def test_check_metal_native_pass_when_llama_help_exits_nonzero(monkeypatch, tmp_path):
+    """Regression for the lead's M3 install: llama-server's --help
+    treats the flag as a parse failure and exits 1. The check must NOT
+    fail just because exit code is nonzero — it must look at whether
+    the binary produced ANY output. A truly corrupt binary (dyld
+    failure) produces no output AND exits nonzero; a healthy binary
+    that just doesn't return 0 on --help prints its usage."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".atlas" / "macos" / "bin"
+    bin_dir.mkdir(parents=True)
+    binary = bin_dir / "llama-server-metal"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+
+    # --help exits 1 but DID print usage (typical llama-server behavior).
+    monkeypatch.setattr(doctor, "_run",
+                        lambda argv, *args, **kwargs:
+                            (1, "usage: llama-server [opts]\n", ""))
+    monkeypatch.setattr(doctor, "_port_listening",
+                        lambda host, port, timeout=2.0: True)
+
+    result = doctor._check_metal_native()
+    # Must PASS — output proves the loader works, exit code is just a
+    # convention quirk.
     assert result.status == "pass"
     assert "listening on :8080" in result.message
 
