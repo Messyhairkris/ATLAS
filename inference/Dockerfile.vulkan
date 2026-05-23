@@ -53,7 +53,7 @@ FROM ubuntu:${UBUNTU_TAG} AS builder
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git cmake build-essential ccache ca-certificates pkg-config \
-        libvulkan-dev vulkan-tools glslang-tools && \
+        libvulkan-dev vulkan-tools glslang-tools glslc && \
     rm -rf /var/lib/apt/lists/*
 
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion.
