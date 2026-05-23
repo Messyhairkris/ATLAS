@@ -12,11 +12,7 @@ real CI runs. These tests cover the new check_metal_native() added in
      for non-Mac users
 """
 
-import os
 import sys
-import tempfile
-
-import pytest
 
 from atlas.cli.commands import doctor
 

@@ -38,6 +38,7 @@ Implementation notes:
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -534,10 +535,8 @@ def _download_artifact(url: str, target_path: str, color: bool) -> int:
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         _safe_print(f"    [fail] {fname}: {e}")
         if os.path.exists(tmp_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(tmp_path)
-            except OSError:
-                pass
         return 1
 
 

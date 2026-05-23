@@ -358,10 +358,10 @@ def _check_vulkan_via_docker() -> CheckResult:
         # apt-install Mesa Vulkan stack + run vulkaninfo summary. Cap
         # output so a verbose ICD enum doesn't blow our 300-char detail
         # budget.
-        "apt-get update -qq >/dev/null && "
-        "apt-get install -y -qq libvulkan1 mesa-vulkan-drivers vulkan-tools "
-        ">/dev/null 2>&1 && "
-        "vulkaninfo --summary 2>&1 | head -40",
+        ("apt-get update -qq >/dev/null && "
+         + "apt-get install -y -qq libvulkan1 mesa-vulkan-drivers vulkan-tools "
+         + ">/dev/null 2>&1 && "
+         + "vulkaninfo --summary 2>&1 | head -40"),
     ], timeout=300)  # apt + image pull on cold cache
     if rc != 0:
         joined = (err + out).lower()
