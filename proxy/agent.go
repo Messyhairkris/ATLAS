@@ -1423,7 +1423,7 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		// a non-trivial grammar; pass only the grammar in restricted mode.
 		reqBody["grammar"] = grammar
 	} else {
-		reqBody["response_format"] = map[string]string{"type": "json_object"}
+		reqBody["response_format"] = buildResponseFormat()
 	}
 	body, _ := json.Marshal(reqBody)
 	endpoint := llamaURL + "/v1/chat/completions"

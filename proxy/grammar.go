@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -105,6 +106,37 @@ func buildToolCallSchemaJSONForTools(excluded []string) string {
 	schema := buildToolCallSchemaForTools(excluded)
 	b, _ := json.Marshal(schema)
 	return string(b)
+}
+
+// buildResponseFormat picks the response_format payload to send to
+// llama-server based on ATLAS_GRAMMAR_MODE (#33).
+//
+//	"strict" (default): {"type":"json_object","schema":<full schema>}.
+//	  llama-server converts the schema to internal GBNF at the C side
+//	  so the token sampler can ONLY emit our tool_call/text/done union.
+//	  Previously the model could emit any valid JSON and we'd reject
+//	  + retry post-hoc, burning tokens; the schema-constrained path
+//	  eliminates that whole class of waste.
+//
+//	"loose": {"type":"json_object"} — old behavior, "valid JSON only,
+//	  shape not enforced." Kept as an escape hatch in case a model
+//	  handles the schema-to-GBNF conversion poorly (rare, but a
+//	  one-env-var rollback beats a code revert).
+//
+// Returns an interface{} because the strict case nests a map (the
+// schema), which doesn't fit map[string]string.
+func buildResponseFormat() interface{} {
+	mode := os.Getenv("ATLAS_GRAMMAR_MODE")
+	if mode == "" {
+		mode = "strict"
+	}
+	if mode == "loose" {
+		return map[string]string{"type": "json_object"}
+	}
+	return map[string]interface{}{
+		"type":   "json_object",
+		"schema": buildToolCallSchema(),
+	}
 }
 
 // ---------------------------------------------------------------------------
