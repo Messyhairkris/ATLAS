@@ -52,6 +52,14 @@ type calibrationStatusMsg struct {
 // launch faster than the proxy finishes its startup probe).
 type calibrationRetryMsg struct{}
 
+// calibrationRefreshMsg fires periodically after a successful fetch so
+// the badge converges on truth over time. The original bug: a user who
+// opens the TUI before lens weights are downloaded sees `Lens ⚠` and
+// the badge is frozen for the rest of the session — even if they then
+// run `atlas model install-artifacts` and restart the lens container,
+// the TUI never re-probes. This msg drives the periodic re-fetch.
+type calibrationRefreshMsg struct{}
+
 // scheduleCalibrationRetry returns a Cmd that emits a retry trigger after
 // the given delay. The model's Update handler decides whether to actually
 // re-fire fetchCalibrationStatusCmd based on retry count + current state.
@@ -61,16 +69,35 @@ func scheduleCalibrationRetry(after time.Duration) tea.Cmd {
 	})
 }
 
-// maxCalibrationRetries caps the retry loop. At ~5s/retry, 5 attempts
-// covers ~25s of proxy-startup warmup — long enough for the slowest
-// realistic docker compose up, short enough that a permanently-down
-// proxy doesn't keep poking forever.
+// scheduleCalibrationRefresh returns a Cmd that emits a refresh trigger
+// after the given delay. Separate type from retry so the handler can
+// apply different rules — refresh fires forever, doesn't care about
+// the prior verdict, and runs at a longer interval.
+func scheduleCalibrationRefresh(after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg {
+		return calibrationRefreshMsg{}
+	})
+}
+
+// maxCalibrationRetries caps the *retry* loop (fast attempts after a
+// failed initial fetch). At ~5s/retry, 5 attempts covers ~25s of proxy-
+// startup warmup — long enough for the slowest realistic docker compose
+// up, short enough that a permanently-down proxy doesn't keep poking
+// forever. Once any response lands, retry stops and refresh takes over.
 const maxCalibrationRetries = 5
 
 // calibrationRetryInterval is the gap between retry attempts. Chosen to
 // be long enough that we don't hammer a struggling proxy, short enough
 // that the badge converges quickly once the proxy is healthy.
 const calibrationRetryInterval = 5 * time.Second
+
+// calibrationRefreshInterval is the gap between periodic refreshes after
+// the initial fetch succeeds. 30s is short enough that a user who runs
+// `atlas model install-artifacts` and restarts the lens container sees
+// the badge flip to green within one refresh tick, long enough that the
+// HTTP cost is trivial (120 calls/hour). Cap-free: the refresh runs for
+// the lifetime of the TUI session.
+const calibrationRefreshInterval = 30 * time.Second
 
 // fetchCalibrationStatusCmd does an HTTP GET against the proxy. Fast — the
 // proxy itself caches nothing here, but the upstream lens /health call is

@@ -916,23 +916,32 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case calibrationStatusMsg:
-		// /v1/calibration/status fetch returned. On success store the
-		// status and stop retrying (the retry tick checks state before
-		// re-firing, so once m.calibration is non-nil it short-circuits).
-		// On err leave m.calibration nil — the badge falls back to the
-		// "cal …" placeholder and the retry tick will re-probe.
+		// /v1/calibration/status fetch returned. Two cases:
+		//   1. Success: store the status AND kick off the periodic
+		//      refresh chain. Only schedule refresh on success — on
+		//      error we let the retry mechanism handle it, otherwise
+		//      we'd spawn a parallel refresh chain on every errored
+		//      retry attempt. Refresh takes over once the first
+		//      successful response lands.
+		//   2. Err: leave m.calibration nil so the badge shows
+		//      "cal …" and the retry tick gets to try again. No
+		//      refresh scheduled.
 		if msg.err == nil && msg.status != nil {
+			firstSuccess := m.calibration == nil
 			m.calibration = msg.status
+			if firstSuccess {
+				return m, scheduleCalibrationRefresh(calibrationRefreshInterval)
+			}
 		}
 		return m, nil
 
 	case calibrationRetryMsg:
-		// Round-2 fix: re-probe if the initial fetch missed (proxy
-		// hadn't finished starting up yet, common during compose-up
-		// races). Three short-circuit conditions, in priority order:
-		//   1. Already got a real status → no need to retry.
-		//   2. Hit the retry cap → give up; user can restart TUI.
-		//   3. Otherwise re-fire fetch + schedule the next retry.
+		// Retry mechanism handles the "initial fetch missed because
+		// proxy hadn't finished starting up" race (common during
+		// compose-up). Capped at maxCalibrationRetries attempts.
+		// Once any response lands, we leave retry alone — the
+		// refresh tick (above) takes over for the longer-cadence
+		// re-probing that keeps the badge in sync with reality.
 		if m.calibration != nil {
 			return m, nil
 		}
@@ -943,6 +952,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			fetchCalibrationStatusCmd(m.proxyURL),
 			scheduleCalibrationRetry(calibrationRetryInterval),
+		)
+
+	case calibrationRefreshMsg:
+		// Periodic refresh — runs forever after the first successful
+		// fetch lands. Re-fires the fetch and schedules the next
+		// refresh regardless of the prior verdict. Catches both
+		// warn→green transitions (user finished install) AND
+		// green→warn (user removed weights, swapped models). Cheap:
+		// 1 HTTP call per 30s.
+		return m, tea.Batch(
+			fetchCalibrationStatusCmd(m.proxyURL),
+			scheduleCalibrationRefresh(calibrationRefreshInterval),
 		)
 	}
 

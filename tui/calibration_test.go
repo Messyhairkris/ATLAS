@@ -248,3 +248,40 @@ func TestCalibrationRetryConstants_BoundedAndReasonable(t *testing.T) {
 			calibrationRetryInterval)
 	}
 }
+
+// New: regression test for the badge-frozen bug. The original
+// implementation locked in the first response from the proxy forever —
+// users who downloaded lens/asa artifacts mid-session and restarted
+// the lens container saw the warn badge persist until they restarted
+// the TUI. The fix: scheduleCalibrationRefresh produces a refresh msg
+// that fires periodically forever, separate from the bounded retry
+// mechanism that handles startup races.
+func TestScheduleCalibrationRefresh_FiresRefreshMsgAfterDelay(t *testing.T) {
+	cmd := scheduleCalibrationRefresh(time.Millisecond)
+	if cmd == nil {
+		t.Fatal("scheduleCalibrationRefresh returned nil cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(calibrationRefreshMsg); !ok {
+		t.Errorf("expected calibrationRefreshMsg, got %T", msg)
+	}
+}
+
+func TestCalibrationRefreshInterval_LongerThanRetry(t *testing.T) {
+	// Refresh runs forever after first success — must be slow enough
+	// that the cost is trivial (~120 calls/hour at 30s). Also must be
+	// longer than retry interval so the two mechanisms don't overlap.
+	if calibrationRefreshInterval < calibrationRetryInterval {
+		t.Errorf("refresh (%v) should be longer than retry (%v) — "+
+			"refresh is the steady-state long-poll, retry is the "+
+			"fast startup-race handler",
+			calibrationRefreshInterval, calibrationRetryInterval)
+	}
+	if calibrationRefreshInterval < 15*time.Second ||
+		calibrationRefreshInterval > 5*time.Minute {
+		t.Errorf("calibrationRefreshInterval (%v) outside reasonable range "+
+			"[15s, 5m] — too short hammers proxy, too long defeats the "+
+			"point of auto-converging",
+			calibrationRefreshInterval)
+	}
+}
