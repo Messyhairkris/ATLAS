@@ -8,7 +8,9 @@
 # containers are all CPU-only and unchanged.
 #
 # Hardware prereqs on the host:
-#   * AMD GPU with ROCm 6.x support (see Dockerfile.rocm for gfx targets)
+#   * AMD GPU with ROCm 6.x support, or RDNA4 (gfx1200/gfx1201) with
+#     ROCm 7.x via ATLAS_ROCM_TAG (see Dockerfile.rocm for gfx targets,
+#     and TROUBLESHOOTING.md § RDNA4 for the ROCm 7.x path)
 #   * /dev/kfd and /dev/dri/* accessible to the docker daemon's user
 #   * `video` and `render` groups exist (default on most distros)
 #

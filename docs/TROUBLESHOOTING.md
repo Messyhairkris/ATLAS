@@ -213,7 +213,6 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-re
 
 If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/itigges22/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
 
-
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x required
 
 **Symptom:** Build fails during `docker compose ... build llama-server` with errors like `error: AMDGPU target 'gfx1201' is not supported`, or the container starts but immediately exits with a HIP initialization error.

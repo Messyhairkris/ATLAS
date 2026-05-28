@@ -27,6 +27,7 @@
 - Added star history chart to Latest News section
 - Rewrote README contributing section to encourage issue reports and community feedback
 - Fixed V3_1_STATUS.md false claims about speed optimizations that were never applied to code
+- Documented RDNA4 (RX 9070 / 9070 XT, gfx1200/gfx1201) ROCm 7.x setup in SETUP.md and TROUBLESHOOTING.md — requires `ATLAS_ROCM_TAG=7.2.3-complete`; `ATLAS_HSA_OVERRIDE_GFX_VERSION` must stay unset (#119, thanks @Kaihui-AMD)
 
 ### Code Accuracy Audit
 - Audited and corrected comments across 72 files for V3.0.1 accuracy
