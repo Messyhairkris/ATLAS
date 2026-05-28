@@ -213,6 +213,32 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-re
 
 If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/itigges22/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
 
+
+### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x required
+
+**Symptom:** Build fails during `docker compose ... build llama-server` with errors like `error: AMDGPU target 'gfx1201' is not supported`, or the container starts but immediately exits with a HIP initialization error.
+
+**What it means:** The default ROCm base image (`rocm/dev-ubuntu-22.04:6.2-complete`) predates RDNA4. The gfx1200 and gfx1201 compiler targets were added in ROCm 7.0 — see the [ROCm compatibility matrix](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html) for the full supported hardware list.
+
+**Fix:** Set `ATLAS_ROCM_TAG` to a ROCm 7.x tag before building:
+
+```env
+# Add to your .env
+ATLAS_ROCM_TAG=7.2.3-complete
+ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
+```
+
+Then rebuild and bring up the stack:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+```
+
+**Important: do NOT set `ATLAS_HSA_OVERRIDE_GFX_VERSION` for gfx1200/gfx1201.** ROCm 7.0+ supports these targets natively; overriding the GFX version inside Docker causes a mismatch between the compiled kernels and the runtime target, which results in crashes. Leave `ATLAS_HSA_OVERRIDE_GFX_VERSION` unset (the default).
+
+> Tested on AMD Radeon AI PRO R9700 (gfx1201) with ROCm 7.2, `ATLAS_ROCM_TAG=7.2.3-complete`. ATLAS PC-202 patch applies cleanly to the pinned llama.cpp SHA. Inference runs correctly across text generation and embedding generation without any additional flags.
+
 ### ROCm container can't pull `rocm/rocm-terminal`
 
 **Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f docker-compose.rocm.yml pull` fails on the `llama-server` build.

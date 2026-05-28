@@ -745,6 +745,10 @@ Common values:
 | `gfx90a` | CDNA2 | MI210, MI250, MI250X |
 | `gfx942` | CDNA3 | MI300X |
 | `gfx900` | Vega | Vega 56/64 (may need HSA override — see TROUBLESHOOTING.md) |
+| `gfx1200` | RDNA4 (Navi 44) | RX 9070 |
+| `gfx1201` | RDNA4 (Navi 48) | RX 9070 XT |
+
+> **RDNA4 (gfx1200/gfx1201) users:** set `ATLAS_ROCM_TAG=7.2.3-complete` — the default ROCm 6.2 base image does not include gfx1200/gfx1201 compiler support. ROCm 7.0+ supports these targets natively; do not set `ATLAS_HSA_OVERRIDE_GFX_VERSION`. See [TROUBLESHOOTING.md § RDNA4](TROUBLESHOOTING.md) for details.
 
 Your GPU's gfx target: `rocminfo | grep -i gfx | head -1` (or look it up in the [LLVM AMDGPU processor table](https://llvm.org/docs/AMDGPUUsage.html)).
 
