@@ -46,7 +46,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 |---|---|---|---|---|
 | **CUDA** (NVIDIA) | Shipping since V3.1.0 | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical), RTX 30xx/40xx/50xx |
 | **ROCm / HIP** (AMD) | Shipping V3.1.1 | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
-| **Metal** (Apple Silicon) | V3.1.2 planned | Native install only — no Docker (macOS can't passthrough GPU to containers) | n/a | M-series with ≥24 GB unified memory |
+| **Metal** (Apple Silicon) | Shipping ([#32](https://github.com/itigges22/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
 | **SYCL** (Intel Arc) | Roadmap | TBD | TBD | Arc A770 16 GB (target) |
 
 **Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/cli/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|sycl}` into `.env`. Each backend has its own pre-built image; users don't run a fat image that ships every backend's libraries. The wizard refuses on unsupported-backend hosts rather than writing a `.env` that won't boot.
@@ -69,7 +69,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
-| **llama-server** | 8080 | C++ (llama.cpp) | LLM inference (CUDA / ROCm; Metal + SYCL on roadmap — see §1.1), grammar-constrained JSON, self-embeddings, per-layer residual hidden states (PC-202) |
+| **llama-server** | 8080 | C++ (llama.cpp) | LLM inference (CUDA / ROCm / Metal / Vulkan; SYCL on roadmap — see §1.1), grammar-constrained JSON, self-embeddings, per-layer residual hidden states (PC-202) |
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. PC-062. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
@@ -688,17 +688,16 @@ ROCm has no separate container runtime equivalent to `nvidia-container-toolkit` 
 
 The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch the atlas-tui front-end, or detect a running Docker Compose stack and connect to it. Bare-metal works on any backend (NVIDIA, ROCm, Metal) as long as a llama-server binary built against the right backend is on `PATH`.
 
-### 8.4 macOS Native (V3.1.2 planned)
+### 8.4 macOS Native (shipping — hybrid Metal path, [#32](https://github.com/itigges22/ATLAS/issues/32))
 
-macOS does not support GPU passthrough to Docker containers, so the Compose path doesn't apply. The V3.1.2 release will document a native install:
+macOS can't passthrough the GPU to Docker containers, so llama-server can't run Metal-accelerated *inside* Docker. ATLAS ships a **hybrid** path instead: llama-server runs natively on the host (Metal) for inference perf, while the rest of the stack stays in Docker and reaches it through a tiny socat forwarder (`llama-server:8080` → `host.docker.internal:8080`). Other services keep their existing `http://llama-server:8080` URLs and don't need to know they're talking to a host process. Full guide: [SETUP_MACOS.md](SETUP_MACOS.md).
 
-- **llama-server**: `brew install llama.cpp` (Metal-built binary from Homebrew) or `make -j LLAMA_METAL=1` from source.
-- **Python services** (v3-service, geometric-lens, sandbox): `uv venv && uv pip install -e .` against the host Python, with `PyTorch` from the macOS wheel index.
-- **atlas-proxy**: cross-compiled Go binary, distributed as part of the macOS install bundle.
-- **Models**: 16 GB MBPs use Q4_K_M (~5 GB) by default to fit unified-memory budget; ≥24 GB MBPs can run Q6_K like the Linux default.
-- **No Docker, no Compose, no override files** — `atlas init` writes a different `.env` that the macOS-specific launcher consumes.
+- **llama-server**: built natively with Metal by `scripts/atlas-setup-macos.sh` (Homebrew deps + llama.cpp `LLAMA_METAL=1`), installed to `~/.atlas/macos/bin/llama-server-metal`, launched by `scripts/atlas-llama-macos.sh`.
+- **proxy / v3-service / geometric-lens / sandbox**: unchanged — they run in Docker exactly as on Linux, pointed at the host llama-server via the socat forwarder in `docker-compose.macos.yml`.
+- **Models**: 16 GB Macs use Q4_K_M (~5 GB) by default to fit the unified-memory budget; ≥24 GB Macs can run Q6_K like the Linux default.
+- **`atlas doctor`**: a `metal-native` check verifies the native binary exists, executes, and is listening on :8080.
 
-ATLAS_BACKEND=metal already triggers `atlas init` to refuse with a "V3.1.2 planned" message in V3.1.1 — better to block early than write a `.env` Docker can't honor.
+On Apple Silicon, `atlas init` writes `ATLAS_BACKEND=metal` and the macOS hybrid wiring rather than the Docker-GPU path (see the hybrid-metal branch in `atlas/cli/commands/init.py`). Bring the stack up with `docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d` after running the setup script.
 
 ### 8.5 K3s
 

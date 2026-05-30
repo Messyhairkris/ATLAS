@@ -88,7 +88,7 @@ Open models historically can't keep up with hosted ones. ATLAS gets there anyway
    - Runs both generated and existing test suites
 
 6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
-   - GPU-accelerated quantized inference (Q6_K / Q4_K_M) — NVIDIA CUDA, AMD ROCm, with Apple Metal and Intel SYCL on the roadmap
+   - GPU-accelerated quantized inference (Q6_K / Q4_K_M) — NVIDIA CUDA, AMD ROCm, Apple Metal (macOS hybrid), and Vulkan; Intel SYCL on the roadmap
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
@@ -110,18 +110,18 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA, V3.1.0+) or AMD (ROCm, V3.1.1). See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal, macOS hybrid); Vulkan covers most other GPUs. See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). |
 | Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) or Podman |
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
 
-Apple Silicon (Metal native install) and Intel Arc (SYCL) are on the V3.1.2+ roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
+Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest — see **[SETUP_MACOS.md](docs/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
 
 ---
 
 ## ⚠️ Known Limitations
 
-- **Linux-only Docker stack.** NVIDIA and AMD ROCm Docker paths both ship today. Apple Silicon (Metal native install) is V3.1.2 planned. Intel Arc / SYCL is roadmap.
+- **Linux Docker stack, plus a native macOS path.** NVIDIA, AMD ROCm, and Vulkan Docker paths ship today; Apple Silicon runs via the native macOS hybrid Metal path ([#32](https://github.com/itigges22/ATLAS/issues/32)). Intel Arc / SYCL is on the roadmap.
 - **9B model is not formally benchmarked yet.** V3.1.0 ships Qwen3.5-9B with the full V3 pipeline, but the canonical 74.6% LiveCodeBench score is from the 14B reference build. Formal 9B numbers land with V3.1.1. The 14B methodology and ablations live in [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw traces are on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can be inconsistent.** The model sometimes spends agent turns exploring an unfamiliar codebase before writing code. Reliability has improved on the 9B build since the V3.0 measurement; a fresh number lands with the V3.1.1 benchmark pass.
 - **Grammar-constrained decoding is slow.** Around 51 tok/s on llama-server.
@@ -132,10 +132,27 @@ Apple Silicon (Metal native install) and Intel Arc (SYCL) are on the V3.1.2+ roa
 
 **V3.1.0** - Current release. Bubbletea TUI as the canonical chat client (PC-062), `atlas init` first-run wizard (PC-054), `atlas doctor` install diagnostic (PC-053), `atlas tier` hardware-aware presets (PC-055), K3s deployment templates restored, ASA steering vectors auto-built during install (BiasBusters #4).
 
-**V3.1.1** - Next release.
-- OS support - macOS and Windows installers.
-- Expanded accelerator support - AMD ROCm via llama.cpp; Apple Metal once macOS lands.
-- Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
+**V3.1.1** - Broader hardware reach (landed on `main`).
+- AMD ROCm via llama.cpp — including RDNA4 / RX 9070 (gfx1200/gfx1201) and community-verified cards ([#26](https://github.com/itigges22/ATLAS/issues/26)).
+- Apple Silicon — native macOS hybrid Metal path: native llama-server for inference perf, Docker for the rest of the stack ([#32](https://github.com/itigges22/ATLAS/issues/32), see [SETUP_MACOS.md](docs/SETUP_MACOS.md)).
+- Vulkan universal fallback — one image covering AMD / Intel / Snapdragon / Apple-via-MoltenVK / CPU ([#114](https://github.com/itigges22/ATLAS/issues/114)).
+- Formal 9B benchmarks — LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B (in progress, [#28](https://github.com/itigges22/ATLAS/issues/28)).
+
+**V3.1.2** - Next point release: bring-your-own-model + cluster.
+- ASA per-model calibration parity ([#113](https://github.com/itigges22/ATLAS/issues/113)) and local Lens training pipeline ([#100](https://github.com/itigges22/ATLAS/issues/100)) — train ASA / Lens artifacts for non-default GGUFs.
+- Automated HuggingFace submission pipeline ([#102](https://github.com/itigges22/ATLAS/issues/102)).
+- ROCm on K3s / Kubernetes — `/dev/kfd` + `/dev/dri` hostPath mounts and `render`/`video` group membership in the Pod spec (the cluster equivalent of `docker-compose.rocm.yml`).
+
+**V3.2** - Next milestone: deeper code reasoning and planning.
+- Architecture-first planning phase — RPG-style plan-then-fill: plan at module scope, then implement at function scope ([#120](https://github.com/itigges22/ATLAS/issues/120)).
+- Structural code reasoning — call graph + reachability via tree-sitter, plus syntax-agnostic wavelet feature decomposition for multi-resolution "which files matter" retrieval ([#39](https://github.com/itigges22/ATLAS/issues/39)).
+- Reasoning with sampling — efficiency and quality gains ([#9](https://github.com/itigges22/ATLAS/issues/9)).
+
+**Backlog / help wanted**
+- Hardware: ARM64 multi-arch builds ([#115](https://github.com/itigges22/ATLAS/issues/115)), multi-GPU for larger models ([#34](https://github.com/itigges22/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27)).
+- Tooling: VS Code / JetBrains extension ([#35](https://github.com/itigges22/ATLAS/issues/35)).
+- Sandbox languages: Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29)), Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30)).
+- Architecture: model-agnostic platform ([#66](https://github.com/itigges22/ATLAS/issues/66)), SQLite over Redis ([#57](https://github.com/itigges22/ATLAS/issues/57)).
 
 ---
 

@@ -98,7 +98,7 @@ If you'd rather do each step manually, use Method 1 below.
 
 | Requirement | Details |
 |-------------|---------|
-| **GPU** | 16 GB+ VRAM. NVIDIA (CUDA) is the canonical path; AMD (ROCm) is supported in V3.1.1; Apple Silicon (Metal) is V3.1.2 planned; Intel Arc (SYCL) is roadmap. See [§ Supported GPUs](#supported-gpus). |
+| **GPU** | 16 GB+ VRAM. NVIDIA (CUDA) is the canonical path; AMD (ROCm) and Apple Silicon (Metal, macOS hybrid — see [SETUP_MACOS.md](SETUP_MACOS.md)) are both supported; Vulkan is the universal fallback; Intel Arc (SYCL) is roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
 | **Python 3.9+** | With pip |
 | **wget** | For downloading model weights |
@@ -685,7 +685,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 |---|---|---|---|---|
 | NVIDIA | CUDA | Shipping (V3.1.0+) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
 | AMD | ROCm / HIP | Shipping (V3.1.1) | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
-| Apple Silicon | Metal | V3.1.2 planned (native install, no Docker) | TBD | M3 Pro 18GB / M3 Max 36GB (target) |
+| Apple Silicon | Metal | Shipping (macOS hybrid: native llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
 | Intel Arc | SYCL | Roadmap | TBD | Arc A770 16GB (target) |
 
 `atlas tier` auto-detects across vendors and picks the largest-VRAM GPU. Override with `ATLAS_GPU_VENDOR=amd` or `ATLAS_GPU_INDEX=1` if you have multiple GPUs and want a specific one.
