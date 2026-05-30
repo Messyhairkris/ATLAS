@@ -70,7 +70,7 @@ ATLAS は、自分の GPU 上で動くコーディングアシスタントです
    - 生成テストと既存テストスイートの両方を実行
 
 6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 単一のコンシューマ GPU 上でのローカル LLM 推論。
-   - CUDA 加速の量子化推論 (Q6_K / Q4_K_M)
+   - GPU 加速の量子化推論 (Q6_K / Q4_K_M) — NVIDIA CUDA、AMD ROCm、Apple Metal (macOS ハイブリッド)、Vulkan に対応。Intel SYCL はロードマップ
    - トークンレベルの文法制約デコーディング
    - セルフ埋め込み（別モデル不要）
 
@@ -84,7 +84,7 @@ ATLAS は、自分の GPU 上で動くコーディングアシスタントです
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-ディストロを判定し (Ubuntu、Debian、RHEL、Fedora、Rocky、Alma)、Docker と nvidia-container-toolkit をインストール、モデル重みをダウンロード、ASA ステアリングベクトルをビルドしてスタックを起動します。所要時間は 10〜30 分程度、ほとんどがモデルダウンロードです。
+ディストロ (Ubuntu、Debian、RHEL、Fedora、Rocky、Alma) と GPU ベンダー (NVIDIA → nvidia-container-toolkit; AMD → ROCm デバイスパススルー) を判定し、適切なランタイムをインストール、モデル重みをダウンロード、ASA ステアリングベクトルをビルドしてスタックを起動します。所要時間は 10〜30 分程度、ほとんどがモデルダウンロードです。
 
 完了後、プロジェクトディレクトリで `atlas` を実行してください。
 
@@ -92,18 +92,18 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 | | |
 |---|---|
-| GPU | NVIDIA、VRAM 16GB 以上 (RTX 5060 Ti 16GB でテスト) |
-| ランタイム | Docker + nvidia-container-toolkit、または Podman |
+| GPU | VRAM 16GB 以上。NVIDIA (CUDA)、AMD (ROCm)、または Apple Silicon (Metal、macOS ハイブリッド)。その他大半の GPU は Vulkan でカバー。[SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus) を参照。 |
+| ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) または Podman |
 | Python | 3.9 以上 |
-| ディスク | 約 20GB (モデル重み + コンテナイメージ) |
+| ディスク | 約 20GB CUDA / 約 22GB ROCm (モデル重み + コンテナイメージ) |
 
-現状 NVIDIA のみテスト済みです。macOS、Windows、AMD ROCm は V3.1.1 のロードマップ項目。Docker Compose、ベアメタル、K3s の手動インストール手順とブートストラップフラグの一覧は **[SETUP.md](../ja/SETUP.md)** をご参照ください。
+Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-server + 残りは Docker — **[SETUP_MACOS.md](../../SETUP_MACOS.md)** を参照）でネイティブ動作します。Intel Arc (SYCL) はロードマップ上の項目です。Docker Compose、ベアメタル、K3s の手動インストール手順とブートストラップフラグの一覧は **[SETUP.md](../ja/SETUP.md)** をご参照ください。
 
 ---
 
 ## 既知の制限事項
 
-- **NVIDIA のみ。** NVIDIA GPU でテスト済みです。AMD ROCm と Apple Metal は V3.1.1 のロードマップ項目です。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA、AMD ROCm、Vulkan の Docker パスは現在提供中です。Apple Silicon はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ上の項目です。
 - **9B モデルはまだ正式にベンチマークされていません。** V3.1.0 は Qwen3.5-9B と完全な V3 パイプラインを同梱しますが、現在公開されている 74.6% LiveCodeBench スコアは 14B リファレンスビルドのものです。9B の正式数値は V3.1.1 で公開予定。14B のベンチ手法とアブレーションは [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md) に、生トレースは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) に公開しています。
 - **複雑な機能追加は不安定なことがあります。** 不慣れなコードベースを探索しすぎてコードを書き始めないことがあります。9B ビルド上では V3.0 計測時より改善していますが、最新の数値は V3.1.1 のベンチで更新予定です。
 - **文法制約デコーディングは遅め。** llama-server で約 51 tok/s。
@@ -114,10 +114,27 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 **V3.1.0** - 現在のリリース。Bubbletea TUI を公式チャットクライアントに採用 (PC-062)、`atlas init` 初回セットアップウィザード (PC-054)、`atlas doctor` 診断ツール (PC-053)、`atlas tier` ハードウェア対応プリセット (PC-055)、K3s デプロイテンプレートの復元、インストール時に自動構築される ASA ステアリングベクトル (BiasBusters #4)。
 
-**V3.1.1** - 次期リリース。
-- OS サポート - macOS と Windows のインストーラ
-- アクセラレータ拡張 - llama.cpp 経由の AMD ROCm、macOS 着地後の Apple Metal
-- 9B 正式ベンチマーク - Qwen3.5-9B で LiveCodeBench、GPQA Diamond、SciCode
+**V3.1.1** - ハードウェア対応の拡大（`main` に着地済み）。
+- llama.cpp 経由の AMD ROCm — RDNA4 / RX 9070 (gfx1200/gfx1201) およびコミュニティ検証済みカードを含む ([#26](https://github.com/itigges22/ATLAS/issues/26))。
+- Apple Silicon — ネイティブ macOS ハイブリッド Metal パス: 推論性能のためにネイティブ llama-server を、スタックの残りには Docker を使用 ([#32](https://github.com/itigges22/ATLAS/issues/32)、[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照)。
+- Vulkan ユニバーサルフォールバック — AMD / Intel / Snapdragon / MoltenVK 経由の Apple / CPU を 1 つのイメージでカバー ([#114](https://github.com/itigges22/ATLAS/issues/114))。
+- 9B 正式ベンチマーク — Qwen3.5-9B での LiveCodeBench、GPQA Diamond、SciCode（進行中、[#28](https://github.com/itigges22/ATLAS/issues/28)）。
+
+**V3.1.2** - 次期ポイントリリース: 持ち込みモデル + クラスター。
+- ASA のモデル別キャリブレーション同等化 ([#113](https://github.com/itigges22/ATLAS/issues/113)) とローカル Lens トレーニングパイプライン ([#100](https://github.com/itigges22/ATLAS/issues/100)) — デフォルト以外の GGUF 向けに ASA / Lens アーティファクトをトレーニング。
+- 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/itigges22/ATLAS/issues/102))。
+- K3s / Kubernetes 上の ROCm — Pod スペックでの `/dev/kfd` + `/dev/dri` の hostPath マウントと `render` / `video` グループ所属（`docker-compose.rocm.yml` のクラスター版に相当）。
+
+**V3.2** - 次のマイルストーン: より深いコード推論とプランニング。
+- アーキテクチャ優先のプランニングフェーズ — RPG スタイルのプラン先行・後埋め: モジュールスコープでプランを立ててから関数スコープで実装 ([#120](https://github.com/itigges22/ATLAS/issues/120))。
+- 構造的コード推論 — tree-sitter による呼び出しグラフ + 到達可能性に加え、「どのファイルが重要か」を多解像度で検索する構文非依存のウェーブレット特徴分解 ([#39](https://github.com/itigges22/ATLAS/issues/39))。
+- サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/itigges22/ATLAS/issues/9))。
+
+**バックログ / 協力者募集**
+- ハードウェア: ARM64 マルチアーキテクチャビルド ([#115](https://github.com/itigges22/ATLAS/issues/115))、大規模モデル向けのマルチ GPU ([#34](https://github.com/itigges22/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27))。
+- ツール: VS Code / JetBrains 拡張機能 ([#35](https://github.com/itigges22/ATLAS/issues/35))。
+- サンドボックス言語: Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30))。
+- アーキテクチャ: モデル非依存プラットフォーム ([#66](https://github.com/itigges22/ATLAS/issues/66))、Redis に代わる SQLite ([#57](https://github.com/itigges22/ATLAS/issues/57))。
 
 ---
 

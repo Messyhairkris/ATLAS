@@ -13,11 +13,11 @@
 
 | 要求 | 详情 |
 |------|------|
-| **NVIDIA GPU** | 16GB+ 显存（在 RTX 5060 Ti 16GB 上测试通过） |
-| **NVIDIA 驱动** | 已安装专有驱动（`nvidia-smi` 应能显示你的 GPU） |
+| **GPU** | 16GB+ 显存。NVIDIA (CUDA) 是标准路径；AMD (ROCm) 和 Apple Silicon（Metal，macOS 混合方案 - 见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）均受支持；Vulkan 是通用回退方案；Intel Arc (SYCL) 在路线图上。参见 [§ 支持的 GPU](#支持的-gpu)。 |
+| **GPU 驱动** | NVIDIA：专有驱动（`nvidia-smi` 应能显示你的 GPU）。AMD：`amdgpu-dkms` 内核驱动（`/dev/kfd` 必须存在；`rocm-smi` 应能显示你的 GPU）。 |
 | **Python 3.9+** | 含 pip |
 | **wget** | 用于下载模型权重 |
-| **模型权重** | 来自 HuggingFace 的 Qwen3.5-9B-Q6_K.gguf（约 7GB） |
+| **模型权重** | 来自 HuggingFace 的 Qwen3.5-9B-Q6_K.gguf（约 7GB）。Apple Silicon 显存 ≤16GB：改用 Q4_K_M（约 5GB）。 |
 
 ### 验证 GPU
 
@@ -334,10 +334,16 @@ scripts/verify-install.sh
 
 ### 支持的 GPU
 
-任何具有 16GB+ 显存和 CUDA 支持的 NVIDIA GPU。已测试：
-- RTX 5060 Ti 16GB（主要开发用 GPU）
+任何具有 16GB+ 显存、且后端受 llama.cpp 支持的 GPU：
 
-AMD 和 Intel GPU 尚未测试。llama.cpp 支持 ROCm 和其他后端 - ROCm 支持是 V3.1 的优先事项。
+| 厂商 | 后端 | 状态 | 已测试显卡 |
+|---|---|---|---|
+| NVIDIA | CUDA | 已发布 (V3.1.0+) | RTX 5060 Ti 16GB（主要开发用 GPU） |
+| AMD | ROCm / HIP | 已发布 (V3.1.1) | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
+| Apple Silicon | Metal | 已发布（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/itigges22/ATLAS/issues/32)） | M2 Pro 32GB（已验证）；M3/M4（目标） |
+| Intel Arc | SYCL | 路线图 | Arc A770 16GB（目标） |
+
+Vulkan 是覆盖大多数其他 GPU 的通用回退方案。Apple Silicon 详见 [SETUP_MACOS.md](../../SETUP_MACOS.md)。
 
 ---
 

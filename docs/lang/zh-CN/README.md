@@ -70,7 +70,7 @@ ATLAS 是一个跑在你自己 GPU 上的编程助手。你把它指向一个项
    - 同时运行自生成测试和已有测试套件
 
 6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
-   - CUDA 加速的量化推理 (Q6_K / Q4_K_M)
+   - GPU 加速的量化推理 (Q6_K / Q4_K_M) - NVIDIA CUDA、AMD ROCm、Apple Metal（macOS 混合方案）和 Vulkan；Intel SYCL 在路线图上
    - token 级语法约束解码
    - 自嵌入（无需额外模型）
 
@@ -84,7 +84,7 @@ ATLAS 是一个跑在你自己 GPU 上的编程助手。你把它指向一个项
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-脚本会自动识别发行版（Ubuntu、Debian、RHEL、Fedora、Rocky、Alma），安装 Docker 和 nvidia-container-toolkit，下载模型权重，构建 ASA 操控向量，并启动整个栈。预计 10–30 分钟，大部分时间花在模型下载上。
+脚本会自动识别发行版（Ubuntu、Debian、RHEL、Fedora、Rocky、Alma）和 GPU 厂商（NVIDIA → nvidia-container-toolkit；AMD → ROCm 设备直通），安装相应的运行时，下载模型权重，构建 ASA 操控向量，并启动整个栈。预计 10–30 分钟，大部分时间花在模型下载上。
 
 完成后，在任意项目目录中执行 `atlas`。
 
@@ -92,18 +92,18 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 | | |
 |---|---|
-| GPU | NVIDIA，显存 16GB 以上（在 RTX 5060 Ti 16GB 上测试） |
-| 运行时 | Docker + nvidia-container-toolkit，或 Podman |
+| GPU | 显存 16GB 以上。NVIDIA (CUDA)、AMD (ROCm) 或 Apple Silicon (Metal，macOS 混合方案)；其余大多数 GPU 由 Vulkan 覆盖。参见 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。 |
+| 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可）或 Podman |
 | Python | 3.9 及以上 |
-| 磁盘 | 约 20GB（模型权重 + 容器镜像） |
+| 磁盘 | 约 20GB CUDA / 约 22GB ROCm（模型权重 + 容器镜像） |
 
-目前只在 NVIDIA 上测试。macOS、Windows 和 AMD ROCm 列在 V3.1.1 路线图。完整的手动安装路径（Docker Compose、裸机、K3s）和 bootstrap 参数请参见 **[SETUP.md](../../SETUP.md)**。
+Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../SETUP.md)**。
 
 ---
 
 ## 已知限制
 
-- **仅在 NVIDIA 上测试。** 已在 NVIDIA GPU 上测试。AMD ROCm 与 Apple Metal 列入 V3.1.1 路线图。
+- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA、AMD ROCm 和 Vulkan 的 Docker 路径今天即可使用；Apple Silicon 通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/itigges22/ATLAS/issues/32))。Intel Arc / SYCL 在路线图上。
 - **9B 模型尚未正式基准测试。** V3.1.0 搭载 Qwen3.5-9B 与完整 V3 Pipeline，但目前公开的 74.6% LiveCodeBench 分数来自 14B 参考构建。9B 的正式数据将随 V3.1.1 一起放出。14B 的方法论与消融实验见 [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md)；原始 trace 发布在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)。
 - **复杂功能添加可能不稳定。** 模型有时会在陌生代码库上花掉几轮在探索而不是写代码。相对 V3.0 测量时，9B 构建的稳定性已有提升；新的数据会随 V3.1.1 基准更新。
 - **语法约束解码速度偏慢。** llama-server 上约 51 tok/s。
@@ -114,10 +114,27 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 **V3.1.0** - 当前版本。Bubbletea TUI 成为官方聊天客户端 (PC-062)、`atlas init` 首次运行向导 (PC-054)、`atlas doctor` 安装诊断 (PC-053)、`atlas tier` 硬件感知预设 (PC-055)、K3s 部署模板恢复、安装时自动构建的 ASA 操控向量 (BiasBusters #4)。
 
-**V3.1.1** - 下一版本。
-- 操作系统支持 - macOS 与 Windows 安装器
-- 加速器扩展 - 通过 llama.cpp 的 AMD ROCm；macOS 着陆后的 Apple Metal
-- 9B 正式基准测试 - 在 Qwen3.5-9B 上跑 LiveCodeBench、GPQA Diamond、SciCode
+**V3.1.1** - 更广的硬件覆盖（已合并到 `main`）。
+- 通过 llama.cpp 支持 AMD ROCm - 包括 RDNA4 / RX 9070 (gfx1200/gfx1201) 以及社区验证过的显卡 ([#26](https://github.com/itigges22/ATLAS/issues/26))。
+- Apple Silicon - 原生 macOS 混合 Metal 方案：用原生 llama-server 获得推理性能，其余组件用 Docker ([#32](https://github.com/itigges22/ATLAS/issues/32)，见 [SETUP_MACOS.md](../../SETUP_MACOS.md))。
+- Vulkan 通用回退 - 单个镜像即可覆盖 AMD / Intel / Snapdragon / 通过 MoltenVK 的 Apple / CPU ([#114](https://github.com/itigges22/ATLAS/issues/114))。
+- 9B 正式基准测试 - 在 Qwen3.5-9B 上跑 LiveCodeBench、GPQA Diamond、SciCode（进行中，[#28](https://github.com/itigges22/ATLAS/issues/28)）。
+
+**V3.1.2** - 下一个小版本：自带模型 + 集群。
+- ASA 逐模型校准对齐 ([#113](https://github.com/itigges22/ATLAS/issues/113)) 与本地 Lens 训练流水线 ([#100](https://github.com/itigges22/ATLAS/issues/100)) - 为非默认 GGUF 训练 ASA / Lens 工件。
+- 自动化 HuggingFace 提交流水线 ([#102](https://github.com/itigges22/ATLAS/issues/102))。
+- ROCm 跑在 K3s / Kubernetes 上 - 在 Pod 规格中挂载 `/dev/kfd` + `/dev/dri` hostPath 并加入 `render`/`video` 组（相当于集群版的 `docker-compose.rocm.yml`）。
+
+**V3.2** - 下一个里程碑：更深入的代码推理与规划。
+- 架构优先的规划阶段 - RPG 式的先规划后填充：在模块尺度规划，再在函数尺度实现 ([#120](https://github.com/itigges22/ATLAS/issues/120))。
+- 结构化代码推理 - 通过 tree-sitter 构建调用图 + 可达性分析，外加语法无关的小波特征分解，实现多分辨率的"哪些文件重要"检索 ([#39](https://github.com/itigges22/ATLAS/issues/39))。
+- 带采样的推理 - 兼顾效率与质量提升 ([#9](https://github.com/itigges22/ATLAS/issues/9))。
+
+**待办 / 欢迎贡献**
+- 硬件：ARM64 多架构构建 ([#115](https://github.com/itigges22/ATLAS/issues/115))、面向更大模型的多 GPU ([#34](https://github.com/itigges22/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27))。
+- 工具链：VS Code / JetBrains 扩展 ([#35](https://github.com/itigges22/ATLAS/issues/35))。
+- 沙箱语言：Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30))。
+- 架构：模型无关的平台 ([#66](https://github.com/itigges22/ATLAS/issues/66))、用 SQLite 替代 Redis ([#57](https://github.com/itigges22/ATLAS/issues/57))。
 
 ---
 

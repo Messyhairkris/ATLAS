@@ -334,10 +334,16 @@ scripts/verify-install.sh
 
 ### 対応 GPU
 
-16GB 以上の VRAM と CUDA サポートを持つ任意の NVIDIA GPU。テスト済み:
-- RTX 5060 Ti 16GB (主要開発 GPU)
+8GB 以上の VRAM と llama.cpp 対応バックエンドを持つ任意の GPU:
 
-AMD および Intel GPU は未テストです。llama.cpp は ROCm やその他のバックエンドをサポートしています -- ROCm サポートは V3.1 の優先事項です。
+| ベンダー | バックエンド | 状況 | テスト済みカード |
+|---|---|---|---|
+| NVIDIA | CUDA | 提供中 (V3.1.0+) | RTX 5060 Ti 16GB (主要開発) |
+| AMD | ROCm / HIP | 提供中 (V3.1.1) | RX 7900 XTX (コミュニティスモークテスト、[#26](https://github.com/itigges22/ATLAS/issues/26)) |
+| Apple Silicon | Metal | 提供中 (macOS ハイブリッド: ネイティブ llama-server + Docker、[#32](https://github.com/itigges22/ATLAS/issues/32)) | M2 Pro 32GB (検証済み)、M3/M4 (対象) |
+| Intel Arc | SYCL | ロードマップ | Arc A770 16GB (対象) |
+
+Vulkan は、ベンダーのネイティブバックエンドがハードウェア向けにパッケージされていない場合のユニバーサルフォールバックです (AMD / Intel / Snapdragon / MoltenVK 経由の Apple / CPU)。
 
 ---
 

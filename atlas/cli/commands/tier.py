@@ -595,7 +595,7 @@ TIERS: List[TierProfile] = [
         kv_cache_k="N/A", kv_cache_v="N/A",
         min_system_ram_gb=0, min_cpu_cores=0, min_disk_gb=0,
         notes="Supported backends: NVIDIA (CUDA), AMD (ROCm — V3.1.1), "
-              "Apple Silicon (Metal — V3.1.2 planned), Intel Arc (SYCL — roadmap).",
+              "Apple Silicon (Metal — macOS hybrid, #32), Intel Arc (SYCL — roadmap).",
     ),
     TierProfile(
         tier="small",

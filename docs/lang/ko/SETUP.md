@@ -334,10 +334,16 @@ scripts/verify-install.sh
 
 ### 지원 GPU
 
-16GB 이상의 VRAM과 CUDA를 지원하는 모든 NVIDIA GPU에서 사용 가능합니다. 테스트 완료:
-- RTX 5060 Ti 16GB (주 개발 GPU)
+16GB 이상의 VRAM과 llama.cpp 백엔드를 지원하는 GPU에서 사용 가능합니다.
 
-AMD 및 Intel GPU는 아직 테스트되지 않았습니다. llama.cpp는 ROCm 및 기타 백엔드를 지원하며, ROCm 지원은 V3.1의 우선 과제입니다.
+| 벤더 | 백엔드 | 상태 | 테스트 카드 |
+|------|--------|------|------------|
+| NVIDIA | CUDA | 제공 중 (V3.1.0+) | RTX 5060 Ti 16GB (주 개발 GPU) |
+| AMD | ROCm / HIP | 제공 중 (V3.1.1) | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| Apple Silicon | Metal | 제공 중 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | M2 Pro 32GB (검증됨); M3/M4 (목표) |
+| Intel Arc | SYCL | 로드맵 | Arc A770 16GB (목표) |
+
+AMD ROCm은 단독 Docker로 동작하며 (`--device=/dev/kfd --device=/dev/dri` 패스스루), Apple Silicon은 macOS 하이브리드 Metal 경로 ([SETUP_MACOS.md](../../SETUP_MACOS.md))를 통해 동작합니다. 그 외 대부분의 GPU는 Vulkan 범용 폴백으로 커버됩니다. 벤더별 백엔드 설정과 gfx 타깃 등 전체 내용은 영어 원본 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)를 참조하십시오.
 
 ---
 

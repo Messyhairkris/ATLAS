@@ -138,7 +138,7 @@ def _choose(prompt: str, choices: List[str], default: str,
 _BACKEND_BY_VENDOR = {
     "nvidia": ("cuda",  "CUDA",          True),   # supported in V3.1.0
     "amd":    ("rocm",  "ROCm",          True),   # supported in V3.1.1
-    "apple":  ("metal", "Metal",         True),   # supported in V3.1.2 (hybrid: native llama-server + docker for the rest, #32)
+    "apple":  ("metal", "Metal",         True),   # supported (hybrid: native llama-server + docker for the rest, #32)
     "intel":  ("sycl",  "SYCL",          False),  # roadmap
 }
 
@@ -292,9 +292,10 @@ def _step_select_model(profile: tier.TierProfile,
     `docker compose up -d` would fail at llama-server load. Better to
     refuse here than write a broken .env.
 
-    V3.1.1 addition: refuse on unsupported backends (Metal, SYCL) — the
-    Dockerfile for that backend hasn't shipped yet, so `docker compose up`
-    would fail at image pull. Better to refuse with a clear message.
+    V3.1.1 addition: refuse on unsupported backends (SYCL, and metal on
+    non-macOS hosts) — the Dockerfile for that backend hasn't shipped, so
+    `docker compose up` would fail at image pull. Better to refuse with a
+    clear message. Apple Silicon metal is handled by the hybrid branch below.
 
     #115 addition: arch-aware backend filtering. AMD ROCm has no aarch64
     release, so on arm64 hosts with an AMD GPU we treat rocm as
@@ -304,7 +305,7 @@ def _step_select_model(profile: tier.TierProfile,
                     f"ATLAS requires a CUDA, ROCm, or Metal-capable GPU for "
                     f"llama.cpp inference.{RESET if color else ''}")
         _safe_print("  Supported: NVIDIA (CUDA), AMD (ROCm — V3.1.1), Apple "
-                    "Silicon (Metal — V3.1.2 planned). See SETUP.md. The "
+                    "Silicon (Metal — macOS hybrid, #32). See SETUP.md. The "
                     "wizard refuses here rather than write a .env that won't boot.")
         return None
 
@@ -546,7 +547,7 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         lines.append("")
     elif backend_id == "metal":
         lines.append(
-            "# NOTE (Metal, V3.1.2 / #32): hybrid Mac path — native llama-server "
+            "# NOTE (Metal, #32): hybrid Mac path — native llama-server "
             "+ Docker for everything else.")
         lines.append(
             "# Bring the stack up in TWO steps:")
