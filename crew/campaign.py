@@ -96,6 +96,7 @@ class Campaign:
                         "contract": t["contract"], "api": t["api"],
                         "hidden_tests": t.get("hidden_tests", []),
                         "depends": list(t.get("depends", [])),
+                        "uses": list(t.get("uses", [])),
                         "instructions": t.get("instructions", ""),
                         "state": WAITING, "attempts": 0, "job_ids": [],
                         "requests": 0, "tokens": 0, "seconds": 0.0,
@@ -107,6 +108,7 @@ class Campaign:
                             "contract": t["contract"],
                             "module": t["module"],
                             "depends": [t["id"]],
+                            "uses": list(t.get("uses", [])),
                             "min_tests": int(t.get("min_tests", 6)),
                             "instructions": t.get("test_instructions", ""),
                             "state": WAITING, "attempts": 0, "job_ids": [],
@@ -144,6 +146,15 @@ class Campaign:
             walk(dep)
         if task["kind"] == "tests":
             paths.append(str(self.workspace / task["module"]))
+        # Modules accepted in an EARLIER campaign and already in the workspace.
+        # `depends` cannot say this - it means "a task here that must finish
+        # first" - and a module that is already accepted gates nothing.
+        for name in task.get("uses", []):
+            path = self.workspace / name
+            if not path.is_file():
+                raise CrewError(f"task {task['id']} uses {name}, which is not in "
+                                f"the workspace at {path}")
+            paths.append(str(path))
         return sorted(set(paths))
 
     # -- reporting -----------------------------------------------------------------

@@ -1,0 +1,58 @@
+{
+  "name": "tts-profiles",
+  "goal": "The headsets VtoT remembers: several devices, each with its own volume set and its own lock, and enough memory to prefer the one Kris used last and to know when a paired Bluetooth headset is worth asking Windows for again. Kris asked for it after hearing the first version speak: 'folks might hook other types of headsets, wired and bluetooth, so the settings should be able to hold a few varieties and volume sets and locks. It would be nice to be able to reconnect a previously paired headset as well.' The module builds on devices.py, which this crew wrote and had accepted yesterday.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 60,
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Signal": {
+      "author": "Qwen",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "profiles",
+      "team": "Signal",
+      "module": "profiles.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_profiles.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_profiles.py"
+      ],
+      "api": [
+        "LINKS",
+        "PURPOSES",
+        "BLUETOOTH_WORDS",
+        "WIRED_WORDS",
+        "RECONNECT_COOLDOWN_S",
+        "DEFAULT_SPEECH",
+        "DEFAULT_ALERT",
+        "classify_link",
+        "new_profile",
+        "volume_for",
+        "set_volume",
+        "set_lock",
+        "remember",
+        "known",
+        "find",
+        "present",
+        "missing",
+        "prefer",
+        "reconnect_plan",
+        "dump",
+        "load"
+      ],
+      "depends": [],
+      "uses": [
+        "devices.py"
+      ],
+      "min_tests": 12,
+      "instructions": "You MUST import devices.py (already accepted, in your workspace) and use its classify and clamp_volume rather than repeating the device names or the volume ceilings. Two rules matter more than the rest: a locked profile's volumes never change, no matter what is asked; and a profile is a plain dict that survives being written to a settings file and read back, so nothing clever - no classes, no tuples, no objects that JSON cannot hold. Every function that changes a profile returns a new dict and leaves the one it was given exactly as it was.",
+      "test_instructions": "Prove three things above all: that a lock actually refuses a volume change, that re-plugging a remembered headset keeps its volumes and its lock while updating only when it was last used, and that reconnect_plan refuses to retry inside the cooldown and reports the seconds left. Also cover a settings file a human has edited badly: a volume of 900, a missing key, an entry with no name."
+    }
+  ],
+  "escalation_comment": "Zero for this run: the Claude CLI is not reachable from this session, so an escalation falls back to Kimi, the one expensive model in the pool. The first run's failure was my contract wording, which I have fixed, so there is nothing for a senior to add."
+}

@@ -645,6 +645,42 @@ class CampaignTests(CrewTestCase):
         self.assertEqual([pathlib.Path(p).name for p in paths],
                          ["one.py", "two.py"])
 
+    def test_a_task_can_build_on_a_module_accepted_earlier(self):
+        """profiles.py had to import devices.py, accepted in a different campaign
+        and already in the workspace. `depends` cannot say that - it means "a task
+        here that must finish first" - so `uses` does."""
+        from crew.campaign import Campaign
+
+        spec = self._spec()
+        spec["tasks"][0]["uses"] = ["devices.py"]
+        c = Campaign(spec, cfg=self.cfg, crew=self.crew([]), quiet=True)
+        (c.workspace / "devices.py").write_text("X = 1\n", encoding="utf-8")
+        names = [pathlib.Path(p).name for p in c._module_paths(c.tasks["one"])]
+        self.assertEqual(names, ["devices.py"])
+        # the tester gets it too, or every test fails on the import line
+        names = [pathlib.Path(p).name for p in c._module_paths(c.tasks["one-tests"])]
+        self.assertEqual(names, ["devices.py", "one.py"])
+
+    def test_using_an_earlier_module_does_not_delay_the_start(self):
+        from crew.campaign import Campaign
+
+        spec = self._spec()
+        spec["tasks"][0]["uses"] = ["devices.py"]
+        c = Campaign(spec, cfg=self.cfg, crew=self.crew([]), quiet=True)
+        (c.workspace / "devices.py").write_text("X = 1\n", encoding="utf-8")
+        self.assertEqual([t["id"] for t in c._ready()], ["one"])
+
+    def test_a_missing_earlier_module_is_refused_loudly(self):
+        """Quietly handing the author nothing would look like the model failing."""
+        from crew.campaign import Campaign
+        from crew.config import CrewError
+
+        spec = self._spec()
+        spec["tasks"][0]["uses"] = ["not_there.py"]
+        c = Campaign(spec, cfg=self.cfg, crew=self.crew([]), quiet=True)
+        with self.assertRaises(CrewError):
+            c._module_paths(c.tasks["one"])
+
     def test_the_budget_and_the_deadline_both_stop_new_work(self):
         from crew.campaign import Campaign
         spec = self._spec()
