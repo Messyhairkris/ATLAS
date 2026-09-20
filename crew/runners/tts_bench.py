@@ -79,17 +79,21 @@ class SpeechWorker(threading.Thread):
 
     # -- the thread ---------------------------------------------------------------
     def run(self) -> None:
-        import comtypes
-        import comtypes.client as cc
-        comtypes.CoInitialize()
+        # The import lives inside the try: on Kris's first launch comtypes was
+        # missing and the thread died with a console traceback while the window
+        # sat there looking fine.
         try:
+            import comtypes
+            import comtypes.client as cc
+            comtypes.CoInitialize()
             self.voice = cc.CreateObject("SAPI.SpVoice")
             self.tokens = self.voice.GetAudioOutputs()
             self.results.put({"event": "engine_ready",
                               "devices": self._devices()})
         except Exception as exc:                            # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
-            self.results.put({"event": "engine_failed", "detail": self.error})
+            self.results.put({"event": "engine_failed", "detail": self.error,
+                              "python": sys.executable})
             return
         while True:
             job = self.jobs.get()
@@ -176,6 +180,7 @@ class Bench:
         self.session_device = None      # locked once chosen: switching wedges BT
         self.pending_jobs = {}
         self.primed = None
+        self.wedged = False
         self.job_seq = 0
         self.queue = None
 
@@ -242,6 +247,7 @@ class Bench:
         self._button(row, "check the engine out loud", self.self_check)
         self._button(row, "prove audio is produced", self.prove_audio)
         self._button(row, "run the whole demo", self.run_demo)
+        self._button(row, "restart the speech engine", self.restart_engine)
         self.speaking = self._label(act, "", fg=WARN, font=("Segoe UI", 10, "bold"))
         self.speaking.pack(anchor="w", pady=(6, 0))
 
@@ -264,6 +270,12 @@ class Bench:
                       command=lambda _v: self.refresh_devices()).pack(side="left")
         self.volume_note = self._label(row, "", fg=DIM)
         self.volume_note.pack(side="left", padx=8)
+        pick = self.tk.Frame(dev, bg=BG)
+        pick.pack(fill="x", pady=(6, 0))
+        self._label(pick, "speak through:", fg=DIM).pack(side="left", padx=(0, 8))
+        self.override = self.tk.IntVar(value=-1)
+        self.override_row = self.tk.Frame(pick, bg=BG)
+        self.override_row.pack(side="left")
         self.device_rows = self.tk.Frame(dev, bg=BG)
         self.device_rows.pack(fill="x", pady=(6, 0))
         self.devices_box = self._mono(dev, 5)
@@ -360,6 +372,50 @@ class Bench:
                                   "then a COM error). The bench keeps speaking on "
                                   f"device {self.session_device}.\n")
 
+    def build_override_choice(self):
+        """Kris's headset has ONE speaker and ONE microphone: its "Stereo"
+        endpoint is firmware copied from a two-ear headset. He chose hands-free,
+        so that is what the bench defaults to - the policy's own preference is
+        still shown, and still selectable, so the two can be compared."""
+        for child in self.override_row.winfo_children():
+            child.destroy()
+        self.tk.Radiobutton(self.override_row, text="the policy's choice",
+                            value=-1, variable=self.override, bg=BG, fg=FG,
+                            selectcolor=PANEL, activebackground=BG,
+                            activeforeground=TEST_COLOR,
+                            command=self.refresh_devices).pack(side="left",
+                                                               padx=(0, 10))
+        working = None
+        for dev in self.devices:
+            low = dev["name"].lower()
+            warn = ""
+            if "hands-free" in low or "hands free" in low:
+                # Measured: speaks once, then the second utterance never returns.
+                warn = " (wedges after one)"
+            if "stereo" in low:
+                working = dev["index"]
+            short = dev["name"].split("(")[0].strip()[:16]
+            self.tk.Radiobutton(self.override_row,
+                                text=f"[{dev['index']}] {short}{warn}",
+                                value=dev["index"], variable=self.override, bg=BG,
+                                fg=BAD if warn else FG, selectcolor=PANEL,
+                                activebackground=BG, activeforeground=TEST_COLOR,
+                                command=self.refresh_devices).pack(side="left",
+                                                                    padx=(0, 10))
+        if working is not None:
+            self.override.set(working)
+
+    def chosen(self):
+        """(index, name) actually used: the override when set, else the policy."""
+        forced = self.override.get()
+        for dev in self.devices:
+            if dev["index"] == forced:
+                return dev["index"], dev["name"]
+        result = self.decision()
+        if result and result["device"]:
+            return result["device"]["index"], result["device"]["name"]
+        return -1, ""
+
     def build_device_buttons(self):
         for child in self.device_rows.winfo_children():
             child.destroy()
@@ -383,10 +439,9 @@ class Bench:
         the sentence is swallowed. Priming pays that cost where nobody is waiting.
         """
         if index < 0:
-            result = self.decision()
-            if not (result and result["device"]):
+            index = self.chosen()[0]
+            if index < 0:
                 return
-            index = result["device"]["index"]
         self.primed = index
         self.log(f"waking device [{index}] quietly, so your first press is not the "
                  f"one that waits for Bluetooth", DIM)
@@ -394,6 +449,10 @@ class Bench:
                            volume=0, device="(priming, silent)")
 
     def speak_on(self, index: int, name: str, text: str) -> None:
+        if self.wedged:
+            self.log("the speech engine is stuck on the last utterance; press "
+                     "'restart the speech engine' first", WARN)
+            return
         d = self.mods.get("devices")
         volume = d.clamp_volume(self.volume.get()) if d else 45
         if self.primed != index:
@@ -415,13 +474,47 @@ class Bench:
         if not job:
             return
         waited = time.time() - job["started"]
-        self.log(f"!! {job['name']} has not answered in {waited:.0f}s. This "
-                 f"endpoint is not usable for speech right now - pick another "
-                 f"device button. (Measured before: the hands-free endpoint "
-                 f"blocked for 109s.)", BAD)
+        self.log(f"!! {job['name']} has not answered in {waited:.0f}s, so the "
+                 f"speech engine is stuck inside Windows and nothing else can be "
+                 f"spoken until it is restarted.", BAD)
+        self.log("   measured on this headset: the Hands-Free endpoint speaks "
+                 "ONCE and then never returns. The Stereo endpoint answers in "
+                 "1.72s every time.", DIM)
+        self.log("   press 'restart the speech engine', then pick a different "
+                 "endpoint above.", WARN)
         self.speaking.config(text=f"{job['name']} is not responding "
-                                 f"({waited:.0f}s) - try another device", fg=BAD)
+                                 f"({waited:.0f}s) - restart the engine", fg=BAD)
         self.pending_jobs.pop(job_id, None)
+        self.wedges = getattr(self, "wedges", 0) + 1
+        if self.wedges > 1:
+            self.log("   this is the second time. A Bluetooth headset has ONE "
+                     "radio and carries ONE profile at a time, so a stuck "
+                     "hands-free stream holds the device even for the endpoint "
+                     "that works. Turn the headset off and on again, then restart "
+                     "the engine.", BAD)
+        self.wedged = True
+
+    def restart_engine(self) -> None:
+        """Abandon a wedged engine and start a fresh one.
+
+        A COM call blocked inside a Bluetooth driver cannot be cancelled or
+        killed from Python, so the old worker thread is left where it is (it is a
+        daemon, and it dies with the process) and a new one takes over. That is
+        the honest way to recover: say what was abandoned rather than pretend it
+        was stopped.
+        """
+        if self.pending_jobs:
+            self.log(f"abandoning {len(self.pending_jobs)} stuck job(s) - the old "
+                     f"engine thread is still blocked inside Windows and will be "
+                     f"left to die with this window", WARN)
+        self.pending_jobs.clear()
+        self.primed = None
+        self.wedged = False
+        self.results = queuelib.Queue()
+        self.worker = SpeechWorker(self.results)
+        self.manual_restart = True
+        self.worker.start()
+        self.log("started a fresh speech engine", TEST_COLOR)
 
     def speak_now(self):
         text = self.text_in.get().strip()
@@ -442,20 +535,20 @@ class Bench:
             self.log(f"devices.py says speech is OFF: {why}. A real VtoT would "
                      f"play one tone here and stay silent.", WARN)
             return
-        index = (self.session_device if self.session_device is not None
-                 else result["device"]["index"])
+        index, name = self.chosen()
+        if index < 0:
+            self.log("no device to speak through", BAD)
+            return
         self.log(f"level {level}: {text!r} -> {spoken!r}")
-        self.speak_on(index, result["device"]["name"], spoken)
+        self.speak_on(index, name, spoken)
 
     def self_check(self):
         if not self.devices:
             self.log("the engine has not reported any devices yet", WARN)
             return
-        result = self.decision()
-        index = (result["device"]["index"] if result and result["device"]
-                 else self.devices[0]["index"])
-        name = (result["device"]["name"] if result and result["device"]
-                else self.devices[0]["name"])
+        index, name = self.chosen()
+        if index < 0:
+            index, name = self.devices[0]["index"], self.devices[0]["name"]
         self.log("engine check: you should hear a short sentence now", TEST_COLOR)
         self.speak_on(index, name, "Bench ready. If you can hear this, the crew's "
                                    "device policy and the speech engine are both "
@@ -479,7 +572,10 @@ class Bench:
             self.log(f"the demo cannot speak: {result['reason'] if result else '?'}",
                      WARN)
             return
-        index, name = result["device"]["index"], result["device"]["name"]
+        index, name = self.chosen()
+        if index < 0:
+            self.log("no device to speak through", BAD)
+            return
         self.log("=== demo: four modules, one feature ===", TEST_COLOR)
         self.log(f"1. devices.py chose {name} because {result['reason']}")
         lines = [("normal", "Heading two applied."),
@@ -586,9 +682,10 @@ class Bench:
             self.log(f"devices.py says speech is OFF: "
                      f"{result['reason'] if result else '?'}", WARN)
             return
-        index = (self.session_device if self.session_device is not None
-                 else result["device"]["index"])
-        name = result["device"]["name"]
+        index, name = self.chosen()
+        if index < 0:
+            self.log("no device to speak through", BAD)
+            return
         # The contract's rule, exercised for real: exactly False stops the run.
         while q.pending:
             utt = q.next_utterance()
@@ -623,17 +720,27 @@ class Bench:
         event = msg.get("event")
         if event == "engine_ready":
             self.devices = msg["devices"]
+            self.build_override_choice()
             self.build_device_buttons()
             self.refresh_devices()
             self.log(f"speech engine ready, {len(self.devices)} output device(s) "
                      f"visible", OK)
             self.prime()
+            if getattr(self, "manual_restart", False):
+                self.manual_restart = False
+                self.log("engine replaced; press SPEAK THIS NOW when ready",
+                         TEST_COLOR)
+                return
             self.log("press SPEAK THIS NOW, or 'check the engine out loud'",
                      TEST_COLOR)
             self.self_check()
         elif event == "engine_failed":
             self.log(f"the Windows speech engine did not start: {msg['detail']}",
                      BAD)
+            self.log(f"   this interpreter: {msg.get('python', sys.executable)}",
+                     DIM)
+            self.log("   if that says comtypes is missing, close this and run "
+                     "Launch TTS bench.bat, which finds the right Python", WARN)
         elif event == "speaking":
             self.speaking.config(text=f"speaking on {msg.get('device', '')} ...",
                                  fg=WARN)
@@ -667,7 +774,60 @@ def workspace_label(path: Path) -> str:
     return str(path)
 
 
+def find_interpreter() -> str:
+    """An interpreter on this machine that can actually talk to Windows speech.
+
+    Kris launched the bench with `python`, which on his PATH is a uv-managed 3.11
+    with no comtypes; the working one is 3.14. Rather than tell a tester to hunt
+    for the right python, the bench finds one.
+    """
+    import glob
+    import subprocess
+
+    candidates = [
+        r"C:\Users\user\AppData\Local\Programs\Python\Python314\python.exe",
+    ]
+    candidates += sorted(glob.glob(
+        str(Path.home() / "AppData/Local/Programs/Python/Python3*/python.exe")),
+        reverse=True)
+    for exe in candidates:
+        if not Path(exe).is_file() or Path(exe) == Path(sys.executable):
+            continue
+        try:
+            ok = subprocess.run([exe, "-c", "import comtypes, tkinter"],
+                                capture_output=True, timeout=30).returncode == 0
+        except Exception:                                   # noqa: BLE001
+            continue
+        if ok:
+            return exe
+    return ""
+
+
+def ensure_interpreter() -> None:
+    """Re-run under an interpreter that has comtypes, once, and say so."""
+    import importlib.util
+    import os
+    import subprocess
+
+    if importlib.util.find_spec("comtypes") or os.environ.get("TTS_BENCH_REEXEC"):
+        return
+    exe = find_interpreter()
+    if not exe:
+        print("[bench] this Python has no comtypes, and no other Python on this "
+              "machine does either.\n"
+              "        Install it with:  py -3.14 -m pip install comtypes\n"
+              "        The window will still open, without speech.", flush=True)
+        return
+    print(f"[bench] {sys.executable}\n"
+          f"        has no comtypes, so it cannot reach Windows speech.\n"
+          f"[bench] re-running under {exe}", flush=True)
+    os.environ["TTS_BENCH_REEXEC"] = "1"
+    raise SystemExit(subprocess.call([exe, str(Path(__file__).resolve()),
+                                      *sys.argv[1:]]))
+
+
 def main(argv=None) -> int:
+    ensure_interpreter()
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", default="")
     args = ap.parse_args(argv)
