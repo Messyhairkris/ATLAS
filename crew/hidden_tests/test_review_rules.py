@@ -50,6 +50,18 @@ def test_an_unknown_decision_yields_only_the_decision_problem():
     assert "decision" in problems[0].lower()
 
 
+def test_a_problem_reads_as_a_sentence_a_person_can_act_on():
+    """The first version returned bare "note", which is true and useless: the
+    desk had to write its own wording. A problem string is shown to a human."""
+    for decision in ("reject", "question", "defer"):
+        problem = r.validate(decision, "")[0]
+        assert len(problem) >= 30, f"{decision}: {problem!r} is not a sentence"
+        assert decision in problem.lower(), f"{decision}: {problem!r}"
+        assert str(r.MIN_NOTE_CHARS) in problem or "character" in problem.lower(),             f"{decision}: say how much is needed - {problem!r}"
+    bad = r.validate("maybe", "a perfectly good long note")[0]
+    assert len(bad) >= 30 and "maybe" in bad, bad
+
+
 def test_is_complete():
     assert r.is_complete({"decision": "approve", "note": ""}) is True
     assert r.is_complete({"decision": "reject", "note": "the ids skip a number"}) is True

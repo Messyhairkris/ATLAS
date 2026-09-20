@@ -26,7 +26,16 @@ from attempts import AttemptTracker  # noqa: E402
 from .tools import ToolError  # noqa: E402
 
 FENCE = re.compile(r"^```([^\s`]*)[^\n]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
-LANG_TAGS = {"", "md", "markdown", "json", "text", "txt"}
+# Fence info strings that name a LANGUAGE rather than a file. A member that
+# writes ```python instead of ```review_rules.py has submitted a perfectly good
+# file with a label our parser misread - and that failed a task on 2026-09-20.
+# When exactly one output file is expected, the language tag is harmless.
+LANG_TAGS = {"", "md", "markdown", "json", "text", "txt", "python", "py",
+             "python3", "pycon", "console", "shell", "bash", "sh", "zsh",
+             "powershell", "ps1", "cmd", "bat", "ini", "cfg", "conf", "toml",
+             "yaml", "yml", "xml", "html", "css", "js", "javascript", "ts",
+             "typescript", "diff", "patch", "sql", "csv", "tsv", "gdscript",
+             "c", "cpp", "rust", "go", "java", "kotlin", "swift", "rb", "php"}
 KEEP_FULL_RESULTS = 3
 TRIMMED_CHARS = 400
 MAX_REPEATS = 3

@@ -108,9 +108,13 @@ def vendor(src_dir: Path, dest: Path, authors: Dict[str, str], contract_dir: Pat
                       .replace("from .", "from ") for name, text in written.items()}
     tests = {}
     for module in modules:
-        candidate = hidden_dir / f"test_tts_{module.stem}.py"
-        if candidate.is_file():
-            tests[candidate.name] = candidate.read_text(encoding="utf-8")
+        # hidden tests are named test_<stem>.py or test_tts_<stem>.py depending on
+        # which campaign wrote them; try both rather than silently verifying nothing
+        for pattern in (f"test_{module.stem}.py", f"test_tts_{module.stem}.py"):
+            candidate = hidden_dir / pattern
+            if candidate.is_file():
+                tests[candidate.name] = candidate.read_text(encoding="utf-8")
+                break
     verdict = "no hidden tests found to verify with"
     if tests:
         ok, out, _ = codetask.run_tests(flat, tests, timeout_s=300)

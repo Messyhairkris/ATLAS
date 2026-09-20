@@ -32,6 +32,19 @@ Returns a list of problem strings — **empty means the review is acceptable**.
 2. `decision` in `NEEDS_NOTE` and the note, stripped, is shorter than
    `MIN_NOTE_CHARS` -> one problem mentioning `"note"`. (Twelve characters is
    deliberately low: it stops `"no"` and `"bad"`, not genuine brevity.)
+
+**Every problem string is shown to a person, so it must read as a sentence**, at
+least 30 characters long, naming the decision it is about and what to do next.
+`"note"` is a true answer and a useless one: the first version of this module
+returned exactly that, and the desk had to write its own wording to be usable.
+For example:
+
+```python
+validate("reject", "")
+# ["a reject needs a note of at least 12 characters saying what is wrong"]
+validate("maybe", "plenty of words here")
+# ["decision 'maybe' is not one of ('approve', 'reject', 'question', 'defer')"]
+```
 3. `decision == "approve"` and there is a note -> **no problem at all.** An
    approval may carry a note; it simply does not need one.
 4. A note that is only whitespace counts as absent.

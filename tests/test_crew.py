@@ -462,6 +462,37 @@ class TestTriageTests(CrewTestCase):
             "the suite reports 3 failed, 29 passed today", log)["ok"])
 
 
+class FenceLabelTests(CrewTestCase):
+    """A member that labels its fence with a LANGUAGE has still submitted a good
+    file; our parser misread the label and failed a real task on 2026-09-20."""
+
+    FENCE = chr(96) * 3
+
+    def _reply(self, tag: str) -> str:
+        lines = ["SUBMIT", self.FENCE + tag, "VALUE = 1", self.FENCE, ""]
+        return chr(10).join(lines)
+
+    def test_a_language_tag_is_not_a_filename(self):
+        from crew.agent import parse_reply
+        for tag in ("python", "py", "bash", "ini", "yaml", "diff", "javascript"):
+            kind, files, _notes = parse_reply(self._reply(tag), ["thing.py"])
+            self.assertEqual(kind, "submit", tag)
+            self.assertEqual(sorted(files), ["thing.py"], tag)
+
+    def test_a_real_filename_still_wins(self):
+        from crew.agent import parse_reply
+        kind, files, _ = parse_reply(self._reply("thing.py"), ["thing.py"])
+        self.assertEqual((kind, sorted(files)), ("submit", ["thing.py"]))
+
+    def test_two_expected_files_will_not_guess(self):
+        """With more than one output a language tag is genuinely ambiguous, so the
+        harness must not pick one."""
+        from crew.agent import parse_reply
+        kind, files, _ = parse_reply(self._reply("python"), ["a.py", "b.py"])
+        picked = sorted(files) if kind == "submit" else []
+        self.assertNotEqual(picked, ["a.py"])
+
+
 class CodeTaskTests(CrewTestCase):
     """The only task types whose output is executed. These tests are the reason
     that is not reckless."""
