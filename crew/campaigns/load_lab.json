@@ -1,0 +1,63 @@
+{
+  "name": "tts-foundation-load",
+  "comment": "Several suites at once, on purpose, to measure what the crew's work costs this machine. The governor holds a job back rather than letting the box thrash: Kris asked to stress it without crashing it. Run this AFTER the campaign, so the workspace tests exist.",
+  "max_parallel": 4,
+  "cpu_ceiling": 85,
+  "min_free_mb": 2000,
+  "timeout_s": 1200,
+  "out_dir": "C:/Users/user/ATLAS-api-harness/runs/crew/campaigns/tts-foundation",
+  "jobs": [
+    {
+      "id": "crew-suite",
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_crew.py"
+      ],
+      "cwd": "C:/Users/user/ATLAS-api-harness"
+    },
+    {
+      "id": "harness-suite",
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_harness_p0.py",
+        "tests/test_providers.py",
+        "tests/test_senior_review.py"
+      ],
+      "cwd": "C:/Users/user/ATLAS-api-harness"
+    },
+    {
+      "id": "workspace-tests-crew",
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "tests"
+      ],
+      "cwd": "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace"
+    },
+    {
+      "id": "workspace-tests-hidden",
+      "argv": [
+        "{python}",
+        "C:/Users/user/ATLAS-api-harness/crew/runners/check_accepted.py"
+      ],
+      "cwd": "C:/Users/user/ATLAS-api-harness"
+    },
+    {
+      "id": "vtot-scripts",
+      "argv": [
+        "{python}",
+        "C:/Users/user/ATLAS-api-harness/crew/runners/run_test_scripts.py",
+        "C:/Users/user/Voice_to_Text_Project/implementation"
+      ],
+      "cwd": "C:/Users/user/Voice_to_Text_Project/implementation"
+    }
+  ]
+}

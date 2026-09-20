@@ -19,6 +19,7 @@ member's autonomy, so no agent can promote itself.
 
 import argparse
 import json
+import pathlib
 import sys
 
 from .config import CrewError
@@ -57,6 +58,14 @@ def main(argv=None) -> int:
     s.add_argument("--ascii-only", action="store_true")
     sub.add_parser("roster")
     sub.add_parser("budget")
+    s = sub.add_parser("campaign")
+    s.add_argument("action", choices=["run", "status", "plan"])
+    s.add_argument("file", help="campaign json (run/plan) or campaign name (status)")
+    s.add_argument("--deadline", default="",
+                   help="ISO time to stop starting new work, e.g. 2026-09-20T10:00")
+    s.add_argument("--max-requests", type=int, default=0)
+    s = sub.add_parser("loadlab")
+    s.add_argument("file", help="load lab json")
     s = sub.add_parser("promote")
     s.add_argument("persona"); s.add_argument("task_type"); s.add_argument("stage")
     s.add_argument("--by", required=True); s.add_argument("--demote", action="store_true")
@@ -66,6 +75,37 @@ def main(argv=None) -> int:
         from .server import main as serve
         serve()
         return 0
+
+    if args.cmd == "campaign":
+        from . import campaign as camp
+        if args.action == "status":
+            from .config import load_config
+            home = pathlib.Path(load_config().state_home) / "campaigns" / args.file
+            path = home / "status.json"
+            if not path.exists():
+                print(f"no campaign status at {path}", file=sys.stderr)
+                return 2
+            print(path.read_text(encoding="utf-8"))
+            return 0
+        spec = camp.load(args.file)
+        if args.deadline:
+            spec["deadline"] = args.deadline
+        if args.max_requests:
+            spec["max_requests"] = args.max_requests
+        c = camp.Campaign(spec)
+        if args.action == "plan":
+            _print({"name": c.name, "tasks": {i: {k: t[k] for k in
+                    ("kind", "team", "member", "depends")}
+                    for i, t in c.tasks.items()},
+                    "max_requests": c.max_requests,
+                    "deadline": spec.get("deadline")})
+            return 0
+        _print(c.run())
+        return 0
+
+    if args.cmd == "loadlab":
+        from .runners import load_lab
+        return load_lab.main([args.file])
 
     from .core import Crew
     crew = Crew()

@@ -84,6 +84,14 @@ python -m crew submit spec.json --by Kris      # then: python -m crew run JOB
 ## Files
 
 - `config.json` — roots, deny globs, fetch allowlist, deny models, test commands, rate limit, defaults
+- `codetask.py` — the airlock for executable output: an AST allowlist, then a
+  throwaway directory and a timeout
+- `campaign.py` — runs a whole project unattended: teams, dependencies, three
+  attempts, senior escalation, budget and deadline, live status
+- `report.py` — the per-team scorecard and the failure breakdown
+- `contracts/` + `hidden_tests/` — the specification a member works from, and the
+  tests it never sees (denied in config, so it cannot read them)
+- `campaigns/` — campaign and load-lab definitions
 - `autofix.py` — zero-token linter: typography and near-miss names or citations are repaired before gating, and every fix is logged (it never guesses meaning)
 - `runners/` — `run_test_scripts.py` (script-style suites), `ui_sweep.py` (visible control sweep), `format_check.py` (formatting test document)
   The sweep waits for **readiness**, not a fixed delay: after each press it waits until the app answers messages again, the desktop's window list stops changing and the watched folders stop growing (`--settle` floor, `--settle-max` ceiling, `--quiet` the required calm). A control whose name says it opens something must actually open something or the press fails (`nothing_opened`); a wait past `--report-wait-after` is announced in the banner and logged as `still_waiting`; a breach of the ceiling is logged as `stalled`. The banner reports what was OBSERVED ("seen: Save -> wrote 1 file(s)"), never just what is intended.

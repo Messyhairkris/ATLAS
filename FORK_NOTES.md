@@ -132,6 +132,54 @@ share one request pool, so running Crush and a crew campaign at the same time
 hits the cooldown that stops both; the crew's own token use is small enough to
 run all day when it has the pool to itself.
 
+## Coding tasks, teams and campaigns (Claude, 2026-09-20)
+
+The crew can now write code, which is the first task type whose output is
+EXECUTED, so the whole design is about that:
+
+- `crew/codetask.py` is the airlock. It reads a submission as an AST and refuses
+  it unless every import is on an allowlist and nothing calls
+  `eval/exec/compile/__import__/open`, reaches a dunder escape, or names a way
+  out to the filesystem, network or another process. Only then is the code run,
+  in a throwaway directory, as a separate process, with a timeout. Contracts are
+  written so this is easy: anything needing the real machine is passed in as a
+  callable. Stated plainly: an allowlist is not a sandbox - the real protections
+  are cheap models working from our contracts, our tests, and a human moving the
+  result into the project.
+- **Hidden tests decide.** `crew/hidden_tests/` is denied to every member
+  (`deny_globs`), so "it works" is never the author's opinion. Each contract in
+  `crew/contracts/` was validated against a reference implementation before any
+  model saw it: 146 test cases across four modules, all green, so a failure is
+  the member's, not the spec's.
+- **Two task types**: `code_task` (write the module: gates are safety scan, the
+  contract's API exists, no stubs, hidden tests pass) and `code_tests` (a
+  DIFFERENT member writes tests from the same contract without seeing the
+  implementation; a disagreement between them is escalated, never guessed).
+- **`crew/campaign.py` runs a whole project unattended.** Teams of author +
+  tester, dependency-ordered tasks where a later module imports an earlier
+  accepted one, three attempts with the test output as feedback, then escalation
+  to a senior for DIRECTIVES (never code), then a recorded failure and the
+  campaign moves on. A request budget and a wall-clock deadline both stop new
+  work. `status.json` and `progress.log` update continuously - nothing ever looks
+  idle. `python -m crew campaign run crew/campaigns/tts_foundation.json`
+- **`crew/report.py`** writes the per-team scorecard Kris asked for: tasks,
+  first-attempt acceptance, attempts, requests, tokens, escalations, minutes, the
+  count of every check that failed, and recommendations tied to those numbers.
+- **`crew/runners/load_lab.py`** runs several suites at once under a psutil
+  governor (CPU ceiling, free-memory floor) that holds jobs back rather than
+  letting the box thrash, and reports peak CPU, memory and per-job RSS. Stress
+  without a crash. `python -m crew loadlab crew/campaigns/load_lab.json`
+- **`crew/runners/check_accepted.py`** is the independent audit: it re-runs every
+  hidden test against whatever is in the workspace now, so the accepted set is
+  proven to work TOGETHER and not only inside the job that made it.
+
+Found by the dry run, before any credits were spent: the attribute blocklist
+banned `str.replace` and `list.remove` (ordinary code); the airlock did not allow
+a task to import the module an earlier task had accepted; dependency modules were
+not transitive, so a tester got `speech_queue.py` without the `verbalize.py` it
+imports; and `code_task` had no playbook registered, which failed every job
+before the model was called. 98 tests pass.
+
 ## Known gaps (explicit, by design)
 
 - **V3 pipeline mode** (`--mode v3`) is Phase B: provider layer + battery baseline first, pipeline integration second.

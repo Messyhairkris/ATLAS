@@ -351,6 +351,108 @@ def reports_stalls(text: str, run_log: str, file: str = "") -> dict:
                 "opened or never finished", file)
 
 
+# -- code tasks ----------------------------------------------------------------------
+#
+# These are the only gates whose subject is EXECUTED. The order matters and the
+# task type enforces it: scan first, run second. A gate that runs member code
+# before the scan has passed would defeat the airlock.
+
+def module_is_safe(source: str, file: str = "", allowed_modules=()) -> dict:
+    """crew/codetask.py reads the source as an AST and refuses anything that
+    reaches outside a pure function. Contracts pass devices, audio and files in
+    as callables precisely so this is satisfiable. `allowed_modules` are the
+    crew's own accepted modules this task may build on."""
+    from . import codetask
+    problems = codetask.scan(source, file or "module", extra_imports=allowed_modules)
+    return step("safety", not problems,
+                "the module may not be executed: " + "; ".join(problems[:6])
+                if problems else "the module only uses allowed imports and calls",
+                file)
+
+
+def defines_api(source: str, required, file: str = "") -> dict:
+    """The contract names the public API. A module that renames half of it is
+    not an implementation of that contract, however good the code is."""
+    from . import codetask
+    have = set(codetask.public_names(source))
+    missing = [name for name in required if name not in have]
+    return step("api", not missing,
+                f"the contract requires these public names, which are missing: "
+                f"{', '.join(missing)}" if missing
+                else f"all {len(required)} contract names are defined", file)
+
+
+def not_stubbed(source: str, required, file: str = "") -> dict:
+    """`pass`, `...` and `raise NotImplementedError` import cleanly and help
+    nobody."""
+    from . import codetask
+    empty = codetask.stubbed(source, list(required))
+    return step("no stubs", not empty,
+                f"these are stubs, not implementations: {', '.join(empty)}"
+                if empty else "no stubbed functions", file)
+
+
+def hidden_tests_pass(modules: dict, tests: dict, timeout_s: int,
+                      file: str = "", allowed_modules=()) -> dict:
+    """The tests that decide the outcome, which the member never sees. Their
+    output is fed back as the reason to try again, so the loop is driven by
+    evidence rather than by opinion."""
+    from . import codetask
+    ok, out, detail = codetask.run_tests(modules, tests, timeout_s,
+                                         extra_imports=allowed_modules)
+    tail = codetask.summarize(out)
+    extra = detail.get("unexpected_files") or []
+    if ok and extra:
+        return step("hidden tests", False,
+                    f"the tests passed but the run left files behind, so the "
+                    f"module is writing to disk: {', '.join(extra)}", file)
+    return step("hidden tests", ok,
+                ("the hidden tests pass" if ok else
+                 "the hidden tests fail. This is the evidence; fix the module, "
+                 "do not argue with it:\n" + tail), file)
+
+
+def test_file_is_safe(source: str, file: str = "", allowed_modules=()) -> dict:
+    """A test file is executed too. pytest and the module under test are
+    allowed; nothing else new is."""
+    from . import codetask
+    extra = {"pytest", "unittest"} | {str(m) for m in allowed_modules}
+    problems = codetask.scan(source, file or "tests", extra_imports=extra)
+    return step("safety", not problems,
+                "the test file may not be executed: " + "; ".join(problems[:6])
+                if problems else "the test file is safe to run", file)
+
+
+def enough_tests(source: str, minimum: int, file: str = "") -> dict:
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return step("test count", False, f"the test file does not parse: {e.msg}", file)
+    n = sum(1 for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_"))
+    return step("test count", n >= minimum,
+                f"{n} test functions; the task asks for at least {minimum}", file)
+
+
+def tests_run_green(modules: dict, tests: dict, timeout_s: int,
+                    file: str = "", allowed_modules=()) -> dict:
+    """The tester's tests must pass against the module that was already
+    accepted. A failure here is a real disagreement between two members: either
+    the module has a bug the hidden tests missed, or the test misreads the
+    contract. Both go to a senior, neither is guessed at."""
+    from . import codetask
+    ok, out, _ = codetask.run_tests(modules, tests, timeout_s,
+                                    extra_imports=allowed_modules)
+    return step("tests green", ok,
+                ("the tests pass against the accepted module" if ok else
+                 "these tests fail against the accepted module. Either your test "
+                 "misreads the contract or the module has a bug the hidden tests "
+                 "missed. Quote the contract line you are testing:\n"
+                 + codetask.summarize(out)), file)
+
+
 def quotes_the_totals(text: str, run_log: str, file: str = "") -> dict:
     """The pytest summary line (e.g. '3 failed, 29 passed in 1.2s') must be
     reproduced verbatim, so the report cannot soften the result."""

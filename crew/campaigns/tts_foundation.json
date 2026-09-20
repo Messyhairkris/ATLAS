@@ -1,0 +1,67 @@
+{
+  "name": "tts-foundation",
+  "goal": "Build the four pure-logic modules VtoT's text-to-speech needs, with four crew teams: device policy, verbatim verbalization, chattiness levels, and the speech queue. Each module is judged by tests its author never sees, and each is cross-tested by a different team member.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 180,
+  "max_attempts": 3,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Pipes":  {"author": "Hoss",     "tester": "Qwen"},
+    "Signal": {"author": "Qwen",     "tester": "Nemotron"},
+    "Relay":  {"author": "Nemotron", "tester": "Barry"},
+    "Echo":   {"author": "Barry",    "tester": "Hoss"}
+  },
+  "tasks": [
+    {
+      "id": "devices",
+      "team": "Pipes",
+      "module": "devices.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_devices.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_tts_devices.py"],
+      "api": ["HEADSET", "SPEAKERS", "UNKNOWN", "DEFAULT_VOLUME", "ALERT_VOLUME",
+              "HEADSET_WORDS", "SPEAKER_WORDS", "classify", "clamp_volume",
+              "Policy", "clear_session", "choose"],
+      "depends": [],
+      "min_tests": 8,
+      "instructions": "This decides where Kris's speech goes. The volume numbers were measured on his real headset; do not change them.",
+      "test_instructions": "Cover the fallback rule and the session-only speaker permission especially: those are the two the spec cares most about."
+    },
+    {
+      "id": "verbalize",
+      "team": "Signal",
+      "module": "verbalize.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_verbalize.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_tts_verbalize.py"],
+      "api": ["LEVELS", "PUNCTUATION", "ELLIPSIS", "collapse_whitespace", "verbalize"],
+      "depends": [],
+      "min_tests": 8,
+      "instructions": "Work through the contract's worked-example table one row at a time; every row is a test somewhere.",
+      "test_instructions": "Include at least one case with a mark inside a word and one with a line break."
+    },
+    {
+      "id": "chattiness",
+      "team": "Relay",
+      "module": "chattiness.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_chattiness.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_tts_chattiness.py"],
+      "api": ["LEVELS", "EVENTS", "SPEAKS_FROM", "level_index", "should_speak", "describe"],
+      "depends": [],
+      "min_tests": 8,
+      "instructions": "The levels are cumulative: anything a quieter level says, a louder one also says.",
+      "test_instructions": "Test the boundary at each level, not just the extremes."
+    },
+    {
+      "id": "speech_queue",
+      "team": "Echo",
+      "module": "speech_queue.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_speech_queue.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_tts_speech_queue.py"],
+      "api": ["PRIORITIES", "MAX_PENDING", "Utterance", "SpeechQueue"],
+      "depends": ["verbalize"],
+      "min_tests": 8,
+      "instructions": "You MUST import the accepted verbalize module rather than repeating its punctuation rules. An alert must never wait behind a long read-back.",
+      "test_instructions": "Prove the alert overtakes ordinary speech, and that a speak_fn returning exactly False stops the run and keeps the rest queued."
+    }
+  ]
+}

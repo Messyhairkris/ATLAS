@@ -6,6 +6,7 @@ Run: python -m pytest tests/test_crew.py -q
 
 import asyncio
 import json
+import pathlib
 import os
 import shutil
 import sys
@@ -455,6 +456,183 @@ class TestTriageTests(CrewTestCase):
         self.assertFalse(gates.quotes_the_totals("mostly fine", log)["ok"])
         self.assertTrue(gates.quotes_the_totals(
             "the suite reports 3 failed, 29 passed today", log)["ok"])
+
+
+class CodeTaskTests(CrewTestCase):
+    """The only task types whose output is executed. These tests are the reason
+    that is not reckless."""
+
+    GOOD = ("from dataclasses import dataclass\n\n"
+            "VALUE = 3\n\n\n"
+            "def pick(items):\n"
+            "    \"\"\"First item or None.\"\"\"\n"
+            "    return items[0] if items else None\n")
+
+    def test_scan_allows_pure_logic(self):
+        from crew import codetask
+        self.assertEqual(codetask.scan(self.GOOD), [])
+
+    def test_scan_allows_ordinary_method_names(self):
+        """str.replace and list.remove are not escapes; an early version of the
+        blocklist failed honest code on them."""
+        from crew import codetask
+        src = "def f(s, items):\n    items.remove(1)\n    return s.replace('a', 'b')\n"
+        self.assertEqual(codetask.scan(src), [])
+
+    def test_scan_refuses_the_ways_out(self):
+        from crew import codetask
+        for src in ("import os\n",
+                    "from subprocess import run\n",
+                    "import socket\n",
+                    "def f():\n    return open('x').read()\n",
+                    "def f():\n    return eval('1')\n",
+                    "def f(o):\n    return o.__class__.__bases__\n",
+                    "def f(o):\n    return o.system('dir')\n",
+                    "from . import sibling\n"):
+            self.assertTrue(codetask.scan(src), f"should be refused: {src!r}")
+
+    def test_dependency_modules_may_be_imported_but_nothing_else(self):
+        from crew import codetask
+        src = "import verbalize\n"
+        self.assertTrue(codetask.scan(src))
+        self.assertEqual(codetask.scan(src, extra_imports=["verbalize"]), [])
+
+    def test_run_tests_refuses_unsafe_source_before_executing_it(self):
+        from crew import codetask
+        ok, out, detail = codetask.run_tests(
+            {"m.py": "import os\n"}, {"test_m.py": "def test_x():\n    assert True\n"})
+        self.assertFalse(ok)
+        self.assertIn("REFUSED", out)
+        self.assertTrue(detail["blocked"])
+
+    def test_run_tests_reports_a_real_pass_and_a_real_failure(self):
+        from crew import codetask
+        ok, out, _ = codetask.run_tests(
+            {"m.py": self.GOOD},
+            {"test_m.py": "import m\ndef test_pick():\n    assert m.pick([1]) == 1\n"})
+        self.assertTrue(ok, out)
+        ok2, out2, _ = codetask.run_tests(
+            {"m.py": self.GOOD},
+            {"test_m.py": "import m\ndef test_pick():\n    assert m.pick([1]) == 2\n"})
+        self.assertFalse(ok2)
+        self.assertIn("test_pick", codetask.summarize(out2))
+
+    def test_run_tests_stops_an_infinite_loop(self):
+        from crew import codetask
+        ok, out, _ = codetask.run_tests(
+            {"m.py": "def spin():\n    while True:\n        pass\n"},
+            {"test_m.py": "import m\ndef test_spin():\n    m.spin()\n"},
+            timeout_s=5)
+        self.assertFalse(ok)
+        self.assertIn("TIMEOUT", out)
+
+    def test_api_and_stub_gates(self):
+        from crew import gates
+        self.assertTrue(gates.defines_api(self.GOOD, ["VALUE", "pick"])["ok"])
+        self.assertFalse(gates.defines_api(self.GOOD, ["VALUE", "missing"])["ok"])
+        self.assertTrue(gates.not_stubbed(self.GOOD, ["pick"])["ok"])
+        for stub in ("def pick(x):\n    pass\n",
+                     "def pick(x):\n    ...\n",
+                     "def pick(x):\n    raise NotImplementedError\n",
+                     "def pick(x):\n    \"\"\"doc\"\"\"\n    pass\n"):
+            self.assertFalse(gates.not_stubbed(stub, ["pick"])["ok"], stub)
+
+    def test_enough_tests_counts_test_functions(self):
+        from crew import gates
+        src = "".join(f"def test_{i}():\n    assert True\n\n" for i in range(4))
+        self.assertTrue(gates.enough_tests(src, 4)["ok"])
+        self.assertFalse(gates.enough_tests(src, 5)["ok"])
+
+    def test_a_module_that_writes_files_fails_even_if_tests_pass(self):
+        """A module that leaves files behind is not pure, whatever its tests say.
+        open() is already refused, so this proves the leftover check itself."""
+        from crew import gates
+        step = gates.hidden_tests_pass(
+            {"m.py": self.GOOD},
+            {"test_m.py": ("import m\n"
+                           "def test_write(tmp_path):\n"
+                           "    import pathlib\n"
+                           "    pathlib.Path('litter.txt').write_text('x')\n"
+                           "    assert m.pick([1]) == 1\n")},
+            60)
+        self.assertFalse(step["ok"])
+        self.assertIn("writing to disk", step["detail"])
+
+    def test_code_task_spec_is_validated_at_submit(self):
+        c = self.crew([])
+        contract = self.tmp / "contract.md"
+        contract.write_text("api: pick\n", encoding="utf-8")
+        base = {"task_type": "code_task", "title": "t",
+                "contract": str(contract), "api": ["pick"],
+                "output": {"root": str(self.cfg.write_roots[0] / "workspace")}}
+        with self.assertRaises(CrewError):        # module must be a .py file name
+            c.submit({**base, "module": "src/thing.py"}, "K")
+        with self.assertRaises(CrewError):        # api may not be empty
+            c.submit({**base, "module": "thing.py", "api": []}, "K")
+        with self.assertRaises(CrewError):        # contract must exist
+            c.submit({**base, "module": "thing.py",
+                      "contract": str(self.tmp / "nope.md")}, "K")
+
+
+class CampaignTests(CrewTestCase):
+    def _spec(self):
+        contract = self.tmp / "c.md"
+        contract.write_text("api: a\n", encoding="utf-8")
+        return {"name": "unit", "senior": "none", "max_requests": 5,
+                "teams": {"A": {"author": "Hoss", "tester": "Qwen"}},
+                "tasks": [{"id": "one", "team": "A", "module": "one.py",
+                           "contract": str(contract), "api": ["a"]},
+                          {"id": "two", "team": "A", "module": "two.py",
+                           "contract": str(contract), "api": ["a"],
+                           "depends": ["one"]}]}
+
+    def test_planning_adds_a_tester_task_for_each_module(self):
+        from crew.campaign import Campaign
+        c = Campaign(self._spec(), cfg=self.cfg, crew=self.crew([]), quiet=True)
+        self.assertEqual(sorted(c.tasks), ["one", "one-tests", "two", "two-tests"])
+        self.assertEqual(c.tasks["one"]["member"], "Hoss")
+        self.assertEqual(c.tasks["one-tests"]["member"], "Qwen")
+        self.assertEqual(c.tasks["one-tests"]["depends"], ["one"])
+
+    def test_only_unblocked_tasks_are_ready(self):
+        from crew.campaign import Campaign
+        c = Campaign(self._spec(), cfg=self.cfg, crew=self.crew([]), quiet=True)
+        self.assertEqual([t["id"] for t in c._ready()], ["one"])
+        c.tasks["one"]["state"] = "accepted"
+        self.assertEqual(sorted(t["id"] for t in c._ready()), ["one-tests", "two"])
+
+    def test_dependency_modules_are_transitive(self):
+        """A tester of two.py needs one.py as well, because two.py imports it.
+        The dry run failed exactly here."""
+        from crew.campaign import Campaign
+        c = Campaign(self._spec(), cfg=self.cfg, crew=self.crew([]), quiet=True)
+        paths = c._module_paths(c.tasks["two-tests"])
+        self.assertEqual([pathlib.Path(p).name for p in paths],
+                         ["one.py", "two.py"])
+
+    def test_the_budget_and_the_deadline_both_stop_new_work(self):
+        from crew.campaign import Campaign
+        spec = self._spec()
+        c = Campaign(spec, cfg=self.cfg, crew=self.crew([]), quiet=True)
+        self.assertIsNone(c.stop_reason())
+        c.requests_used = 99
+        self.assertIn("budget", c.stop_reason())
+        c.requests_used = 0
+        c.deadline = time.time() - 1
+        self.assertIn("deadline", c.stop_reason())
+
+    def test_report_names_the_failed_check_and_recommends_something(self):
+        from crew import report
+        from crew.campaign import Campaign
+        c = Campaign(self._spec(), cfg=self.cfg, crew=self.crew([]), quiet=True)
+        c.tasks["one"].update(state="accepted", attempts=1, requests=4, tokens=10)
+        c.tasks["two"].update(state="failed", attempts=3, requests=9,
+                              failed_gates=[["hidden tests: two of them fail"]])
+        out = report.campaign_report(c)
+        self.assertEqual(out["data"]["outcome"], "partial")
+        self.assertIn("hidden tests", out["data"]["failed_gate_counts"])
+        self.assertIn("## What to change next time", out["markdown"])
+        self.assertIn("three or more attempts", out["markdown"])
 
 
 class SafetyTests(CrewTestCase):

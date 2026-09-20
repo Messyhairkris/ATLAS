@@ -339,7 +339,209 @@ def ui_sweep_gates(files, spec, cfg, toolbox):
     return steps
 
 
+# -- code_task ---------------------------------------------------------------------------
+#
+# The first task type whose output is EXECUTED. Everything about it is built
+# around that: the contract is written so the module needs nothing from the real
+# machine (devices, audio, files are passed in as callables), crew/codetask.py
+# refuses to run source that reaches outside a pure function, and the tests that
+# decide the outcome are ours and are never shown to the member.
+
+CONTRACT_CHARS = 12000
+
+
+def _contract_text(spec: dict, cfg: Config) -> str:
+    path = Path(spec["contract"]).resolve()
+    if not path.is_file() or not cfg.readable(path):
+        raise CrewError(f"spec.contract {spec['contract']} is not a readable file "
+                        f"in the crew's read roots")
+    return path.read_text(encoding="utf-8")[:CONTRACT_CHARS]
+
+
+def _hidden_tests(spec: dict, cfg: Config) -> Dict[str, str]:
+    out = {}
+    for raw in spec.get("hidden_tests") or []:
+        path = Path(raw).resolve()
+        if not path.is_file():
+            raise CrewError(f"hidden test {raw} does not exist")
+        out[path.name] = path.read_text(encoding="utf-8")
+    return out
+
+
+def _workspace_modules(spec: dict, cfg: Config) -> Dict[str, str]:
+    """Modules an earlier task already got accepted, so this one can build on
+    them (Kris: the teams should build on each other's actions)."""
+    out = {}
+    for raw in spec.get("depends_modules") or []:
+        path = Path(raw).resolve()
+        if not path.is_file() or not cfg.readable(path):
+            raise CrewError(f"dependency module {raw} is not readable")
+        out[path.name] = path.read_text(encoding="utf-8")
+    return out
+
+
+def code_task_normalize(spec: dict, cfg: Config) -> dict:
+    module = (spec.get("module") or "").strip()
+    if not module or "/" in module or "\\" in module or not module.endswith(".py"):
+        raise CrewError("spec.module must be a single .py file name, e.g. devices.py")
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required: the file stating the API and behavior")
+    _contract_text(spec, cfg)                     # validate now, not at run time
+    _hidden_tests(spec, cfg)
+    _workspace_modules(spec, cfg)
+    spec["api"] = [str(a) for a in (spec.get("api") or [])]
+    if not spec["api"]:
+        raise CrewError("spec.api must list the public names the module must define")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    for raw in spec.get("depends_modules") or []:
+        spec["read_roots"].append(str(Path(raw).resolve().parent))
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace").resolve()
+    if not cfg.writable(root / module):
+        raise CrewError(f"{root / module} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [module]}
+    spec.setdefault("test_timeout_s", 180)
+    return spec
+
+
+def code_task_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    deps = _workspace_modules(spec, cfg)
+    parts = [f"OUTPUT FILE: {spec['output']['files'][0]}",
+             "",
+             "CONTRACT (this is the specification; satisfy it exactly. Cite it as "
+             "[src: contract] if you explain a decision):",
+             "",
+             contract]
+    if deps:
+        parts += ["", "ALREADY ACCEPTED MODULES you may import by name (they are "
+                      "on the path when your code is tested; do not rewrite them):"]
+        for name, src in deps.items():
+            toolbox.evidence.add(f"module:{name}", src)
+            parts += ["", f"----- {name} -----", src[:6000]]
+    parts += ["", "HOW YOUR WORK IS JUDGED: the harness runs tests you never see "
+                  "against your module, in a throwaway directory. Your source is "
+                  "checked first and REFUSED if it imports anything outside the "
+                  "contract's allowlist, calls eval/exec/open, or reaches the "
+                  "filesystem, network or registry. Anything external is passed "
+                  "into your functions as an argument - that is what makes the "
+                  "module testable. Write the whole file every time; no diffs, no "
+                  "placeholders, no TODOs."]
+    return "\n".join(parts)
+
+
+def code_task_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        deps = _workspace_modules(spec, cfg)
+        dep_names = sorted(n[:-3] for n in deps)
+        steps += [gates.ascii_only(source, out_file),
+                  gates.module_is_safe(source, out_file, dep_names),
+                  gates.defines_api(source, spec["api"], out_file),
+                  gates.not_stubbed(source, spec["api"], out_file)]
+        if all(st["ok"] for st in steps):
+            hidden = _hidden_tests(spec, cfg)
+            if hidden:
+                steps.append(gates.hidden_tests_pass(
+                    {out_file: source, **deps}, hidden,
+                    int(spec["test_timeout_s"]), out_file, dep_names))
+    return steps
+
+
+# -- code_tests --------------------------------------------------------------------------
+
+def code_tests_normalize(spec: dict, cfg: Config) -> dict:
+    name = (spec.get("test_file") or "").strip()
+    if not name.startswith("test_") or not name.endswith(".py") or "/" in name:
+        raise CrewError("spec.test_file must be a single file named test_*.py")
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required")
+    _contract_text(spec, cfg)
+    mods = _workspace_modules(spec, cfg)
+    if not mods:
+        raise CrewError("spec.depends_modules must name the accepted module(s) "
+                        "these tests run against")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    spec.setdefault("min_tests", 6)
+    spec.setdefault("test_timeout_s", 180)
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace" / "tests").resolve()
+    if not cfg.writable(root / name):
+        raise CrewError(f"{root / name} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [name]}
+    return spec
+
+
+def code_tests_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    mods = _workspace_modules(spec, cfg)
+    names = ", ".join(sorted(m[:-3] for m in mods))
+    parts = [f"OUTPUT FILE: {spec['output']['files'][0]}", "",
+             f"You are the TESTER. Another crew member wrote the module; you write "
+             f"tests for it from the CONTRACT, not from their code. You are not "
+             f"shown their source on purpose: tests written by reading an "
+             f"implementation only prove the implementation agrees with itself.",
+             "", f"Import it as: import {names}", "",
+             "CONTRACT:", "", contract, "",
+             f"RULES: at least {spec['min_tests']} test functions named test_*; "
+             f"pure asserts; no imports beyond pytest and the module; no network, "
+             f"no files, no sleeping; each test states in its name or docstring "
+             f"which contract rule it checks. The harness runs your tests against "
+             f"the real module. If they fail, either the module is wrong or your "
+             f"test is - both are reported, and a senior decides."]
+    return "\n".join(parts)
+
+
+def code_tests_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        mods = _workspace_modules(spec, cfg)
+        mod_names = sorted(n[:-3] for n in mods)
+        steps += [gates.ascii_only(source, out_file),
+                  gates.test_file_is_safe(source, out_file, mod_names),
+                  gates.enough_tests(source, int(spec["min_tests"]), out_file)]
+        if all(st["ok"] for st in steps):
+            steps.append(gates.tests_run_green(
+                mods, {out_file: source}, int(spec["test_timeout_s"]), out_file,
+                mod_names))
+    return steps
+
+
 TASK_TYPES: Dict[str, Dict[str, object]] = {
+    "code_task": {
+        "description": "Write one self-contained Python module against a contract. The harness executes it against tests the member never sees, after refusing any source that reaches outside a pure function.",
+        "spec": {"module": "required: the file to write, e.g. devices.py",
+                 "contract": "required: path to the contract file stating the API and behavior",
+                 "api": "required: list of public names the module must define",
+                 "hidden_tests": "optional: paths to test files the member never sees; they decide the outcome",
+                 "depends_modules": "optional: paths to already-accepted modules this one may import",
+                 "test_timeout_s": "optional, default 180",
+                 "instructions": "optional: emphasis for this attempt"},
+        "gates": "output path, ASCII only, the safety scan, the contract's API exists, no stubs, hidden tests pass",
+        "apply": "writes the module into the crew workspace (never into a real project)",
+        "normalize": code_task_normalize, "preload": code_task_preload,
+        "gates_fn": code_task_gates,
+    },
+    "code_tests": {
+        "description": "Write tests for another member's accepted module, from the contract alone, without being shown the implementation.",
+        "spec": {"test_file": "required: test_*.py to write",
+                 "contract": "required: the same contract the author worked from",
+                 "depends_modules": "required: the accepted module(s) under test",
+                 "min_tests": "optional, default 6",
+                 "instructions": "optional"},
+        "gates": "output path, ASCII only, the safety scan, enough test functions, the tests run green against the real module",
+        "apply": "writes the test file into the crew workspace",
+        "normalize": code_tests_normalize, "preload": code_tests_preload,
+        "gates_fn": code_tests_gates,
+    },
     "ui_sweep": {
         "description": "The harness launches a Windows app and presses every control (each highlighted in orange for half a second first, so a human can watch); the member reports what broke, what did nothing, and what it could not reach.",
         "spec": {"app": "required: the .exe to sweep (inside a crew read root)",
