@@ -223,12 +223,12 @@ def workspace_pairs(cfg=None) -> List[Tuple[Path, List[Path], List[Path]]]:
     cfg = cfg or load_config()
     work = Path(cfg.state_home) / "outbox" / "workspace"
     hidden_dir = REPO_ROOT / "crew" / "hidden_tests"
-    from .runners.check_accepted import HIDDEN as HIDDEN_FOR
+    from .runners.check_accepted import hidden_for
     pairs = []
-    modules = sorted(work.glob("*.py"))
+    modules = [p for p in sorted(work.glob("*.py")) if p.name != "__init__.py"]
     for module in modules:
-        hidden = HIDDEN_FOR.get(module.name)
-        tests = [hidden_dir / hidden] if hidden and (hidden_dir / hidden).is_file() else []
+        hidden = hidden_for(module.name, hidden_dir)
+        tests = [hidden] if hidden else []
         deps = [m for m in modules if m != module and f"import {m.stem}" in
                 module.read_text(encoding="utf-8")]
         pairs.append((module, deps, tests))
