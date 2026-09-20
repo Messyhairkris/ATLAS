@@ -37,6 +37,13 @@ def main(argv=None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    # `unify` takes its own flags, and argparse.REMAINDER does not capture
+    # leading options, so it is delegated before the parent parser runs.
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "unify":
+        from . import unify
+        return unify.main(raw[1:])
+
     ap = argparse.ArgumentParser(prog="python -m crew")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve")
