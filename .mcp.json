@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "crew": {
+      "command": "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
+      "args": ["C:/Users/user/ATLAS-api-harness/crew_server.py"],
+      "env": {"CREW_CLIENT": "Claude"}
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "parts": [
+    {
+      "id": "p1_ship",
+      "required": ["scripts/ship.gd", "scenes/ship.tscn"],
+      "must_contain": {"scripts/ship.gd": ["move_and_slide()", "Input.get_axis", "dedicated_server"]},
+      "markers": []
+    },
+    {
+      "id": "p2_pickups",
+      "required": ["scripts/ore.gd", "scenes/ore.tscn", "scripts/debris.gd", "scenes/debris.tscn"],
+      "must_contain": {"scripts/ore.gd": ["ORE_COLLECTED", "body_entered.connect"], "scripts/debris.gd": ["DEBRIS_COLLECTED", "queue_free"]},
+      "markers": []
+    },
+    {
+      "id": "p3_tutorial",
+      "required": ["scripts/tutorial.gd", "scripts/hud.gd", "scenes/hud.tscn"],
+      "must_contain": {"scripts/tutorial.gd": ["STAGE_", "PLOT_REFINERY", "PLOT_ENVOY", "PLOT_BEACON_DENIAL", "TUTORIAL_COMPLETE", "WATCHDOG_TIMEOUT"]},
+      "markers": []
+    },
+    {
+      "id": "p4_assembly",
+      "required": ["main.tscn", "main.gd", "scripts/envoy.gd"],
+      "must_contain": {"main.gd": ["TUTORIAL_READY", "dedicated_server"]},
+      "markers": []
+    },
+    {
+      "id": "p5_autopilot",
+      "required": ["scripts/autopilot.gd"],
+      "must_contain": {"scripts/autopilot.gd": ["is_instance_valid"]},
+      "markers": ["TUTORIAL_READY", "STAGE_1_COMPLETE|ORE_COLLECTED"]
+    }
+  ]
+}

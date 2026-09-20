@@ -1,0 +1,23 @@
+{
+  "comment": "What the in-sandbox runner trims before running agent code. Windows Sandbox boots a fresh image every time, so host settings never carry over; this file is how Kris's stripped-down host choices get re-applied (search box, Task View and Cortana buttons hidden, as on the host) plus sandbox-only cuts. Edit freely: every switch is read at run time, nothing is compiled in. The runner logs process count and free memory before/after so each change can be measured.",
+  "enabled": true,
+  "hide_news_feed": true,
+  "hide_search_box": true,
+  "hide_task_view_button": true,
+  "hide_cortana_button": true,
+  "disable_animations": true,
+  "kill_shell": true,
+  "kill_shell_comment": "Stops explorer.exe (taskbar, desktop, news feed, tray apps) and keeps it from auto-restarting. Nothing the harness runs needs the shell; the status window works without it. Set false if you want to poke around the sandbox desktop.",
+  "stop_services": [
+    "WSearch", "SysMain", "DiagTrack", "wuauserv", "UsoSvc", "BITS",
+    "DoSvc", "Spooler", "WerSvc", "MapsBroker", "TabletInputService"
+  ],
+  "kill_processes": [
+    "SearchApp", "SearchUI", "msedgewebview2", "MicrosoftEdgeUpdate",
+    "OneDrive", "YourPhone", "GameBar", "SkypeApp", "Widgets",
+    "SecurityHealthSystray", "smartscreen", "CompPkgSrv"
+  ],
+  "defender_exclude_job": true,
+  "defender_realtime_off": false,
+  "defender_comment": "defender_exclude_job skips scanning only the run folder and the read-only Godot folder (the files Godot touches). defender_realtime_off turns Defender's real-time scanning off for the whole disposable sandbox: faster boot-to-run on this spinning-disk machine, but it removes a layer of protection around agent-authored code, so it is opt-in. Neither setting touches the host."
+}

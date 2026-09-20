@@ -1,0 +1,33 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://level.gd" id="1_level"]
+[ext_resource type="PackedScene" path="res://player.tscn" id="2_player"]
+[ext_resource type="Script" path="res://goal.gd" id="3_goal"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_ground"]
+size = Vector2(2000, 64)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_goal"]
+size = Vector2(40, 80)
+
+[node name="Main" type="Node2D"]
+
+script = ExtResource("1_level")
+
+[node name="Ground" type="StaticBody2D" parent="."]
+position = Vector2(500, 640)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Ground"]
+
+shape = SubResource("RectangleShape2D_ground")
+
+[node name="Player" parent="." instance=ExtResource("2_player")]
+position = Vector2(64, 560)
+
+[node name="Goal" type="Area2D" parent="."]
+position = Vector2(900, 560)
+script = ExtResource("3_goal")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Goal"]
+
+shape = SubResource("RectangleShape2D_goal")

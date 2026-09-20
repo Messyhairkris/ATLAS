@@ -65,6 +65,19 @@ try:
 except ImportError:
     HAS_HTTPX = False
 
+try:
+    from providers import chat_target as _provider_chat_target
+    from providers import filter_chat_body as _filter_chat_body
+    from providers import record_call as _telemetry_record
+    from providers.telemetry import summarize_usage as _summarize_usage
+    from providers.telemetry import cost_usd as _cost_usd
+except Exception:
+    _provider_chat_target = None
+    _filter_chat_body = None
+    _telemetry_record = None
+    _summarize_usage = None
+    _cost_usd = None
+
 # Plain-English system prompt — no model-specific directives (no `/nothink`).
 DEFAULT_SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely."
 
@@ -236,20 +249,58 @@ def chat_completion(
     if extra_body:
         body.update(extra_body)
 
-    endpoint = f"{llm_url}/v1/chat/completions"
+    target = _provider_chat_target() if _provider_chat_target else None
+    if target and not llm_url:
+        endpoint = target["url"]
+        body["model"] = target["model"]
+        body = _filter_chat_body(body, target["capabilities"])
+        headers = target["headers"]
+    else:
+        endpoint = f"{llm_url}/v1/chat/completions"
+        body.setdefault("model", os.environ.get("ATLAS_MODEL_NAME", "local-model"))
+        headers = _auth_headers()
+
     payload = json.dumps(body).encode("utf-8")
     start = time.time()
-    if HAS_HTTPX:
-        resp = httpx.post(endpoint, json=body, timeout=timeout,
-                          headers=_auth_headers())
-        resp.raise_for_status()
-        data = resp.json()
-    else:
-        req = urllib.request.Request(
-            endpoint, data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
+
+    def _telemetry(data, error=None):
+        if not (_telemetry_record and _summarize_usage):
+            return
+        event = {
+            "source": "llm_client",
+            "provider": (target or {}).get("provider", "local-llama"),
+            "model": body.get("model", ""),
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "requests": 1,
+        }
+        event.update(_summarize_usage(data))
+        if _cost_usd:
+            event["cost_usd"] = _cost_usd((target or {}).get("pricing"),
+                                          event["prompt_tokens"],
+                                          event["completion_tokens"])
+        if error:
+            event["error"] = error
+        _telemetry_record(event)
+
+    try:
+        if HAS_HTTPX:
+            resp = httpx.post(endpoint, json=body, timeout=timeout,
+                              headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        else:
+            req_headers = {"Content-Type": "application/json", **headers}
+            req = urllib.request.Request(
+                endpoint, data=payload, headers=req_headers)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        # A failed request still spends provider request quota (Synthetic's
+        # subscription meters requests per 5h, not tokens): log it too.
+        _telemetry({}, error=f"{type(e).__name__}: {str(e)[:200]}")
+        raise
     time_ms = (time.time() - start) * 1000
+    _telemetry(data)
 
     msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
     content = msg.get("content") or ""

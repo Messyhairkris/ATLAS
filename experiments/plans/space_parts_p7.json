@@ -1,0 +1,58 @@
+{
+  "parts": [
+    {
+      "id": "p7a_physics",
+      "required": [
+        "scripts/gravity_well.gd",
+        "scenes/planet.tscn",
+        "scenes/star.tscn",
+        "scripts/ship.gd"
+      ],
+      "must_contain": {
+        "scripts/gravity_well.gd": [
+          "gravity_well",
+          "well_pull",
+          "mass"
+        ],
+        "scripts/ship.gd": [
+          "THRUST",
+          "DRAG",
+          "MAX_SPEED",
+          "Y_SIGN",
+          "KEY_R",
+          "cmdline_user_args"
+        ]
+      },
+      "markers": []
+    },
+    {
+      "id": "p7b_world",
+      "required": [
+        "main.tscn",
+        "main.gd",
+        "scripts/tutorial.gd"
+      ],
+      "must_contain": {
+        "main.gd": [
+          "Camera3D",
+          "BOUNDS",
+          "emission",
+          "Label3D",
+          "$Ship.autopilot_target = "
+        ],
+        "scripts/tutorial.gd": [
+          "COMBO_x",
+          "SCORE_FINAL",
+          "TIME_BEST",
+          "150.0"
+        ],
+        "main.tscn": [
+          "res://main.gd",
+          "star.tscn",
+          "planet.tscn"
+        ]
+      },
+      "markers": []
+    }
+  ]
+}

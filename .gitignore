@@ -197,3 +197,6 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 .docs-audit-findings.md
 .loop-prompt.md
 .loop-progress.md
+
+# ----- api-harness fork: run state is local, never committed -----
+runs/

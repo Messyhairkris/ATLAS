@@ -1,0 +1,14 @@
+{
+  "parts": [
+    {
+      "id": "p6_polish",
+      "required": ["scripts/ship.gd", "scripts/tutorial.gd", "main.gd"],
+      "must_contain": {
+        "scripts/ship.gd": ["THRUST", "DRAG", "MAX_SPEED", "cmdline_user_args"],
+        "scripts/tutorial.gd": ["90.0"],
+        "main.gd": ["Label3D", "duplicate"]
+      },
+      "markers": []
+    }
+  ]
+}

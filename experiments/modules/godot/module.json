@@ -1,0 +1,28 @@
+{
+  "name": "godot",
+  "version": "0.1.6",
+  "engine": "Godot 4.6.1",
+  "description": "Bare-minimum Godot 4.6 knowledge, starter skeleton, and a known-good side-scroller reference for small API models.",
+  "knowledge": "knowledge.md",
+  "template": {
+    "project.godot": "template/project.godot",
+    "main.tscn": "template/main.tscn",
+    "main.gd": "template/main.gd"
+  },
+  "examples": {
+    "side_scroller_mini": [
+      "project.godot",
+      "main.tscn",
+      "player.tscn",
+      "player.gd",
+      "goal.gd",
+      "level.gd"
+    ]
+  },
+  "delivery_modes": [
+    "off",
+    "prompted",
+    "frontload",
+    "both"
+  ]
+}

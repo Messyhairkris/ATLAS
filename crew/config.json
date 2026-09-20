@@ -1,0 +1,101 @@
+{
+  "comment": "The Crew: proto-CrossTalk work queue for cheap roster models. Read roots bound what crew members may look at; write roots bound where APPROVED output may land. Nothing outside these is reachable. deny_globs win over roots (secrets, git internals, app config).",
+  "state_home": "C:/Users/user/ATLAS-api-harness/runs/crew",
+  "telemetry_file": "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki/experiments/atlas-api-harness/runs/telemetry.jsonl",
+  "project": "crosstalk",
+  "read_roots": [
+    "C:/Users/user/Documents/Obsidian/Knowledge_Base",
+    "C:/Users/user/ATLAS-api-harness",
+    "C:/Users/user/Cross_talk",
+    "C:/Users/user/Voice_to_Text_Project"
+  ],
+  "write_roots": [
+    "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki",
+    "C:/Users/user/ATLAS-api-harness/runs/crew/outbox"
+  ],
+  "deny_globs": [
+    "**/.git/**",
+    "**/.obsidian/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/crush.json*",
+    "**/*.env",
+    "**/.env*",
+    "**/*secret*",
+    "**/*token*",
+    "**/*credential*",
+    "**/*.pem",
+    "**/*.key",
+    "**/id_rsa*",
+    "**/runs/crew/jobs/**",
+    "**/runs/crew/claims/**",
+    "**/.claude/**",
+    "**/Voice_to_Text_Project/implementation/build/**",
+    "**/Voice_to_Text_Project/implementation/models/**",
+    "**/Voice_to_Text_Project/implementation/lexicon/**",
+    "**/Voice_to_Text_Project/implementation/dist/models/**",
+    "**/Voice_to_Text_Project/implementation/dist/lexicon/**"
+  ],
+  "fetch_allowlist": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "nvaccess.org",
+    "learn.microsoft.com",
+    "support.apple.com",
+    "en.wikipedia.org",
+    "www.nvaccess.org",
+    "developer.mozilla.org"
+  ],
+  "fetch_comment": "Domains crew members may fetch (e.g. \"docs.godotengine.org\"). Empty = web fetch disabled. Fetched pages are untrusted input: output stays staged and gated either way.",
+  "test_commands": {
+    "comment": "Commands the HARNESS may run for a test_triage task. A crew member can never choose or edit a command: it names one of these keys and the harness runs it. {python} is this interpreter. The code being run is the project's own, never agent-authored.",
+    "pytest": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "timeout_s": 900
+    },
+    "pytest-verbose": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-v",
+        "--tb=short"
+      ],
+      "timeout_s": 900
+    },
+    "script-tests": {
+      "comment": "For suites whose tests are standalone scripts (VtoT): runs each tests/test_*.py in its own process and prints a pytest-shaped summary.",
+      "argv": [
+        "{python}",
+        "C:/Users/user/ATLAS-api-harness/crew/runners/run_test_scripts.py",
+        "{project_root}"
+      ],
+      "timeout_s": 1800
+    }
+  },
+  "deny_models": [],
+  "rate_limit": {
+    "comment": "Kris's Synthetic allowance behaves like a bucket: capacity max_requests, refilling regen_percent of capacity every regen_hours. The crew tracks the level in runs/crew/rate_state.json from its own ledger and never spends below reserve, which is held for Kris's and Crush's interactive work (invisible to the ledger). mode 'window' falls back to the older rolling-window count.",
+    "mode": "bucket",
+    "max_requests": 500,
+    "regen_percent": 5,
+    "regen_hours": 3,
+    "reserve": 100,
+    "min_headroom": 4,
+    "window_seconds": 18000
+  },
+  "defaults": {
+    "assigned_to": "Hoss",
+    "max_requests": 12,
+    "max_tokens": 60000,
+    "max_revisions": 3,
+    "observation_chars": 6000,
+    "lease_seconds": 180
+  },
+  "deny_models_comment": "Empty: nothing is refused. The list was a measuring tool (Kimi was denied on 2026-09-19 to read roster-only spend: $0.15 crew vs $1.00 Kimi in 24h). Division of labor now: Crush drives Kimi, Claude drives Claude, and both delegate bounded work to the Crew. The crew's DEFAULT member is still Hoss (defaults.assigned_to); a big model only runs a crew job if an architect names it in assigned_to, which would usually mean the task was mis-scoped."
+}

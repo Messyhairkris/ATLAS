@@ -1,0 +1,89 @@
+{
+  "comment": "API harness provider registry. Add a provider or model without code changes: new entry + ATLAS_PROVIDER=<id>. default_provider intentionally unset so upstream local-llama behavior stays the default unless ATLAS_PROVIDER is exported.",
+  "default_provider": null,
+  "providers": {
+    "synthetic": {
+      "type": "openai-compat",
+      "base_url": "https://api.synthetic.new",
+      "auth": {
+        "type": "bearer",
+        "api_key_env": "SYNTHETIC_API_KEY",
+        "api_key_fallback": {
+          "config": "C:/Users/user/AppData/Local/crush/crush.json",
+          "key_selector": "providers.synthetic.api_key"
+        }
+      },
+      "capabilities": {
+        "supports_streaming": true,
+        "accepts_stream_options": true,
+        "accepts_seed": true,
+        "accepts_chat_template_kwargs": false,
+        "accepts_logprobs": false,
+        "structured_outputs": true,
+        "accepts_reasoning_effort": false
+      },
+      "chat_models": [
+        "hf:openai/gpt-oss-120b",
+        "hf:zai-org/GLM-4.7-Flash",
+        "hf:Qwen/Qwen3.8-27B",
+        "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+      ],
+      "model_aliases": {
+        "Hoss": "hf:openai/gpt-oss-120b",
+        "Barry": "hf:zai-org/GLM-4.7-Flash",
+        "Flash": "hf:zai-org/GLM-4.7-Flash",
+        "Qwen": "hf:Qwen/Qwen3.8-27B",
+        "Nemotron": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+        "Kimi": "hf:moonshotai/Kimi-K3"
+      },
+      "embeddings": {
+        "path": "/v1/embeddings",
+        "model": "hf:nomic-ai/nomic-embed-text-v1.5",
+        "billed": false,
+        "rate_limited": false
+      },
+      "billing_note": "Subscription plans meter REQUESTS per 5h window, not tokens; usage-based plans are per-token. Telemetry logs requests=1 per call (failures included). Fill pricing from Synthetic receipts; null = unpriced, never 'free'.",
+      "pricing": {
+        "hf:openai/gpt-oss-120b": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:zai-org/GLM-4.7-Flash": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:Qwen/Qwen3.8-27B": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:moonshotai/Kimi-K3": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        }
+      }
+    },
+    "local-llama": {
+      "type": "openai-compat",
+      "base_url": "http://localhost:8080",
+      "capabilities": {
+        "supports_streaming": true,
+        "accepts_stream_options": false,
+        "accepts_seed": true,
+        "accepts_chat_template_kwargs": true,
+        "accepts_logprobs": true
+      },
+      "chat_models": [
+        "local-model"
+      ],
+      "embeddings": {
+        "path": "/v1/embeddings",
+        "model": "default",
+        "billed": false
+      }
+    }
+  }
+}

@@ -1,0 +1,61 @@
+VtoT formatting practice and test document
+
+Read each line, then apply the formatting the line asks for, using the slash
+command shown in brackets or the voice command in quotes. When you have done
+every line, save the document as .html and run the checker; it tells you which
+lines really carry the formatting they claim.
+
+New to VtoT? Work down the list. By the end you will have used every full-line
+command once, and you will have a document that proves it.
+
+--- copy from the line below into VtoT, then format each line ---
+
+Style this line as Heading 1.                                   [/h1]  "new heading"
+Style this line as Heading 2.                                   [/h2]  "make this a heading two"
+Style this line as Heading 3.                                   [/h3]
+Make this line Heading 3, then make it body text.               [/h3] then [/body]
+This is the first bullet point.                                 [/bullet]  "bulleted list"
+This is the second bullet point.                                [/bullet]
+This is the first numbered item.                                [/number]  "numbered list"
+This is the second numbered item.                               [/number]
+This is an unchecked check box.                                 [/task]  "checklist"
+This is a checked check box.                                    [/task] then tick it
+Align this line to the left.                                    [/left]  "align left"
+Center this line.                                               [/center]  "align center"
+Align this line to the right.                                   [/right]  "align right"
+Make this whole line bold.                                      [/bold]  "bold this line"
+Make this whole line italic.                                    [/italic]  "italicize this line"
+Underline this whole line.                                      [/underline]  "underline this line"
+Strike through this whole line.                                 [/strike]  "strike that through"
+This line was bold and must end up plain again.                 [/bold] then [/plain]
+Color this line red.                                            [/color:red]  "make that red"
+Color this line with a custom color of your own.                [/color:...] or Custom color
+INT. TEST ROOM - DAY (this line is a screenplay scene heading).  [/scene]
+This line is screenplay action.                                 [/action]
+KRIS (this line is a screenplay character cue).                 [/character]
+(this line is a screenplay parenthetical)                       [/parenthetical]
+This line is screenplay dialogue.                               [/dialogue]
+CUT TO: (this line is a screenplay transition).                 [/transition]
+This line is screenplay centered text.                          [/centered]
+This line is screenplay lyrics.                                 [/lyrics]
+This line is a screenplay section heading.                      [/section]
+This line is a screenplay synopsis.                             [/synopsis]
+This line is a screenplay note.                                 [/note]
+
+--- end of the document ---
+
+Notes for the tester
+- Three lines are deliberately two steps, because removing formatting matters
+  as much as adding it: the checked box (checklist style, then tick it), the
+  plain line (bold it, then clear it), and the body-text line (make it a
+  heading first, then body text - which is how you clear a block style).
+- The color list ends with a custom color option; the custom line is there to
+  show you where it is.
+- Left alignment is the default, so the checker accepts either an explicit
+  left alignment or no alignment at all on that line.
+- Page break and title page are not in the list: they produce no line of their
+  own for the checker to find. Test them by hand by saving as .fountain and
+  looking for the elements in the saved file. Automated coverage of saved-file
+  shapes is deliberately deferred: not worth over-testing yet.
+- Selection-based commands (bold a word, color a phrase) and the right-click
+  menu are a separate document, still to be written.

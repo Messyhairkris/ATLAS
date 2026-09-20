@@ -13,6 +13,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from stages.llm_client import chatml_to_messages
 
+try:
+    from providers import chat_target as _provider_chat_target
+    from providers import embedding_target as _provider_embedding_target
+    from providers import filter_chat_body as _filter_chat_body
+    from providers import record_call as _telemetry_record
+    from providers.telemetry import summarize_usage as _summarize_usage
+except ImportError:  # upstream layout without providers/ (defensive)
+    _provider_chat_target = None
+    _provider_embedding_target = None
+    _filter_chat_body = None
+    _telemetry_record = None
+    _summarize_usage = None
+
 # --- Configuration -----------------------------------------------------------
 
 INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
@@ -216,6 +229,18 @@ class LLMAdapter:
         self.total_tokens += tokens
         return content, tokens, elapsed_ms
 
+    def _record_telemetry(self, target, model: str, data: dict, call_start: float) -> None:
+        if not (_telemetry_record and _summarize_usage):
+            return
+        event = {
+            "source": "v3_service",
+            "provider": (target or {}).get("provider", "local-llama"),
+            "model": model,
+            "latency_ms": round((time.time() - call_start) * 1000, 1),
+        }
+        event.update(_summarize_usage(data))
+        _telemetry_record(event)
+
     def _send(self, body: dict) -> dict:
         """Send to llama-server via /v1/chat/completions.
 
@@ -262,11 +287,24 @@ class LLMAdapter:
         if "seed" in body:
             chat_body["seed"] = body["seed"]
 
+        target = _provider_chat_target() if _provider_chat_target else None
+        if target:
+            url = target["url"]
+            chat_body["model"] = model_name if model_name != "local-model" else target["model"]
+            chat_body = _filter_chat_body(chat_body, target["capabilities"])
+            headers = {**target["headers"], **_service_headers()}
+            headers.pop("Authorization", None)
+            headers.update(target["headers"])
+        else:
+            url = f"{INFERENCE_URL}/v1/chat/completions"
+            headers = _service_headers()
+
         req = urllib.request.Request(
-            f"{INFERENCE_URL}/v1/chat/completions",
+            url,
             data=json.dumps(chat_body).encode(),
-            headers=_service_headers(),
+            headers=headers,
         )
+        call_start = time.time()
         for attempt in range(5):
             try:
                 with LLMAdapter._lock:
@@ -278,6 +316,7 @@ class LLMAdapter:
                                 choice = data["choices"][0]
                                 if "message" in choice:
                                     choice["text"] = choice["message"].get("content", "")
+                            self._record_telemetry(target, chat_body["model"], data, call_start)
                             return data
                         # Streaming path: parse SSE chunks, accumulate
                         # delta content, and forward each delta to the
@@ -330,10 +369,12 @@ class LLMAdapter:
                                   f"{sum(len(r) for r in reasoning)} chars) — using as content",
                                   flush=True)
                             text = "".join(reasoning)
-                        return {
+                        data = {
                             "choices": [{"text": text}],
                             "usage": usage,
                         }
+                        self._record_telemetry(target, chat_body["model"], data, call_start)
+                        return data
             except (urllib.error.HTTPError, OSError) as e:
                 print(f"  [LLM] Attempt {attempt+1} failed: {e}", flush=True)
                 if attempt < 4:
@@ -470,12 +511,20 @@ class EmbedAdapter:
     """Calls llama-server /v1/embeddings for code embeddings."""
 
     def __call__(self, text: str) -> List[float]:
-        body = {"model": "default", "input": text}
+        target = _provider_embedding_target() if _provider_embedding_target else None
+        if target:
+            url = target["url"]
+            body = {"model": target["model"], "input": text}
+            headers = target["headers"]
+        else:
+            url = f"{INFERENCE_URL}/v1/embeddings"
+            body = {"model": "default", "input": text}
+            headers = _service_headers()
         try:
             req = urllib.request.Request(
-                f"{INFERENCE_URL}/v1/embeddings",
+                url,
                 data=json.dumps(body).encode(),
-                headers=_service_headers(),
+                headers=headers,
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())

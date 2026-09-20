@@ -1,0 +1,318 @@
+{
+  "title": "VtoT formatting test document",
+  "purpose": "Each line states the formatting it is supposed to have. Apply that formatting with the slash command (or the equivalent voice command), save the document as .html, and the checker verifies every line really carries what its text claims. Doubles as a practice sheet for a new user learning the commands.",
+  "how_to_run": "python crew/runners/format_check.py <exported.html> crew/fixtures/format_test_doc.json",
+  "scope": "Full-line / block commands and whole-line inline styles, including clearing a style. Selection-based and right-click behavior is a separate document.",
+  "source_of_truth": "slash keys from DictationEditor.COMMANDS; html signatures from editor.to_html (semantic tags, vtot-* classes for screenplay elements)",
+  "lines": [
+    {
+      "id": "h1",
+      "slash": "/h1",
+      "voice": "new heading",
+      "text": "Style this line as Heading 1.",
+      "html_any": [
+        "<h1\\b"
+      ]
+    },
+    {
+      "id": "h2",
+      "slash": "/h2",
+      "voice": "make this a heading two",
+      "text": "Style this line as Heading 2.",
+      "html_any": [
+        "<h2\\b"
+      ]
+    },
+    {
+      "id": "h3",
+      "slash": "/h3",
+      "voice": "make this a heading three",
+      "text": "Style this line as Heading 3.",
+      "html_any": [
+        "<h3\\b"
+      ]
+    },
+    {
+      "id": "body_clears_heading",
+      "slash": "/h3 then /body",
+      "voice": "make this a heading three, then body text",
+      "text": "Make this line Heading 3, then make it body text.",
+      "html_any": [
+        "<p\\b"
+      ],
+      "html_none": [
+        "<h[1-6]\\b"
+      ],
+      "note": "two steps on purpose: it shows how body text clears a block style, and body text is the default look"
+    },
+    {
+      "id": "bullet1",
+      "slash": "/bullet",
+      "voice": "bulleted list",
+      "text": "This is the first bullet point.",
+      "html_any": [
+        "<ul\\b[^>]*>(?:(?!</ul>).)*<li"
+      ],
+      "parent": "ul"
+    },
+    {
+      "id": "bullet2",
+      "slash": "/bullet",
+      "voice": "bulleted list",
+      "text": "This is the second bullet point.",
+      "html_any": [
+        "<li\\b"
+      ],
+      "parent": "ul"
+    },
+    {
+      "id": "number1",
+      "slash": "/number",
+      "voice": "numbered list",
+      "text": "This is the first numbered item.",
+      "html_any": [
+        "<li\\b"
+      ],
+      "parent": "ol"
+    },
+    {
+      "id": "number2",
+      "slash": "/number",
+      "voice": "numbered list",
+      "text": "This is the second numbered item.",
+      "html_any": [
+        "<li\\b"
+      ],
+      "parent": "ol"
+    },
+    {
+      "id": "task_unchecked",
+      "slash": "/task",
+      "voice": "checklist",
+      "text": "This is an unchecked check box.",
+      "html_any": [
+        "<input type=\"checkbox\">"
+      ]
+    },
+    {
+      "id": "task_checked",
+      "slash": "/task",
+      "voice": "checklist",
+      "text": "This is a checked check box.",
+      "html_any": [
+        "<input type=\"checkbox\" checked=\"\">"
+      ],
+      "note": "tick it by hand or by voice after applying the checklist style"
+    },
+    {
+      "id": "align_left",
+      "slash": "/left",
+      "voice": "align left",
+      "text": "Align this line to the left.",
+      "html_any": [
+        "text-align:left",
+        "<(p|h[1-6]|li)\\b(?![^>]*text-align)"
+      ]
+    },
+    {
+      "id": "align_center",
+      "slash": "/center",
+      "voice": "align center",
+      "text": "Center this line.",
+      "html_any": [
+        "text-align:center"
+      ]
+    },
+    {
+      "id": "align_right",
+      "slash": "/right",
+      "voice": "align right",
+      "text": "Align this line to the right.",
+      "html_any": [
+        "text-align:right"
+      ]
+    },
+    {
+      "id": "bold",
+      "slash": "/bold",
+      "voice": "bold this line",
+      "text": "Make this whole line bold.",
+      "html_any": [
+        "<b\\b",
+        "<strong\\b",
+        "font-weight:\\s*(bold|[6-9]00)"
+      ]
+    },
+    {
+      "id": "italic",
+      "slash": "/italic",
+      "voice": "italicize this line",
+      "text": "Make this whole line italic.",
+      "html_any": [
+        "<i\\b",
+        "<em\\b",
+        "font-style:\\s*italic"
+      ]
+    },
+    {
+      "id": "underline",
+      "slash": "/underline",
+      "voice": "underline this line",
+      "text": "Underline this whole line.",
+      "html_any": [
+        "<u\\b",
+        "text-decoration:[^\"]*underline"
+      ]
+    },
+    {
+      "id": "strike",
+      "slash": "/strike",
+      "voice": "strike that through",
+      "text": "Strike through this whole line.",
+      "html_any": [
+        "<s\\b",
+        "<strike\\b",
+        "<del\\b",
+        "text-decoration:[^\"]*line-through"
+      ]
+    },
+    {
+      "id": "plain",
+      "slash": "/plain",
+      "voice": "remove formatting from this line",
+      "text": "This line was bold and must end up plain again.",
+      "html_none": [
+        "<b\\b",
+        "<strong\\b",
+        "font-weight:\\s*(bold|[6-9]00)"
+      ],
+      "note": "make it bold first, then clear the formatting"
+    },
+    {
+      "id": "color_red",
+      "slash": "/color:red",
+      "voice": "make that red",
+      "text": "Color this line red.",
+      "html_any": [
+        "color:\\s*#?(e|f)[0-9a-f]{2}",
+        "color:\\s*rgb\\(\\s*(1[6-9]\\d|2[0-5]\\d)"
+      ]
+    },
+    {
+      "id": "color_custom",
+      "slash": "/color:... then Custom color",
+      "voice": "make that <color>",
+      "text": "Color this line with a custom color of your own.",
+      "html_any": [
+        "color:\\s*#[0-9a-f]{3,6}",
+        "color:\\s*rgb\\("
+      ],
+      "note": "the color menu ends with a custom color option: any color the picker produces counts, so long as the line carries one"
+    },
+    {
+      "id": "scene",
+      "slash": "/scene",
+      "voice": "",
+      "text": "INT. TEST ROOM - DAY (this line is a screenplay scene heading).",
+      "html_any": [
+        "class=\"vtot-scene\""
+      ]
+    },
+    {
+      "id": "action",
+      "slash": "/action",
+      "voice": "",
+      "text": "This line is screenplay action.",
+      "html_any": [
+        "class=\"vtot-action\""
+      ]
+    },
+    {
+      "id": "character",
+      "slash": "/character",
+      "voice": "",
+      "text": "KRIS (this line is a screenplay character cue).",
+      "html_any": [
+        "class=\"vtot-character\""
+      ]
+    },
+    {
+      "id": "parenthetical",
+      "slash": "/parenthetical",
+      "voice": "",
+      "text": "(this line is a screenplay parenthetical)",
+      "html_any": [
+        "class=\"vtot-parenthetical\""
+      ]
+    },
+    {
+      "id": "dialogue",
+      "slash": "/dialogue",
+      "voice": "",
+      "text": "This line is screenplay dialogue.",
+      "html_any": [
+        "class=\"vtot-dialogue\""
+      ]
+    },
+    {
+      "id": "transition",
+      "slash": "/transition",
+      "voice": "",
+      "text": "CUT TO: (this line is a screenplay transition).",
+      "html_any": [
+        "class=\"vtot-transition\""
+      ]
+    },
+    {
+      "id": "centered_sp",
+      "slash": "/centered",
+      "voice": "",
+      "text": "This line is screenplay centered text.",
+      "html_any": [
+        "class=\"vtot-centered\""
+      ]
+    },
+    {
+      "id": "lyrics",
+      "slash": "/lyrics",
+      "voice": "",
+      "text": "This line is screenplay lyrics.",
+      "html_any": [
+        "class=\"vtot-lyrics\""
+      ]
+    },
+    {
+      "id": "section",
+      "slash": "/section",
+      "voice": "",
+      "text": "This line is a screenplay section heading.",
+      "html_any": [
+        "class=\"vtot-section\""
+      ]
+    },
+    {
+      "id": "synopsis",
+      "slash": "/synopsis",
+      "voice": "",
+      "text": "This line is a screenplay synopsis.",
+      "html_any": [
+        "class=\"vtot-synopsis\""
+      ]
+    },
+    {
+      "id": "note_sp",
+      "slash": "/note",
+      "voice": "",
+      "text": "This line is a screenplay note.",
+      "html_any": [
+        "class=\"vtot-note\""
+      ]
+    }
+  ],
+  "spelling": "American spelling by default (color, center); British variants are a later release option.",
+  "human_only": {
+    "page break": "save as .fountain and check the element is present",
+    "title page": "save as .fountain and check the element is present",
+    "why": "they produce no line of their own to check in .html; Kris: available for human testing, crew tests skip for now, saved-file shapes are not worth over-testing yet"
+  }
+}

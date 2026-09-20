@@ -1,0 +1,16 @@
+{
+  "parts": [
+    {
+      "id": "p7c_stagefix",
+      "required": ["scripts/tutorial.gd", "scripts/envoy.gd"],
+      "must_contain": {
+        "scripts/tutorial.gd": ["COMBO_x", "SCORE_FINAL", "TIME_BEST", "PLOT_REFINERY", "150.0", "_ore_count >= 4", "_debris_count >= 3"],
+        "scripts/envoy.gd": ["extends Area3D"]
+      },
+      "must_not_contain": {
+        "scripts/envoy.gd": ["connect"]
+      },
+      "markers": []
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+; Engine configuration file.
+; Minimal working Godot 4.6 project. Every new file the model adds must be
+; referenced here or from main.tscn — a file Godot never loads is a failure.
+
+config_version=5
+
+[application]
+
+config/name="Starter"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.6")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"

@@ -1,0 +1,14 @@
+{
+  "parts": [
+    {
+      "id": "p7d_physics_tune",
+      "required": ["scripts/gravity_well.gd", "scenes/star.tscn", "scenes/planet.tscn"],
+      "must_contain": {
+        "scripts/gravity_well.gd": ["deadzone", "ramp", "well_pull"],
+        "scenes/star.tscn": ["deadzone = 40.0", "mass = 900000"],
+        "scenes/planet.tscn": ["deadzone = 18.0", "mass = 250000"]
+      },
+      "markers": []
+    }
+  ]
+}
