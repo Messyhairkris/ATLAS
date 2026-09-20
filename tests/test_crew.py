@@ -995,6 +995,122 @@ class AutofixTests(CrewTestCase):
         self.assertNotIn("–", applied.read_text(encoding="utf-8"))
 
 
+class ReviewHandoffTests(unittest.TestCase):
+    """Kris, after using the desk: "Other than not knowing an LLM received the
+    info, it worked... I would add a button that confirms everything is complete
+    and tells the user the next steps"."""
+
+    def setUp(self):
+        from crew.runners import review_desk
+
+        self.rd = review_desk
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self._home = review_desk.home
+        review_desk.home = lambda: self.tmp / "review"
+        self.addCleanup(setattr, review_desk, "home", self._home)
+        self.paths = {}
+        for name in ("alpha.py", "beta.py", "gamma.py", "delta.py"):
+            path = self.tmp / name
+            path.write_text(f"# {name}\nvalue = 1\n", encoding="utf-8")
+            self.paths[name] = path
+
+    def queue(self, *decisions):
+        from crew.reviewdesk import review_index
+
+        items = []
+        for name, decision, note in decisions:
+            item = review_index.new_item(item_id=f"file:{name}", title=name,
+                                        path=str(self.paths[name]), origin="test")
+            if decision:
+                item.update(decision=decision, note=note, state="decided",
+                            decided_at="2026-09-20T12:00:00")
+            items.append(item)
+        self.rd.save_queue(items)
+        return items
+
+    def test_only_complete_decisions_are_ready_and_defer_never_is(self):
+        items = self.queue(("alpha.py", "approve", ""),
+                           ("beta.py", "reject", "this name says nothing at all"),
+                           ("gamma.py", "defer", "not until the spec settles here"),
+                           ("delta.py", "", ""))
+        ready = [i["item_id"] for i in self.rd.ready_to_send(items)]
+        self.assertEqual(ready, ["file:alpha.py", "file:beta.py"])
+
+    def test_an_incomplete_reject_is_not_handed_over(self):
+        items = self.queue(("alpha.py", "reject", "no"))
+        self.assertEqual(self.rd.ready_to_send(items), [])
+
+    def test_send_records_the_action_for_every_item(self):
+        items = self.queue(("alpha.py", "approve", ""),
+                           ("beta.py", "question", "why does this return a one?"))
+        handoff = self.rd.send_to_agent(items)
+        self.assertEqual(handoff["count"], 2)
+        actions = {r["item_id"]: r["action"] for r in handoff["items"]}
+        self.assertEqual(actions["file:alpha.py"], "apply the work")
+        self.assertEqual(actions["file:beta.py"],
+                         "answer the question, then ask again")
+        self.assertTrue(self.rd.handoff_file().is_file())
+        self.assertIn("for_agent.json", handoff["message"])
+
+    def test_sending_twice_hands_nothing_over_twice(self):
+        items = self.queue(("alpha.py", "approve", ""))
+        self.rd.send_to_agent(items)
+        self.assertEqual(self.rd.ready_to_send(items), [])
+        self.assertEqual(self.rd.send_to_agent(items)["count"], 0)
+
+    def test_the_decision_survives_being_sent(self):
+        items = self.queue(("beta.py", "reject", "this name says nothing at all"))
+        self.rd.send_to_agent(items)
+        reloaded = self.rd.load_queue()
+        self.assertEqual(reloaded[0]["decision"], "reject")
+        self.assertEqual(reloaded[0]["note"], "this name says nothing at all")
+        self.assertEqual(reloaded[0]["state"], "closed")
+
+    def test_a_file_touched_after_the_handoff_comes_back(self):
+        items = self.queue(("alpha.py", "approve", ""))
+        self.rd.send_to_agent(items)
+        sent = self.rd.load_sent()
+        self.assertFalse(self.rd.updated_since_sent(items[0], sent))
+        self.paths["alpha.py"].write_text("# changed\nvalue = 2\n",
+                                          encoding="utf-8")
+        self.assertTrue(self.rd.updated_since_sent(items[0], sent))
+
+    def test_an_item_never_sent_is_not_treated_as_updated(self):
+        items = self.queue(("alpha.py", "approve", ""))
+        self.assertFalse(self.rd.updated_since_sent(items[0], self.rd.load_sent()))
+
+    def test_next_steps_says_what_happens_to_each_kind(self):
+        items = self.queue(("alpha.py", "approve", ""),
+                           ("beta.py", "reject", "this name says nothing at all"),
+                           ("gamma.py", "question", "why does this return a one?"),
+                           ("delta.py", "defer", "not until the spec settles here"))
+        lines = self.rd.next_steps(items)
+        words = {count: what for count, what, _colour in lines}
+        self.assertIn("1 approved", words)
+        self.assertIn("leave your list", words["1 approved"])
+        self.assertIn("revises", words["1 rejected"])
+        self.assertIn("asks you again", words["1 questions"])
+        self.assertIn("nobody is told", words["1 deferred"])
+
+    def test_next_steps_mentions_what_is_still_undecided(self):
+        items = self.queue(("alpha.py", "approve", ""), ("delta.py", "", ""))
+        words = {count for count, _what, _colour in self.rd.next_steps(items)}
+        self.assertIn("1 still undecided", words)
+
+    def test_the_log_keeps_a_history_of_every_handoff(self):
+        items = self.queue(("alpha.py", "approve", ""))
+        self.rd.send_to_agent(items)
+        more = self.queue(("alpha.py", "approve", ""),
+                          ("beta.py", "reject", "this name says nothing at all"))
+        more[0]["state"] = "closed"
+        self.rd.send_to_agent(more)
+        lines = (self.rd.home() / "handoff.log").read_text(
+            encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(len(line.split(chr(9))) == 4 for line in lines))
+
+
 class PlaybookTests(CrewTestCase):
     def test_near_duplicates_refused_and_ids_increment(self):
         first = playbook.add("organize_plan", "Never move the PLAN note.", "t")

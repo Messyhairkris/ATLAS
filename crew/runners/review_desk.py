@@ -32,6 +32,7 @@ This window is Claude's, and it holds three rules it cannot bend:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -110,6 +111,155 @@ def write_digest(items: list) -> dict:
     return digest
 
 
+def sent_file() -> Path:
+    return home() / "sent.json"
+
+
+def handoff_file() -> Path:
+    return home() / "handoff.json"
+
+
+def load_sent() -> dict:
+    path = sent_file()
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def fingerprint(path) -> str:
+    """A short hash of the file as it stands, so a later change is noticeable."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return ""
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def ready_to_send(items: list) -> list:
+    """Decisions the agent has not been handed yet.
+
+    A defer is deliberately not here: Kris said defer means not now, and the
+    rules module says "leave it queued", so it never wakes anybody.
+    """
+    return [item for item in items
+            if item.get("decision") in ("approve", "reject", "question")
+            and review_rules.is_complete(item)
+            and item.get("state") != "closed"]
+
+
+def updated_since_sent(item: dict, sent: dict | None = None) -> bool:
+    """True when the file changed after he sent his decision on it.
+
+    That is the agent answering him - the item is worth another look, and the
+    desk colours it. His decision is never touched.
+    """
+    record = (sent if sent is not None else load_sent()).get(item.get("item_id"))
+    if not record or not record.get("fingerprint"):
+        return False
+    return fingerprint(item.get("path", "")) != record["fingerprint"]
+
+
+def next_steps(items: list) -> list:
+    """What happens next, in words, for a batch about to be sent.
+
+    Kris: "I would like a Complete modal pop up when everything has been completed
+    and instructions on next steps the user should take to keep the project moving
+    forward."  So this says what the agent will do AND what he has to do, which is
+    usually nothing.
+    """
+    batch = ready_to_send(items)
+    by = {"approve": [], "reject": [], "question": []}
+    for item in batch:
+        by[item["decision"]].append(item["title"])
+    lines = []
+    if by["approve"]:
+        lines.append((f"{len(by['approve'])} approved", "the agent applies the work "
+                      "as it stands, and these leave your list", OK))
+    if by["reject"]:
+        lines.append((f"{len(by['reject'])} rejected", "the agent revises each one "
+                      "using your note, then sends it back here", BAD))
+    if by["question"]:
+        lines.append((f"{len(by['question'])} questions", "the agent answers, then "
+                      "asks you again - these stay on your list", WARN))
+    deferred = [i for i in items if i.get("decision") == "defer"]
+    if deferred:
+        lines.append((f"{len(deferred)} deferred", "nobody is told; they stay "
+                      "yours until you decide", DIM))
+    waiting = review_rules.summarize(items)["pending"]
+    if waiting:
+        lines.append((f"{waiting} still undecided", "they are not part of this "
+                      "handoff; send again when you have decided them", DIM))
+    return lines
+
+
+def handoff_message(items: list) -> str:
+    """One sentence he can paste to any agent - Claude, Crush, or the next one."""
+    counts = review_rules.summarize(items)
+    return (f"Review Desk: {counts['approve']} approved, {counts['reject']} "
+            f"rejected, {counts['question']} questions. Read "
+            f"{digest_file()} and act on the actions map.")
+
+
+def send_to_agent(items: list) -> dict:
+    """Hand the decided items over, once, on purpose.
+
+    for_agent.json is still written on every save - nothing is ever lost by not
+    pressing the button. This is the part Kris asked for: a moment where he says
+    "go", and gets told it happened.
+    """
+    batch = ready_to_send(items)
+    sent = load_sent()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    records = []
+    for item in batch:
+        item["state"] = "closed"
+        sent[item["item_id"]] = {
+            "at": stamp,
+            "decision": item["decision"],
+            "fingerprint": fingerprint(item.get("path", "")),
+        }
+        records.append({"item_id": item["item_id"], "title": item["title"],
+                        "path": item.get("path", ""), "decision": item["decision"],
+                        "note": item.get("note", ""),
+                        "anchor": item.get("anchor", ""),
+                        "action": review_rules.next_action(item)})
+    handoff = {"sent_at": stamp, "count": len(records), "items": records,
+               "message": handoff_message(items), "digest": str(digest_file())}
+    home().mkdir(parents=True, exist_ok=True)
+    tmp = handoff_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(handoff, indent=2), encoding="utf-8")
+    os.replace(tmp, handoff_file())
+    tmp = sent_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(sent, indent=2), encoding="utf-8")
+    os.replace(tmp, sent_file())
+    tab, newline = chr(9), chr(10)
+    with (home() / "handoff.log").open("a", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(tab.join((stamp, record["decision"], record["item_id"],
+                               record["action"])) + newline)
+    save_queue(items)
+    return handoff
+
+
+def settings_file() -> Path:
+    return home() / "desk.json"
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads(settings_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(values: dict) -> None:
+    home().mkdir(parents=True, exist_ok=True)
+    settings_file().write_text(json.dumps(values, indent=2), encoding="utf-8")
+
+
 def crew_items() -> list:
     """Everything the crew has staged for review, as queue records.
 
@@ -156,16 +306,26 @@ def seed(extra_paths=()) -> list:
 class Desk:
     def __init__(self, items: list):
         import tkinter as tk
+        from tkinter import font as tkfont
 
         self.tk = tk
         self.items = items
         self.current = None
         self.file_text = ""
+        self.visible = []                 # positions in the list -> self.items
+        self.sent = load_sent()
+        self.settings = load_settings()
+        self.scale = int(self.settings.get("font_scale", 0))
+        self.offered = None                # the batch the modal has already offered
         self.root = tk.Tk()
         self.root.title("Review Desk")
         self.root.configure(bg=BG)
         self.root.geometry("1180x820")
+        self.fonts = {"code": tkfont.Font(family="Consolas", size=10),
+                      "body": tkfont.Font(family="Segoe UI", size=10),
+                      "list": tkfont.Font(family="Segoe UI", size=9)}
         self._build()
+        self.apply_scale(0)
         self.refresh_list()
         if self.items:
             self.select(0)
@@ -196,6 +356,16 @@ class Desk:
         self.counts.pack(side="left", padx=14)
         self._button(head, "refresh from the crew", self.do_seed)
         self._button(head, "open the index", lambda: self.open_path(queue_file()))
+        self._button(head, "A-", lambda: self.apply_scale(-1))
+        self._button(head, "A+", lambda: self.apply_scale(+1))
+        self._label(head, "(or Ctrl + wheel)", fg=DIM,
+                    font=("Segoe UI", 8)).pack(side="left")
+        self.finished = self.tk.BooleanVar(value=False)
+        self.tk.Checkbutton(
+            head, text="show what I have finished", variable=self.finished,
+            command=self.refresh_list, bg=BG, fg=DIM, selectcolor=PANEL,
+            activebackground=BG, activeforeground=FG, relief="flat",
+            font=("Segoe UI", 8), highlightthickness=0).pack(side="right")
 
         body = self.tk.Frame(self.root, bg=BG)
         body.pack(fill="both", expand=True, padx=10, pady=4)
@@ -206,13 +376,13 @@ class Desk:
         self.listbox = self.tk.Listbox(left, width=44, height=28, bg=PANEL, fg=FG,
                                        selectbackground=ACCENT,
                                        selectforeground="#101318",
-                                       font=("Segoe UI", 9), relief="flat",
+                                       font=self.fonts["list"], relief="flat",
                                        activestyle="none")
         self.listbox.pack(fill="y", expand=True, pady=(2, 0))
         self.listbox.bind("<<ListboxSelect>>",
-                          lambda _e: self.select(self.listbox.curselection()[0]
-                                                 if self.listbox.curselection()
-                                                 else None))
+                          lambda _e: self.select_at(self.listbox.curselection()[0]
+                                                    if self.listbox.curselection()
+                                                    else None))
 
         right = self.tk.Frame(body, bg=BG)
         right.pack(side="left", fill="both", expand=True, padx=(10, 0))
@@ -231,7 +401,7 @@ class Desk:
         self.anchor_label.pack(side="left", padx=8)
 
         self.viewer = self.tk.Text(right, bg=PANEL, fg=FG, insertbackground=FG,
-                                   font=("Consolas", 10), relief="flat",
+                                   font=self.fonts["code"], relief="flat",
                                    wrap="none", height=22)
         self.viewer.pack(fill="both", expand=True)
         self.viewer.tag_config("anchored", background="#2A3340")
@@ -239,7 +409,7 @@ class Desk:
         self._label(right, "your note - required for reject, question and defer",
                     fg=DIM).pack(anchor="w", pady=(8, 0))
         self.note = self.tk.Text(right, bg=PANEL, fg=FG, insertbackground=FG,
-                                 font=("Segoe UI", 10), relief="flat", height=4,
+                                 font=self.fonts["body"], relief="flat", height=4,
                                  wrap="word")
         self.note.pack(fill="x")
 
@@ -250,9 +420,33 @@ class Desk:
         self._button(buttons, "QUESTION", lambda: self.decide("question"), WARN, True)
         self._button(buttons, "DEFER", lambda: self.decide("defer"), None, True)
         self._button(buttons, "clear my decision", self.undecide)
+        self.send_button = self._button(buttons, "SEND TO THE AGENT",
+                                       self.offer_handoff, ACCENT, True)
 
         self.status = self._label(self.root, "ready", fg=OK)
         self.status.pack(anchor="w", padx=10, pady=(0, 10))
+
+        self.root.bind_all("<Control-MouseWheel>", self.on_wheel)
+        self.root.bind_all("<Control-plus>", lambda _e: self.apply_scale(+1))
+        self.root.bind_all("<Control-minus>", lambda _e: self.apply_scale(-1))
+
+    # -- reading it ---------------------------------------------------------------
+    def apply_scale(self, step: int) -> None:
+        """Kris: "My eyes are bad, can we make the windows font dynamic using the
+        scroll wheel?"  The file, the index and the note box grow together, and the
+        size is remembered for next time."""
+        self.scale = max(-3, min(14, self.scale + step))
+        for key, base in (("code", 10), ("body", 10), ("list", 9)):
+            self.fonts[key].configure(size=base + self.scale)
+        self.settings["font_scale"] = self.scale
+        save_settings(self.settings)
+        if step:
+            self.say(f"font {10 + self.scale} point "
+                     f"({self.scale:+d}) - Ctrl + wheel, or A- / A+", DIM)
+
+    def on_wheel(self, event) -> str:
+        self.apply_scale(1 if event.delta > 0 else -1)
+        return "break"          # do not scroll as well as resize
 
     # -- state -------------------------------------------------------------------
     def say(self, text: str, colour=FG) -> None:
@@ -260,17 +454,30 @@ class Desk:
         self.root.update_idletasks()
 
     def refresh_list(self) -> None:
+        """What is on your plate. Approved work that has been sent drops off -
+        Kris: "Any approved items would be removed from the list and used, while
+        the ones with questions would remain with a color change showing when they
+        have been updated for a new review"."""
         self.listbox.delete(0, "end")
-        for item in self.items:
+        self.visible = []
+        show_all = bool(getattr(self, "finished", None) and self.finished.get())
+        for index, item in enumerate(self.items):
             decision = item.get("decision") or ""
+            done = item.get("state") == "closed"
+            touched = done and updated_since_sent(item, self.sent)
+            if done and decision == "approve" and not touched and not show_all:
+                continue                        # applied; off your plate
             mark = {"approve": "[ok] ", "reject": "[no] ",
                     "question": "[?]  ", "defer": "[...] "}.get(decision, "     ")
             if decision and not review_rules.is_complete(item):
                 mark = "[!]  "
+            if touched:
+                mark = "[new] "
+            self.visible.append(index)
             self.listbox.insert("end", mark + item["title"])
-            if decision:
-                self.listbox.itemconfig(
-                    "end", foreground=DECISION_COLOUR.get(decision, FG))
+            colour = ACCENT if touched else DECISION_COLOUR.get(decision, FG)
+            if decision or touched:
+                self.listbox.itemconfig("end", foreground=colour)
         counts = review_rules.summarize(self.items)
         digest = review_rules.agent_digest(self.items)
         self.counts.config(
@@ -279,8 +486,28 @@ class Desk:
                  f"{counts['question']} questions, {counts['defer']} deferred"
                  + (f", {counts['incomplete']} need a reason"
                     if counts["incomplete"] else "")
-                 + (f" | {len(digest['waiting_on_agent'])} ready for the agent"
+                 + (f" | {len(ready_to_send(self.items))} ready to send"
+                    if ready_to_send(self.items) else "")
+                 + (f" | {len(digest['waiting_on_agent'])} with the agent"
                     if digest["waiting_on_agent"] else ""))
+        if hasattr(self, "send_button"):
+            waiting = len(ready_to_send(self.items))
+            self.send_button.config(
+                text=f"SEND {waiting} TO THE AGENT" if waiting
+                else "NOTHING TO SEND",
+                state="normal" if waiting else "disabled")
+
+    def reselect(self) -> None:
+        """Keep the same item highlighted after the list is rebuilt."""
+        self.listbox.selection_clear(0, "end")
+        if self.current in self.visible:
+            self.listbox.selection_set(self.visible.index(self.current))
+
+    def select_at(self, position) -> None:
+        """The list can hide finished work, so a row is not an item number."""
+        if position is None or not (0 <= position < len(self.visible)):
+            return
+        self.select(self.visible[position])
 
     def select(self, index) -> None:
         if index is None or not (0 <= index < len(self.items)):
@@ -400,10 +627,103 @@ class Desk:
                     decided_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
         save_queue(self.items)
         self.refresh_list()
-        self.listbox.selection_clear(0, "end")
-        self.listbox.selection_set(self.current)
+        self.reselect()
         self.say(f"{decision}: {review_rules.next_action(item)} "
-                 f"- the agent has been told", OK)
+                 f"- press SEND when you are ready", OK)
+        self.maybe_offer()
+
+    # -- handing it over -----------------------------------------------------------
+    def maybe_offer(self) -> None:
+        """When the last item is decided, say so - unprompted, once per batch."""
+        batch = ready_to_send(self.items)
+        if not batch or review_rules.summarize(self.items)["pending"]:
+            return
+        signature = tuple(sorted(item["item_id"] for item in batch))
+        if signature == self.offered:
+            return
+        self.offered = signature
+        self.offer_handoff(complete=True)
+
+    def offer_handoff(self, complete: bool = False) -> None:
+        batch = ready_to_send(self.items)
+        if not batch:
+            self.say("nothing new to send - every decision has been handed over",
+                     DIM)
+            return
+        self.modal(batch, complete)
+
+    def modal(self, batch: list, complete: bool) -> None:
+        tk = self.tk
+        win = tk.Toplevel(self.root, bg=BG)
+        win.title("Ready to hand over")
+        win.transient(self.root)
+        win.geometry("620x440")
+        win.grab_set()
+
+        head = ("Everything is reviewed." if complete
+                else f"{len(batch)} decision(s) ready.")
+        tk.Label(win, text=head, bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=16,
+                                                     pady=(16, 2))
+        tk.Label(win, text="What happens when you send:", bg=BG, fg=DIM,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=16)
+        for count, what, colour in next_steps(self.items):
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill="x", padx=16, pady=1)
+            tk.Label(row, text=count, bg=BG, fg=colour, width=16, anchor="w",
+                     font=("Segoe UI", 10, "bold")).pack(side="left")
+            tk.Label(row, text=what, bg=BG, fg=FG, anchor="w", justify="left",
+                     wraplength=420, font=("Segoe UI", 9)).pack(side="left")
+
+        tk.Label(win, text="Then, on your side:", bg=BG, fg=DIM,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=16, pady=(12, 0))
+        yours = tk.Label(
+            win, bg=BG, fg=FG, justify="left", wraplength=560,
+            font=("Segoe UI", 9),
+            text="Nothing, if an agent is already working with you: it reads "
+                 "for_agent.json at the start of its turn.\nIf you want it picked "
+                 "up right now, press copy and paste the line into the chat - it "
+                 "works for Claude or for Crush.\nApproved work leaves this list. "
+                 "Anything you rejected or asked about comes back here in orange "
+                 "when the file has been touched.")
+        yours.pack(anchor="w", padx=16)
+
+        status = tk.Label(win, text="", bg=BG, fg=OK, font=("Segoe UI", 9))
+        status.pack(anchor="w", padx=16, pady=(10, 0))
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=16, pady=14)
+
+        def do_send():
+            handoff = send_to_agent(self.items)
+            self.sent = load_sent()
+            self.refresh_list()
+            self.reselect()
+            status.config(
+                text=f"sent {handoff['count']} item(s) at "
+                     f"{handoff['sent_at'][11:]} - written to handoff.json, "
+                     f"for_agent.json and handoff.log",
+                fg=OK)
+            send.config(text="sent", state="disabled")
+            self.say(f"handed {handoff['count']} item(s) to the agent at "
+                     f"{handoff['sent_at'][11:]}", OK)
+
+        def copy_line():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(handoff_message(self.items))
+            status.config(text="copied - paste it to any agent", fg=ACCENT)
+
+        send = tk.Button(row, text=f"SEND {len(batch)} TO THE AGENT",
+                         command=do_send, relief="flat", bg=ACCENT, fg="#101318",
+                         font=("Segoe UI", 11, "bold"), padx=14, pady=6)
+        send.pack(side="left")
+        tk.Button(row, text="copy the message", command=copy_line, relief="flat",
+                  bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
+                  pady=4).pack(side="left", padx=8)
+        tk.Button(row, text="close", command=win.destroy, relief="flat",
+                  bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
+                  pady=4).pack(side="right")
+        self.modal_window = win
 
     @staticmethod
     def explain(decision: str, problems: list) -> str:
@@ -427,10 +747,13 @@ class Desk:
                     state="pending", decided_at="")
         save_queue(self.items)
         self.refresh_list()
+        self.reselect()
+        self.offered = None
         self.say("decision cleared; it is waiting for you again", DIM)
 
     def do_seed(self) -> None:
         self.items = seed()
+        self.sent = load_sent()
         self.refresh_list()
         self.say(f"{len(self.items)} item(s) in the queue", OK)
 

@@ -25,13 +25,20 @@ sys.path.insert(0, str(REPO_ROOT))
 from crew import codetask                                    # noqa: E402
 from crew.config import load_config                          # noqa: E402
 
-# module file -> the hidden tests that judge it
-HIDDEN = {
-    "devices.py": "test_tts_devices.py",
-    "verbalize.py": "test_tts_verbalize.py",
-    "chattiness.py": "test_tts_chattiness.py",
-    "speech_queue.py": "test_tts_speech_queue.py",
-}
+def hidden_for(module_name: str, hidden_dir: Path):
+    """The hidden tests that judge this module, by name.
+
+    Convention, not a list: `devices.py` is judged by `test_devices.py` or
+    `test_tts_devices.py`. The vendor step looks for the same two names, so a
+    module accepted today is audited tomorrow without anybody editing this file -
+    which is how the Review Desk modules came to be loaded but never judged.
+    """
+    stem = Path(module_name).stem
+    for candidate in (f"test_{stem}.py", f"test_tts_{stem}.py"):
+        path = hidden_dir / candidate
+        if path.is_file():
+            return path
+    return None
 
 
 def main(argv=None) -> int:
@@ -52,16 +59,16 @@ def main(argv=None) -> int:
         return 1
 
     modules = {p.name: p.read_text(encoding="utf-8")
-               for p in sorted(workspace.glob("*.py"))}
+               for p in sorted(workspace.glob("*.py"))
+               if p.name != "__init__.py"}
     if not modules:
         print(f"no accepted modules in {workspace}\n\n1 failed, 0 passed in 0.00s")
         return 1
     tests = {}
     missing = []
     for name in modules:
-        hidden = HIDDEN.get(name)
-        path = hidden_dir / hidden if hidden else None
-        if path and path.is_file():
+        path = hidden_for(name, hidden_dir)
+        if path:
             tests[path.name] = path.read_text(encoding="utf-8")
         else:
             missing.append(name)
