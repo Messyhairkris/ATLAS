@@ -56,7 +56,12 @@ is removed. `collapse_whitespace("a  \n b\t")` is `"a b"`. `""` gives `""`.
   1. first, each run of three or more periods becomes `ELLIPSIS`
      (`"wait..."` -> `"wait ellipsis"`);
   2. then every character in `PUNCTUATION` is replaced by its spoken name,
-     surrounded by spaces, wherever it appears, **including inside a word**;
+     surrounded by spaces - **except an apostrophe between two letters**, which
+     is left exactly as it is. Kris, after hearing it: "just say the contractions
+     or possessives now. It is distracting because the word fragment is not a real
+     word and so it sounds weird anyway." So `don't` stays `don't`, and `Kris's`
+     stays `Kris's`. An apostrophe NOT between two letters is still named, because
+     there it is punctuation: a quote, a plural possessive, or one standing alone;
   3. then the result is whitespace-collapsed.
 - `""` returns `""` at every level.
 
@@ -65,7 +70,9 @@ Worked examples, which the tests use:
 | text | level | result |
 |---|---|---|
 | `"Hello, world."` | `"verbatim"` | `"Hello comma world period"` |
-| `"don't"` | `"verbatim"` | `"don apostrophe t"` |
+| `"don't"` | `"verbatim"` | `"don't"` |
+| `"Kris's notes"` | `"verbatim"` | `"Kris's notes"` |
+| `"the dogs' bowls"` | `"verbatim"` | `"the dogs apostrophe bowls"` |
 | `"What?!"` | `"verbatim"` | `"What question mark exclamation mark"` |
 | `"line one\nline two"` | `"verbatim"` | `"line one line break line two"` |
 | `"wait..."` | `"verbatim"` | `"wait ellipsis"` |
@@ -75,6 +82,29 @@ Worked examples, which the tests use:
 
 Characters that are not in `PUNCTUATION` are left exactly as they are, at every
 level: `verbalize("café #1", "verbatim")` keeps `café` and `#1`.
+
+## spell(text)
+
+For when the user asks: *spell this*, *spell it*, *spell that*. Returns the
+characters one at a time, separated by single spaces:
+
+- a letter becomes its **uppercase** self (`a` -> `A`);
+- a digit stays as it is;
+- a space becomes `SPACE_WORD`;
+- a character in `PUNCTUATION` becomes its spoken name - **including the
+  apostrophe**, which is the whole point of spelling something;
+- anything else is left as the character itself.
+
+`SPELL_COMMANDS` holds the phrases VtoT listens for, so the wording lives beside
+the behavior instead of in the UI.
+
+| call | result |
+|---|---|
+| `spell("don't")` | `"D O N apostrophe T"` |
+| `spell("Kris's")` | `"K R I S apostrophe S"` |
+| `spell("a-b")` | `"A dash B"` |
+| `spell("no 7")` | `"N O space 7"` |
+| `spell("")` | `""` |
 
 ## Style
 

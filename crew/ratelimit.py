@@ -162,12 +162,63 @@ class RateWindow:
         return None if oldest is None else time.time() - oldest
 
     # -- governor -------------------------------------------------------------
+    # -- what the provider itself reports ------------------------------------
+    #
+    # Everything below this line beats everything above it. The bucket model was
+    # a reasonable guess with no better information; a reading is not a guess.
+
+    def provider_view(self):
+        """The provider's own live account of what is left, or None."""
+        try:
+            import sys
+            from .config import REPO_ROOT
+            sys.path.insert(0, str(REPO_ROOT / "v3-service"))
+            from providers import quotas
+            return quotas.latest(), quotas
+        except Exception:                                    # noqa: BLE001
+            return None, None
+
+    def provider_gate(self, want: int):
+        """(ok, wait_seconds, detail) from the provider's numbers, or None when it
+        has never answered us."""
+        view, quotas = self.provider_view()
+        if not view:
+            return None
+        s = self.settings
+        reserve_frac = float(s.get("credit_reserve_percent", 5)) / 100.0
+        if view.get("requests_limited"):
+            return (False, 900.0,
+                    "the provider says the five-hour request limit is reached; "
+                    f"next tick {view.get('requests_next_tick')}")
+        remaining = view.get("requests_remaining")
+        if remaining is not None and remaining < max(1.0, float(s.get("min_headroom", 4))):
+            return (False, 900.0,
+                    f"only {remaining:.1f} requests left in this five-hour window; "
+                    f"next tick {view.get('requests_next_tick')}")
+        percent = view.get("credits_percent_remaining")
+        if percent is not None and percent / 100.0 <= reserve_frac:
+            return (False, 3600.0,
+                    f"weekly credits are down to {percent:.1f}% "
+                    f"(${view.get('credits_remaining_usd')} of "
+                    f"${view.get('credits_max_usd')}), below the "
+                    f"{reserve_frac * 100:.0f}% reserve kept for interactive work. "
+                    f"+${view.get('credits_next_regen_usd')} at "
+                    f"{view.get('credits_next_regen_at')}")
+        binding = quotas.binding_limit(view) if quotas else {}
+        return (True, 0.0,
+                f"provider reports {remaining:.1f}/{view.get('requests_max')} "
+                f"requests and {percent:.1f}% of weekly credits; binding limit is "
+                f"{binding.get('limit', '?')}")
+
     def gate(self, job_requests: int = 0) -> Tuple[bool, float, str]:
         """(may_start, wait_seconds, detail). A job may start when the window
         has room for its whole budget, or at least min_headroom requests: a
         job stopped by the request budget mid-way still produced a partial
         result, which is better than never starting, but we never start with
         almost nothing left."""
+        authoritative = self.provider_gate(job_requests)
+        if authoritative is not None:
+            return authoritative
         s = self.settings
         left = self.remaining()
         want = max(int(job_requests or 0), 1)
@@ -185,9 +236,15 @@ class RateWindow:
                              f"next window room in ~{int(wait / 60)} min")
 
     def report(self) -> dict:
+        provider, quotas = self.provider_view()
         s = self.settings
         mode = s.get("mode", "bucket")
-        out = {"mode": mode, "max_requests": s["max_requests"],
+        out = {"provider_reported": provider,
+               "binding_limit": (quotas.binding_limit(provider)
+                                 if (provider and quotas) else None),
+               "mode": mode + (" (fallback only: the provider's own reading wins)"
+                               if provider else ""),
+               "max_requests": s["max_requests"],
                "reserve_for_interactive_use": s["reserve"],
                "available_to_crew": self.remaining(),
                "used_in_last_window": self.used()}

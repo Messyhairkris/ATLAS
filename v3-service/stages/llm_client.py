@@ -205,6 +205,36 @@ def _parse_logprobs(data: dict) -> List[float]:
         return []
 
 
+QUOTA_HEADER = "x-synthetic-quotas"
+
+
+def _note_quotas(headers: dict) -> None:
+    """Record the provider's own account of what is left.
+
+    Synthetic reports the live five-hour request balance AND the weekly credit
+    balance on every response. That is authoritative; anything we model ourselves
+    is a guess that was measured to be 30x wrong. Failures here never affect the
+    call - a missing header just means the governor keeps its last reading.
+    """
+    raw = None
+    for key, value in headers.items():
+        if key.lower() == QUOTA_HEADER:
+            raw = value
+            break
+    if not raw:
+        return
+    try:
+        import json as _json
+        snapshot = _json.loads(raw)
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        from providers.quotas import record as record_quota
+        record_quota(snapshot)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
 def chat_completion(
     llm_url: str,
     user: Optional[str] = None,
@@ -288,12 +318,14 @@ def chat_completion(
                               headers=headers)
             resp.raise_for_status()
             data = resp.json()
+            _note_quotas(dict(resp.headers))
         else:
             req_headers = {"Content-Type": "application/json", **headers}
             req = urllib.request.Request(
                 endpoint, data=payload, headers=req_headers)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
+                _note_quotas(dict(r.headers))
     except Exception as e:
         # A failed request still spends provider request quota (Synthetic's
         # subscription meters requests per 5h, not tokens): log it too.

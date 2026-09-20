@@ -70,6 +70,10 @@ class CrewTestCase(unittest.TestCase):
         (self.vault / ".git" / "config").write_text("secret")
         self._pb_backup = {t: playbook.load(t) for t in playbook.PREFIX}
         self._env = dict(os.environ)
+        # The governor prefers the provider's own quota reading over its own
+        # model. Point that at a path with no reading, so the tests below
+        # exercise the fallback model deliberately rather than by accident.
+        os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "no-quota-reading.json")
         os.environ["ATLAS_PROVIDER"] = "synthetic"
         os.environ.pop("ATLAS_DENY_MODELS", None)
         self.cfg = Config({
@@ -781,9 +785,93 @@ class RateBudgetTests(CrewTestCase):
                          ["task_submitted", "rate_hold"])
 
 
+class ProviderQuotaTests(CrewTestCase):
+    """Synthetic reports the live limits in `x-synthetic-quotas`, and a reading
+    beats a model. Measured 2026-09-20: a cheap-model call costs 0.0333 requests,
+    not 1, and the binding limit was the weekly credit pool at 6.9%, which the
+    bucket model could not see at all."""
+
+    def _with_reading(self, **over):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "v3-service"))
+        from providers import quotas
+        snapshot = {"rollingFiveHourLimit": {"remaining": 999.9, "max": 1000,
+                                            "tickPercent": 0.05,
+                                            "nextTickAt": "2026-09-20T20:08:24Z",
+                                            "limited": False},
+                    "weeklyTokenLimit": {"maxCredits": "$48.00",
+                                         "remainingCredits": "$24.00",
+                                         "percentRemaining": 50.0,
+                                         "nextRegenCredits": "$0.96",
+                                         "nextRegenAt": "2026-09-20T20:59:13Z"}}
+        for key, value in over.items():
+            section, field = key.split("__", 1)
+            snapshot[section][field] = value
+        os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "quota.json")
+        quotas.record(snapshot)
+        self.cfg.data["rate_limit"] = {"mode": "bucket", "max_requests": 1000,
+                                       "regen_percent": 5, "regen_hours": 3,
+                                       "reserve": 10, "min_headroom": 4,
+                                       "credit_reserve_percent": 5}
+        from crew.ratelimit import RateWindow
+        return RateWindow(self.cfg)
+
+    def test_money_is_parsed_not_guessed(self):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "v3-service"))
+        from providers import quotas
+        self.assertEqual(quotas._money("$3.32"), 3.32)
+        self.assertEqual(quotas._money("$48.00"), 48.0)
+        self.assertIsNone(quotas._money(None))
+        self.assertIsNone(quotas._money("plenty"))
+
+    def test_a_healthy_reading_lets_work_start(self):
+        ok, wait, detail = self._with_reading().gate(14)
+        self.assertTrue(ok)
+        self.assertEqual(wait, 0.0)
+        self.assertIn("provider reports", detail)
+
+    def test_the_credit_pool_can_stop_a_campaign_even_with_requests_to_spare(self):
+        """The case that was invisible before: 99.99% of requests available and
+        the weekly credits nearly gone."""
+        rate = self._with_reading(weeklyTokenLimit__percentRemaining=3.0,
+                                  weeklyTokenLimit__remainingCredits="$1.44")
+        ok, wait, detail = rate.gate(14)
+        self.assertFalse(ok)
+        self.assertGreater(wait, 0)
+        self.assertIn("weekly credits", detail)
+        self.assertIn("reserve", detail)
+
+    def test_a_reported_request_limit_stops_work(self):
+        rate = self._with_reading(rollingFiveHourLimit__limited=True)
+        ok, _wait, detail = rate.gate(1)
+        self.assertFalse(ok)
+        self.assertIn("five-hour request limit", detail)
+
+    def test_the_binding_limit_is_named(self):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "v3-service"))
+        from providers import quotas
+        self._with_reading(weeklyTokenLimit__percentRemaining=6.9)
+        self.assertEqual(quotas.binding_limit()["limit"], "credits")
+        self._with_reading(rollingFiveHourLimit__remaining=10.0)
+        self.assertEqual(quotas.binding_limit()["limit"], "requests")
+
+    def test_no_reading_falls_back_to_the_model(self):
+        os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "missing.json")
+        self.cfg.data["rate_limit"] = {"mode": "bucket", "max_requests": 100,
+                                       "regen_percent": 5, "regen_hours": 3,
+                                       "reserve": 10, "min_headroom": 4}
+        from crew.ratelimit import RateWindow
+        rate = RateWindow(self.cfg)
+        self.assertIsNone(rate.provider_gate(1))
+        ok, _wait, _detail = rate.gate(1)
+        self.assertTrue(ok)
+
+
 class BucketBudgetTests(CrewTestCase):
-    """Kris's allowance refills 5% of capacity every 3 hours, so the crew
-    models it as a bucket rather than a rolling window."""
+    """The fallback model, used only before the provider has answered us once:
+    the allowance refills a percentage of capacity on a timer."""
 
     def _bucket(self, **over):
         self.cfg.data["rate_limit"] = {"mode": "bucket", "max_requests": 100,

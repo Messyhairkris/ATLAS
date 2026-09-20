@@ -82,14 +82,15 @@
   },
   "deny_models": [],
   "rate_limit": {
-    "comment": "Kris's Synthetic allowance behaves like a bucket: capacity max_requests, refilling regen_percent of capacity every regen_hours. The crew tracks the level in runs/crew/rate_state.json from its own ledger and never spends below reserve, which is held for Kris's and Crush's interactive work (invisible to the ledger). mode 'window' falls back to the older rolling-window count.",
+    "comment": "The provider reports the truth in the x-synthetic-quotas response header and the governor reads it: five-hour requests remaining AND weekly credits remaining in dollars. Measured 2026-09-20: a cheap-model call costs 0.0333 requests, not 1, and the binding limit is usually the weekly credit pool, not requests. The bucket numbers below are only a fallback for before the provider has answered us once. credit_reserve_percent is kept for Kris and Crush.",
     "mode": "bucket",
-    "max_requests": 500,
+    "max_requests": 1000,
     "regen_percent": 5,
     "regen_hours": 3,
     "reserve": 100,
     "min_headroom": 4,
-    "window_seconds": 18000
+    "window_seconds": 18000,
+    "credit_reserve_percent": 5
   },
   "defaults": {
     "assigned_to": "Hoss",

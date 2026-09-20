@@ -52,7 +52,7 @@ def test_ordinary_levels_keep_the_text_as_written(level):
 
 @pytest.mark.parametrize("text,expected", [
     ("Hello, world.", "Hello comma world period"),
-    ("don't", "don apostrophe t"),
+    ("don't", "don't"),
     ("What?!", "What question mark exclamation mark"),
     ("line one\nline two", "line one line break line two"),
     ("wait...", "wait ellipsis"),
@@ -79,6 +79,35 @@ def test_verbatim_result_is_single_spaced_and_trimmed():
 def test_characters_outside_the_table_are_untouched():
     assert v.verbalize("café #1", "verbatim") == "café #1"
     assert v.verbalize("100% done", "verbatim") == "100% done"
+
+
+def test_an_apostrophe_inside_a_word_is_left_alone():
+    """Kris, after hearing it: a word fragment is not a real word, so a
+    contraction or possessive is spoken as the word itself."""
+    assert v.verbalize("don't", "verbatim") == "don't"
+    assert v.verbalize("Kris's notes", "verbatim") == "Kris's notes"
+    assert v.verbalize("it's rock'n'roll", "verbatim") == "it's rock'n'roll"
+    assert v.verbalize("O'Reilly", "verbatim") == "O'Reilly"
+
+
+def test_an_apostrophe_that_is_not_inside_a_word_is_still_named():
+    assert v.verbalize("the dogs' bowls", "verbatim") == "the dogs apostrophe bowls"
+    assert v.verbalize("'quoted'", "verbatim") == "apostrophe quoted apostrophe"
+    assert v.verbalize("'", "verbatim") == "apostrophe"
+    assert v.verbalize("ends with'", "verbatim") == "ends with apostrophe"
+
+
+def test_spell_names_every_character_including_the_apostrophe():
+    assert v.spell("don't") == "D O N apostrophe T"
+    assert v.spell("Kris's") == "K R I S apostrophe S"
+    assert v.spell("a-b") == "A dash B"
+    assert v.spell("no 7") == "N O space 7"
+    assert v.spell("") == ""
+    assert v.SPACE_WORD == "space"
+
+
+def test_the_spell_commands_live_with_the_behaviour():
+    assert set(v.SPELL_COMMANDS) == {"spell this", "spell it", "spell that"}
 
 
 def test_a_mark_on_its_own_is_still_named():
