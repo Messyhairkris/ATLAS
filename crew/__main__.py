@@ -43,6 +43,9 @@ def main(argv=None) -> int:
     if raw and raw[0] == "unify":
         from . import unify
         return unify.main(raw[1:])
+    if raw and raw[0] == "vendor":
+        from . import vendor
+        return vendor.main(raw[1:])
 
     ap = argparse.ArgumentParser(prog="python -m crew")
     sub = ap.add_subparsers(dest="cmd", required=True)

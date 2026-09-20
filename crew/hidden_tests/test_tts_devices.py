@@ -58,6 +58,36 @@ def test_clamp_volume(value, expected):
     assert got == expected and isinstance(got, int)
 
 
+def test_ceilings_are_per_device():
+    assert d.HEADSET_CEILING == 65
+    assert d.SPEAKER_CEILING == 100
+    assert d.SPEAKER_FLOOR == 1
+    assert d.ceiling_for(d.HEADSET) == 65
+    assert d.ceiling_for(d.SPEAKERS) == 100
+    assert d.ceiling_for(d.UNKNOWN) == 65, "an unidentified device gets the quiet one"
+    assert d.ceiling_for("nonsense") == 65
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0, 1), (1, 1), (45, 45), (65, 65), (100, 100), (120, 100), (-5, 1),
+    (99.6, 100), (None, 45), ("loud", 45),
+])
+def test_clamp_volume_for_speakers(value, expected):
+    """Kris: speakers run 1 to 100 to be heard over background noise, and a
+    speaker channel is never silently muted."""
+    got = d.clamp_volume(value, d.SPEAKERS)
+    assert got == expected and isinstance(got, int)
+
+
+def test_a_headset_may_be_muted_but_speakers_may_not():
+    assert d.clamp_volume(0, d.HEADSET) == 0
+    assert d.clamp_volume(0, d.SPEAKERS) == d.SPEAKER_FLOOR
+
+
+def test_an_unknown_device_gets_the_headset_ceiling():
+    assert d.clamp_volume(100, d.UNKNOWN) == 65
+
+
 def test_clear_session_returns_a_new_policy_and_does_not_mutate():
     p = d.Policy(allow_speakers_this_session=True, override_device="x")
     q = d.clear_session(p)
@@ -67,10 +97,10 @@ def test_clear_session_returns_a_new_policy_and_does_not_mutate():
     assert dataclasses.is_dataclass(q)
 
 
-def test_default_policy_is_private_by_default():
+def test_default_policy_is_private_and_avoids_hands_free():
     p = d.Policy()
     assert p.allow_speakers_this_session is False
-    assert p.prefer_hands_free_while_live is True
+    assert p.avoid_hands_free is True
     assert p.override_device is None
 
 
@@ -87,27 +117,39 @@ def test_headset_is_the_default_and_speakers_stay_silent():
     assert "headset" in r["reason"].lower()
 
 
-def test_hands_free_endpoint_while_the_microphone_is_live():
-    r = d.choose(REAL, mic_live=True)
+def test_the_hands_free_endpoint_is_never_chosen_while_another_exists():
+    """Measured 2026-09-20: hands-free speaks once, then blocks forever, and wedges
+    the headset for both endpoints. Kris: "hands free is not the method to use."""
+    for mic_live in (False, True):
+        r = d.choose(REAL, mic_live=mic_live)
+        assert r["device"]["index"] == 2, f"mic_live={mic_live}"
+        assert "stereo" in r["reason"].lower()
+        assert "hands-free" not in r["reason"].lower()
+
+
+def test_dictating_is_still_reported_in_the_reason():
+    assert "while dictating" in d.choose(REAL, mic_live=True)["reason"].lower()
+    assert "while dictating" not in d.choose(REAL, mic_live=False)["reason"].lower()
+
+
+def test_hands_free_is_used_only_when_it_is_the_only_headset():
+    only = [{"index": 0, "name": "Speakers (x)"},
+            {"index": 1, "name": "Headset (M98 Hands-Free AG Audio)"}]
+    r = d.choose(only)
     assert r["device"]["index"] == 1
-    assert "hands-free" in r["reason"].lower()
-
-
-def test_stereo_endpoint_when_the_microphone_is_idle():
-    r = d.choose(REAL, mic_live=False)
-    assert r["device"]["index"] == 2
-    assert "stereo" in r["reason"].lower()
-
-
-def test_hands_free_preference_can_be_turned_off():
-    p = d.Policy(prefer_hands_free_while_live=False)
-    r = d.choose(REAL, mic_live=True, policy=p)
-    assert r["device"]["index"] in (1, 2)
     assert r["speak"] is True
+    assert "hands-free" in r["reason"].lower(), "the reason must carry the warning"
+
+
+def test_avoiding_hands_free_can_be_turned_off():
+    p = d.Policy(avoid_hands_free=False)
+    r = d.choose(REAL, policy=p)
+    assert r["speak"] is True
+    assert d.classify(r["device"]["name"]) == "headset"
 
 
 def test_lowest_index_headset_when_no_endpoint_name_hints():
-    plain = [{"index": 3, "name": "Headset B"}, {"index": 1, "name": "Headset A"}]
+    plain = [{"index": 3, "name": "Headphones B"}, {"index": 1, "name": "Headphones A"}]
     assert d.choose(plain, mic_live=True)["device"]["index"] == 1
     assert d.choose(plain, mic_live=False)["device"]["index"] == 1
 

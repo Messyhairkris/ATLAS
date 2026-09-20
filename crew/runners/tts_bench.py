@@ -47,6 +47,11 @@ OK = "#5BD675"
 BAD = "#FF6B6B"
 WARN = "#FFC857"
 SPEAK_TIMEOUT = 20.0            # a device that takes longer is reported, not waited on
+# SAPI speak flags. Async is what makes a stop button possible at all: a
+# synchronous Speak() holds the worker inside Windows with no way to interrupt it.
+SVSF_ASYNC = 1
+SVSF_PURGE = 2
+POLL_MS = 100                   # how often the worker checks for a stop request
 
 
 def load_modules(workspace: Path):
@@ -73,6 +78,7 @@ class SpeechWorker(threading.Thread):
         super().__init__(daemon=True)
         self.jobs: queuelib.Queue = queuelib.Queue()
         self.results = results
+        self.stop_now = threading.Event()   # set by the UI, read between polls
         self.voice = None
         self.tokens = None
         self.error = ""
@@ -123,6 +129,7 @@ class SpeechWorker(threading.Thread):
             self._render(job)
 
     def _speak(self, job: dict) -> None:
+        """Speak asynchronously and poll, so a stop request can cut in mid-word."""
         index, text = job["index"], job["text"]
         self.results.put({"event": "speaking", "id": job.get("id"), "text": text,
                           "device": job.get("device", "")})
@@ -130,9 +137,37 @@ class SpeechWorker(threading.Thread):
         if 0 <= index < self.tokens.Count:
             self.voice.AudioOutput = self.tokens.Item(index)
         self.voice.Volume = int(job.get("volume", 45))
-        self.voice.Speak(text)
+        self.stop_now.clear()
+        self.voice.Speak(text, SVSF_ASYNC)
+        while True:
+            if self.stop_now.is_set():
+                # Discard whatever Windows still holds: this is what silences the
+                # voice in the middle of a sentence.
+                self.voice.Speak("", SVSF_ASYNC | SVSF_PURGE)
+                self.stop_now.clear()
+                self.results.put({"event": "stopped", "id": job.get("id"),
+                                  "seconds": round(time.time() - t0, 2),
+                                  "text": text})
+                return
+            if self.voice.WaitUntilDone(POLL_MS):
+                break
         self.results.put({"event": "spoken", "id": job.get("id"),
                           "seconds": round(time.time() - t0, 2), "text": text})
+
+    def request_stop(self) -> None:
+        """Called from the UI thread: only sets a flag, never touches COM."""
+        self.stop_now.set()
+
+    def drop_queued(self) -> int:
+        """Throw away jobs not yet started. The one being spoken is stopped by
+        request_stop; these never begin."""
+        dropped = 0
+        while True:
+            try:
+                self.jobs.get_nowait()
+                dropped += 1
+            except queuelib.Empty:
+                return dropped
 
     def _render(self, job: dict) -> None:
         """Speak into a WAV and report the peak amplitude: proof the engine makes
@@ -247,6 +282,7 @@ class Bench:
         self._button(row, "check the engine out loud", self.self_check)
         self._button(row, "prove audio is produced", self.prove_audio)
         self._button(row, "run the whole demo", self.run_demo)
+        self._button(row, "STOP SPEAKING", self.stop_speaking, big=True)
         self._button(row, "restart the speech engine", self.restart_engine)
         self.speaking = self._label(act, "", fg=WARN, font=("Segoe UI", 10, "bold"))
         self.speaking.pack(anchor="w", pady=(6, 0))
@@ -494,6 +530,17 @@ class Bench:
                      "the engine.", BAD)
         self.wedged = True
 
+    def stop_speaking(self) -> int:
+        """Silence the voice now and drop anything queued behind it."""
+        dropped = self.worker.drop_queued()
+        self.worker.request_stop()
+        self.pending_jobs.clear()
+        self.log(f"stop: purging the current utterance"
+                 + (f" and dropping {dropped} queued after it" if dropped else ""),
+                 TEST_COLOR)
+        self.speaking.config(text="stopped", fg=WARN)
+        return dropped
+
     def restart_engine(self) -> None:
         """Abandon a wedged engine and start a fresh one.
 
@@ -686,24 +733,33 @@ class Bench:
         if index < 0:
             self.log("no device to speak through", BAD)
             return
-        # The contract's rule, exercised for real: exactly False stops the run.
+        # The worker speaks these one at a time, in order, and a stop drops the
+        # rest - which is what makes "cancel all" mean something while talking.
+        count = 0
         while q.pending:
             utt = q.next_utterance()
             if utt is None:
                 break
             self.speak_on(index, name, utt.text)
+            count += 1
+        self.log(f"handed {count} utterance(s) to the engine, in queue order")
         self.refresh_queue()
 
     def cancel_current(self):
+        """The queue's own cancel, plus the audio - Kris: "cancel of queued items
+        did not cancel the ones being spoken"."""
+        self.stop_speaking()
         if self.queue is None:
             return
         self.log(f"cancel_current() -> {self.queue.cancel_current()}")
         self.refresh_queue()
 
     def cancel_all(self):
+        self.stop_speaking()
         if self.queue is None:
             return
-        self.log(f"cancel_all() cleared {self.queue.cancel_all()}")
+        self.log(f"cancel_all() cleared {self.queue.cancel_all()} queued "
+                 f"utterance(s), and the voice was silenced")
         self.refresh_queue()
 
     # -- results from the worker --------------------------------------------------
@@ -752,6 +808,11 @@ class Bench:
             self.log(f"<- spoke in {msg['seconds']}s: {msg['text']!r}", OK)
             self.speaking.config(text=f"last utterance took {msg['seconds']}s",
                                  fg=OK)
+        elif event == "stopped":
+            self.pending_jobs.pop(msg.get("id"), None)
+            self.log(f"<- stopped after {msg['seconds']}s (mid-utterance): "
+                     f"{msg['text']!r}", WARN)
+            self.speaking.config(text=f"stopped after {msg['seconds']}s", fg=WARN)
         elif event == "rendered":
             self.log(f"rendered {msg['frames']} frames "
                      f"({msg['seconds']}s of audio), peak amplitude "
