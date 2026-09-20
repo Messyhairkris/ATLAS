@@ -1,0 +1,95 @@
+{
+  "name": "review-desk",
+  "goal": "Build the logic behind CrossTalk's review desk: the INI index that queues items for a human, the rule that an approval needs no explanation while a rejection or question does, and the anchors that keep a note attached to the right lines of a file even after the file changes. Claude builds the Windows GUI on top of these three modules.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 160,
+  "max_attempts": 3,
+  "max_escalations": 2,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Signal": {
+      "author": "Qwen",
+      "tester": "Nemotron"
+    },
+    "Relay": {
+      "author": "Nemotron",
+      "tester": "Barry"
+    },
+    "Pipes": {
+      "author": "Hoss",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "review_rules",
+      "team": "Relay",
+      "module": "review_rules.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/review_rules.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_review_rules.py"
+      ],
+      "api": [
+        "DECISIONS",
+        "NEEDS_NOTE",
+        "MIN_NOTE_CHARS",
+        "validate",
+        "is_complete",
+        "next_action",
+        "summarize",
+        "agent_digest"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "instructions": "This enforces Kris's review rule: an approval needs no explanation, a rejection or a question does. Nothing here touches a file or a clock.",
+      "test_instructions": "Prove that an approval with no note is accepted and a rejection with no note is not, and that a defer never wakes the agent."
+    },
+    {
+      "id": "review_index",
+      "team": "Signal",
+      "module": "review_index.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/review_index.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_review_index.py"
+      ],
+      "api": [
+        "STATES",
+        "DECISIONS",
+        "FIELDS",
+        "new_item",
+        "render",
+        "parse",
+        "merge",
+        "pending",
+        "find"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "instructions": "The index is a file a human may open in Notepad, so the round trip matters more than cleverness. merge must never overwrite a decision a human already made.",
+      "test_instructions": "Include a note containing a newline, an = sign and a semicolon, and prove merge leaves a decided item completely alone."
+    },
+    {
+      "id": "review_anchors",
+      "team": "Pipes",
+      "module": "review_anchors.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/review_anchors.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_review_anchors.py"
+      ],
+      "api": [
+        "CONTEXT_LINES",
+        "make_anchor",
+        "format_anchor",
+        "parse_anchor",
+        "excerpt",
+        "relocate"
+      ],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "A note pinned to a line must survive the file changing, or say plainly that it cannot. Matching is exact, including indentation: a comment must never drift onto code that merely resembles the code it was written about.",
+      "test_instructions": "Cover all four relocate outcomes - unchanged, moved, ambiguous, stale - and prove that a change in indentation makes an anchor stale rather than moved."
+    }
+  ],
+  "workspace_subdir": "reviewdesk"
+}

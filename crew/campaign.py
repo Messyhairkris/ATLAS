@@ -54,7 +54,11 @@ class Campaign:
         self.name = spec["name"]
         self.home = Path(self.cfg.state_home) / "campaigns" / self.name
         self.home.mkdir(parents=True, exist_ok=True)
+        # A campaign may keep its output in its own folder, so one campaign's
+        # modules cannot be confused with another's while a human is testing.
         self.workspace = Path(self.cfg.state_home) / "outbox" / "workspace"
+        if spec.get("workspace_subdir"):
+            self.workspace = self.workspace / str(spec["workspace_subdir"])
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.max_requests = int(spec.get("max_requests", 150))
         self.max_attempts = int(spec.get("max_attempts", 3))

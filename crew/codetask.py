@@ -42,7 +42,7 @@ ALLOWED_IMPORTS = {
     "itertools", "functools", "abc", "types", "string", "unicodedata",
     "statistics", "bisect", "copy", "heapq", "operator", "textwrap", "numbers",
     "fractions", "decimal", "datetime", "warnings", "threading", "queue",
-    "contextlib", "__future__",
+    "contextlib", "__future__", "configparser", "hashlib",
 }
 # `logging` is deliberately absent: logging.basicConfig(filename=...) writes a
 # file, and no contract needs logging inside a pure module.
@@ -65,6 +65,10 @@ BANNED_ATTRS = {
     "system", "popen", "startfile", "urlopen", "Popen", "check_output",
     "check_call", "execv", "execve", "fork", "rmtree", "FileHandler",
     "basicConfig",
+    # configparser is allowed so a module can PARSE ini text, but .read() and
+    # .read_file() open files, which is the one thing it must not do. read_string
+    # is the parsing entry point and stays allowed.
+    "read", "read_file",
 }
 MAX_SOURCE_BYTES = 200_000
 

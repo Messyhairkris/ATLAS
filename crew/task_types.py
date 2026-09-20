@@ -350,12 +350,25 @@ def ui_sweep_gates(files, spec, cfg, toolbox):
 CONTRACT_CHARS = 12000
 
 
+HOUSE_STYLE = Path(__file__).resolve().parent / "contracts" / "HOUSE_STYLE.md"
+
+
 def _contract_text(spec: dict, cfg: Config) -> str:
+    """The contract, with the house style appended.
+
+    The first campaign produced correct code with 64 lint findings, and every one
+    of them was something nobody had asked for in writing. So the style block
+    travels with every contract now, rather than living in a file members cannot
+    see.
+    """
     path = Path(spec["contract"]).resolve()
     if not path.is_file() or not cfg.readable(path):
         raise CrewError(f"spec.contract {spec['contract']} is not a readable file "
                         f"in the crew's read roots")
-    return path.read_text(encoding="utf-8")[:CONTRACT_CHARS]
+    text = path.read_text(encoding="utf-8")[:CONTRACT_CHARS]
+    if HOUSE_STYLE.is_file():
+        text += "\n\n---\n\n" + HOUSE_STYLE.read_text(encoding="utf-8")
+    return text
 
 
 def _hidden_tests(spec: dict, cfg: Config) -> Dict[str, str]:
