@@ -97,7 +97,14 @@
     "max_tokens": 60000,
     "max_revisions": 3,
     "observation_chars": 6000,
-    "lease_seconds": 180
+    "lease_seconds": 180,
+    "max_tokens_by_member": {
+      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not.",
+      "Barry": 32768,
+      "Nemotron": 24576,
+      "Hoss": 16384,
+      "Qwen": 16384
+    }
   },
   "deny_models_comment": "Empty: nothing is refused. The list was a measuring tool (Kimi was denied on 2026-09-19 to read roster-only spend: $0.15 crew vs $1.00 Kimi in 24h). Division of labor now: Crush drives Kimi, Claude drives Claude, and both delegate bounded work to the Crew. The crew's DEFAULT member is still Hoss (defaults.assigned_to); a big model only runs a crew job if an architect names it in assigned_to, which would usually mean the task was mis-scoped.",
   "deny_globs_comment": "crew/hidden_tests is denied so a member can never read the tests that judge it, even if a task mistakenly widens its read roots. crew/campaigns is denied because a campaign file names every task and team."

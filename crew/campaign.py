@@ -58,6 +58,10 @@ class Campaign:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.max_requests = int(spec.get("max_requests", 150))
         self.max_attempts = int(spec.get("max_attempts", 3))
+        # A senior call is the only expensive request in the campaign (Kimi,
+        # not a roster model), so the whole run gets a small fixed allowance.
+        self.max_escalations = int(spec.get("max_escalations", 2))
+        self.escalations_used = 0
         self.deadline = self._deadline(spec.get("deadline"))
         self.requests_used = 0
         self.events: List[dict] = []
@@ -159,6 +163,7 @@ class Campaign:
             "updated": _now(),
             "requests_used": self.requests_used,
             "requests_budget": self.max_requests,
+            "senior_calls": f"{self.escalations_used}/{self.max_escalations}",
             "minutes_to_deadline": left,
             "tasks": {i: {k: t[k] for k in
                           ("state", "kind", "team", "member", "attempts",
@@ -305,6 +310,14 @@ class Campaign:
         """Ask a senior model what is going wrong. It returns DIRECTIVES, never
         code, so the crew member still does the work - and we find out whether
         the task was mis-specified rather than blaming the model."""
+        if self.escalations_used >= self.max_escalations:
+            self.say(f"{task['id']}: senior review is capped at "
+                     f"{self.max_escalations} for this campaign and the "
+                     f"allowance is spent; recording the failure instead")
+            self.event("escalation_capped", task=task["id"],
+                       cap=self.max_escalations)
+            return False
+        self.escalations_used += 1
         task["escalations"] += 1
         task["state"] = ESCALATED
         self.write_status()

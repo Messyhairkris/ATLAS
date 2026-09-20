@@ -122,10 +122,13 @@ def campaign_report(campaign) -> dict:
 
     if gates:
         lines += ["## What actually went wrong", "",
-                  "Every failed attempt, grouped by the check that stopped it. "
-                  "This is the list to act on: it names the skill gap or the "
-                  "contract flaw, not a vague impression.", "",
-                  "| Check | Times it failed |", "|---|---|"]
+                  "Every failed attempt, grouped by what stopped it. A GATE name "
+                  "(safety, api, hidden tests, tests green, no stubs) means the "
+                  "work was judged and found wanting. A STOP REASON "
+                  "(empty_replies, output_truncated, no_progress) means the "
+                  "member never reached judgement at all - that is a budget or "
+                  "task-size problem, not a quality one.", "",
+                  "| Check | Times it stopped an attempt |", "|---|---|"]
         for gate, n in gates.most_common():
             lines.append(f"| {gate} | {n} |")
         lines.append("")
@@ -177,9 +180,27 @@ def _recommendations(data: dict, gates: collections.Counter) -> List[str]:
             out.append(f"- {n} tester submission(s) disagreed with an accepted "
                        f"module. Read those: one of the two misread the contract, "
                        f"and that sentence needs rewriting.")
+        elif gate == "empty_replies":
+            out.append(f"- {n} attempt(s) ended in EMPTY replies: the member spent "
+                       f"its whole output budget reasoning and never wrote an "
+                       f"answer. That is a ceiling problem, not a contract "
+                       f"problem. Raise `defaults.max_tokens_by_member` for that "
+                       f"model (GLM-4.7-Flash needed 32768) rather than editing "
+                       f"the contract.")
+        elif gate == "output_truncated":
+            out.append(f"- {n} attempt(s) were cut off mid-file. Raise that "
+                       f"member's output ceiling, or split the module in two.")
+        elif gate in ("no_change", "no_progress", "loop", "invalid_replies"):
+            out.append(f"- {n} attempt(s) ended on a loop guard ('{gate}'): the "
+                       f"member stopped making progress. Shrink the task before "
+                       f"retrying it; another attempt at the same size usually "
+                       f"repeats the same stall.")
         elif gate:
-            out.append(f"- '{gate}' failed {n} time(s); check whether the contract "
-                       f"states that requirement explicitly.")
+            out.append(f"- '{gate}' stopped {n} attempt(s). If it names a gate, "
+                       f"check that the contract states the requirement "
+                       f"explicitly; if it names a stop reason, the member never "
+                       f"reached judgement and the budget or the task size is the "
+                       f"thing to change.")
     slow = [t for t in data["tasks_detail"].values() if t["attempts"] >= 3]
     if slow:
         out.append(f"- {len(slow)} task(s) needed three or more attempts. Those are "

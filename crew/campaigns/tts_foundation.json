@@ -5,6 +5,7 @@
   "senior_fallback": "Kimi",
   "max_requests": 180,
   "max_attempts": 3,
+  "max_escalations": 2,
   "requests_per_attempt": 14,
   "teams": {
     "Pipes":  {"author": "Hoss",     "tester": "Qwen"},

@@ -224,9 +224,14 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                 break
             messages.append({"role": "assistant", "content": "(empty reply)"})
             messages.append({"role": "user", "content":
-                             "EMPTY REPLY: your answer channel was empty. Put the "
-                             "JSON tool call or SUBMIT block in the answer itself, "
-                             f"not only in your reasoning. ({left} replies left)"})
+                             "EMPTY REPLY: your answer channel was empty. You "
+                             "spent the whole output budget thinking and never "
+                             "wrote an answer. Think briefly, then put the JSON "
+                             "tool call or the SUBMIT block in the answer "
+                             "itself - a plan in your reasoning reaches nobody. "
+                             "If the file is long, write it directly without "
+                             "drafting it first. "
+                             f"({left} replies left)"})
             continue
         messages.append({"role": "assistant", "content": reply})
         kind, a, b = parse_reply(reply, expected_files)

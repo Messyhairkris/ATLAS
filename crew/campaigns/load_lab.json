@@ -1,10 +1,10 @@
 {
   "name": "tts-foundation-load",
-  "comment": "Several suites at once, on purpose, to measure what the crew's work costs this machine. The governor holds a job back rather than letting the box thrash: Kris asked to stress it without crashing it. Run this AFTER the campaign, so the workspace tests exist.",
+  "comment": "Several suites at once, on purpose, to measure what the crew's work costs this machine. The governor holds a job back rather than letting the box thrash: Kris asked to stress it without crashing it. Run this AFTER the campaign, so the workspace tests exist. The floor is a share of total RAM (min_free_percent) because a fixed 2000MB floor stalled the first run for nine minutes on a box with 1876MB free.",
   "max_parallel": 4,
   "cpu_ceiling": 85,
-  "min_free_mb": 2000,
-  "timeout_s": 1200,
+  "min_free_mb": 1200,
+  "timeout_s": 420,
   "out_dir": "C:/Users/user/ATLAS-api-harness/runs/crew/campaigns/tts-foundation",
   "jobs": [
     {
@@ -59,5 +59,6 @@
       ],
       "cwd": "C:/Users/user/Voice_to_Text_Project/implementation"
     }
-  ]
+  ],
+  "min_free_percent": 8
 }

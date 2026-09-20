@@ -37,8 +37,22 @@ def _env_setup(cfg: Config) -> None:
         os.environ.setdefault("ATLAS_DENY_MODELS", ",".join(cfg.deny_models))
 
 
+# Output ceiling per member, from crew/config.json. A reasoning model needs room
+# for the thinking AND the answer: at 16384 Barry spent 18-20k tokens reasoning
+# and returned three EMPTY replies in a row (2026-09-20).
+DEFAULT_REPLY_TOKENS = 16384
+
+
+def _reply_tokens(cfg: Config, persona: str) -> int:
+    table = (cfg.defaults.get("max_tokens_by_member") or {})
+    try:
+        return int(table.get(persona, DEFAULT_REPLY_TOKENS))
+    except (TypeError, ValueError):
+        return DEFAULT_REPLY_TOKENS
+
+
 def _default_chat(model: str, job_id: str, task_type: str, persona: str,
-                  renew: Callable[[], None]):
+                  renew: Callable[[], None], reply_tokens: int = DEFAULT_REPLY_TOKENS):
     from providers.telemetry import context as telemetry_context
     from stages.llm_client import chat_completion
 
@@ -48,11 +62,8 @@ def _default_chat(model: str, job_id: str, task_type: str, persona: str,
         with telemetry_context(run_id=job_id, duty=f"crew:{task_type}",
                                task_id=job_id, role="junior",
                                persona=persona, attempt=n):
-            # 16384: gpt-oss spends most of a small budget on reasoning
-            # (measured 7.7k reasoning vs 1.3k answer at 8192) and its report
-            # was cut off mid-file (2026-09-19).
             return chat_completion("", messages=messages, temperature=0.2,
-                                   max_tokens=16384, timeout=900.0)
+                                   max_tokens=reply_tokens, timeout=900.0)
     return chat
 
 
@@ -154,9 +165,16 @@ class Crew:
                                   for i, c in enumerate(job["constraints"]))
             task_text = (f"TASK {job_id}: {job['title']}\n"
                          f"{job['description'] or ''}{constraints}\n\n{preload}")
-            chat = self.chat_factory(job["model"], job_id, job["task_type"],
-                                     job["assigned_to"],
-                                     lambda: self.store.renew(job_id))
+            try:
+                chat = self.chat_factory(
+                    job["model"], job_id, job["task_type"], job["assigned_to"],
+                    lambda: self.store.renew(job_id),
+                    _reply_tokens(self.cfg, job["assigned_to"]))
+            except TypeError:
+                # a test double with the older five-argument signature
+                chat = self.chat_factory(job["model"], job_id, job["task_type"],
+                                         job["assigned_to"],
+                                         lambda: self.store.renew(job_id))
             fixes: List[str] = []
 
             def grade(files: Dict[str, str]) -> List[dict]:
