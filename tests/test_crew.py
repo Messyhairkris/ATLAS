@@ -1103,18 +1103,26 @@ class ReviewHandoffTests(unittest.TestCase):
         self.assertEqual(reloaded[0]["note"], "this name says nothing at all")
         self.assertEqual(reloaded[0]["state"], "closed")
 
+    def test_a_file_touched_after_a_decision_comes_back(self):
+        items = self.queue(("alpha.py", "approve", ""))
+        self.rd.stamp_decision(items[0])
+        stamps = self.rd.load_sent()
+        self.assertFalse(self.rd.changed_since_he_looked(items[0], stamps))
+        self.paths["alpha.py"].write_text("# changed by the agent\n", encoding="utf-8")
+        self.assertTrue(self.rd.changed_since_he_looked(items[0], stamps))
+
     def test_a_file_touched_after_the_handoff_comes_back(self):
         items = self.queue(("alpha.py", "approve", ""))
         self.rd.send_to_agent(items)
         sent = self.rd.load_sent()
-        self.assertFalse(self.rd.updated_since_sent(items[0], sent))
+        self.assertFalse(self.rd.changed_since_he_looked(items[0], sent))
         self.paths["alpha.py"].write_text("# changed\nvalue = 2\n",
                                           encoding="utf-8")
-        self.assertTrue(self.rd.updated_since_sent(items[0], sent))
+        self.assertTrue(self.rd.changed_since_he_looked(items[0], sent))
 
     def test_an_item_never_sent_is_not_treated_as_updated(self):
         items = self.queue(("alpha.py", "approve", ""))
-        self.assertFalse(self.rd.updated_since_sent(items[0], self.rd.load_sent()))
+        self.assertFalse(self.rd.changed_since_he_looked(items[0], self.rd.load_sent()))
 
     def test_next_steps_says_what_happens_to_each_kind(self):
         items = self.queue(("alpha.py", "approve", ""),
@@ -1145,6 +1153,30 @@ class ReviewHandoffTests(unittest.TestCase):
             encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 2)
         self.assertTrue(all(len(line.split(chr(9))) == 4 for line in lines))
+
+
+class UnifyImportSniffingTests(unittest.TestCase):
+    """profiles.py says `from devices import classify`, and the old check looked
+    for the substring "import devices" - so the module looked dependency-free and
+    the airlock refused its cleanup for importing something undeclared."""
+
+    def test_both_spellings_of_an_import_are_recognised(self):
+        from crew.unify import _imports
+
+        self.assertTrue(_imports("from devices import classify", "devices"))
+        self.assertTrue(_imports("import devices", "devices"))
+        self.assertTrue(_imports("    import devices  # indented", "devices"))
+        self.assertTrue(_imports("from devices import (classify,\n    HEADSET)",
+                                 "devices"))
+
+    def test_a_mention_is_not_an_import(self):
+        from crew.unify import _imports
+
+        self.assertFalse(_imports("# devices are chosen elsewhere", "devices"))
+        self.assertFalse(_imports("DEVICES = []", "devices"))
+        self.assertFalse(_imports("import devices_extra", "devices"))
+        self.assertFalse(_imports("from devices_extra import thing", "devices"))
+        self.assertFalse(_imports("print('import devices')", "devices"))
 
 
 class PlaybookTests(CrewTestCase):

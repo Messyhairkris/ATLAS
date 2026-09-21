@@ -150,13 +150,37 @@ def ready_to_send(items: list) -> list:
             and item.get("state") != "closed"]
 
 
-def updated_since_sent(item: dict, sent: dict | None = None) -> bool:
-    """True when the file changed after he sent his decision on it.
+def stamp_decision(item: dict) -> dict:
+    """Remember what the file looked like when he decided about it.
 
-    That is the agent answering him - the item is worth another look, and the
-    desk colours it. His decision is never touched.
+    Taken at the decision, not at the handoff, so a file that changes while it
+    waits to be sent is noticed too - and so his approval is always attached to a
+    version that can be identified.
     """
-    record = (sent if sent is not None else load_sent()).get(item.get("item_id"))
+    stamps = load_sent()
+    record = dict(stamps.get(item.get("item_id")) or {})
+    record.update(decided=item.get("decision", ""),
+                  decided_at=item.get("decided_at", ""),
+                  fingerprint=fingerprint(item.get("path", "")))
+    stamps[item["item_id"]] = record
+    write_sent(stamps)
+    return record
+
+
+def write_sent(stamps: dict) -> None:
+    home().mkdir(parents=True, exist_ok=True)
+    tmp = sent_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(stamps, indent=2), encoding="utf-8")
+    os.replace(tmp, sent_file())
+
+
+def changed_since_he_looked(item: dict, stamps: dict | None = None) -> bool:
+    """True when the file has changed since he decided about it, or sent it.
+
+    Either way the item is worth another look, and the desk colours it. His
+    decision itself is never touched - that is his to change.
+    """
+    record = (stamps if stamps is not None else load_sent()).get(item.get("item_id"))
     if not record or not record.get("fingerprint"):
         return False
     return fingerprint(item.get("path", "")) != record["fingerprint"]
@@ -217,6 +241,7 @@ def send_to_agent(items: list) -> dict:
     for item in batch:
         item["state"] = "closed"
         sent[item["item_id"]] = {
+            **(sent.get(item["item_id"]) or {}),
             "at": stamp,
             "decision": item["decision"],
             "fingerprint": fingerprint(item.get("path", "")),
@@ -232,9 +257,7 @@ def send_to_agent(items: list) -> dict:
     tmp = handoff_file().with_suffix(".tmp")
     tmp.write_text(json.dumps(handoff, indent=2), encoding="utf-8")
     os.replace(tmp, handoff_file())
-    tmp = sent_file().with_suffix(".tmp")
-    tmp.write_text(json.dumps(sent, indent=2), encoding="utf-8")
-    os.replace(tmp, sent_file())
+    write_sent(sent)
     tab, newline = chr(9), chr(10)
     with (home() / "handoff.log").open("a", encoding="utf-8") as fh:
         for record in records:
@@ -464,7 +487,7 @@ class Desk:
         for index, item in enumerate(self.items):
             decision = item.get("decision") or ""
             done = item.get("state") == "closed"
-            touched = done and updated_since_sent(item, self.sent)
+            touched = changed_since_he_looked(item, self.sent)
             if done and decision == "approve" and not touched and not show_all:
                 continue                        # applied; off your plate
             mark = {"approve": "[ok] ", "reject": "[no] ",
@@ -626,6 +649,8 @@ class Desk:
         item.update(decision=decision, note=note, state="decided",
                     decided_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
         save_queue(self.items)
+        stamp_decision(item)
+        self.sent = load_sent()
         self.refresh_list()
         self.reselect()
         self.say(f"{decision}: {review_rules.next_action(item)} "

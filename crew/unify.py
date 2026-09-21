@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -217,6 +218,21 @@ def _reader_items(path: Path) -> List[dict]:
     return out
 
 
+def _imports(source: str, name: str) -> bool:
+    """Does this source import that sibling module, either way round?
+
+    `import devices` and `from devices import classify` are both imports of
+    devices. Only the first was recognised, so profiles.py looked dependency-free
+    and its cleanup was refused by the airlock for importing a module nobody had
+    declared.
+    """
+    blank = "[ " + chr(9) + "]"
+    edge = chr(92) + "b"                       # a word boundary, unmangled
+    pattern = ("^" + blank + "*(?:import" + blank + "+" + name + edge
+               + "|from" + blank + "+" + name + blank + "+import" + edge + ")")
+    return re.search(pattern, source, re.MULTILINE) is not None
+
+
 def workspace_pairs(cfg=None) -> List[Tuple[Path, List[Path], List[Path]]]:
     """Every accepted module in the crew workspace, with its hidden tests and
     the modules it depends on."""
@@ -229,8 +245,9 @@ def workspace_pairs(cfg=None) -> List[Tuple[Path, List[Path], List[Path]]]:
     for module in modules:
         hidden = hidden_for(module.name, hidden_dir)
         tests = [hidden] if hidden else []
-        deps = [m for m in modules if m != module and f"import {m.stem}" in
-                module.read_text(encoding="utf-8")]
+        source = module.read_text(encoding="utf-8")
+        deps = [m for m in modules
+                if m != module and _imports(source, m.stem)]
         pairs.append((module, deps, tests))
     # The crew's own test files are crew output too, and they held 40 of the
     # first campaign's 64 findings. A test file is verified against the module it
@@ -239,9 +256,9 @@ def workspace_pairs(cfg=None) -> List[Tuple[Path, List[Path], List[Path]]]:
         under_test = work / test_file.name[len("test_"):]
         if not under_test.is_file():
             continue
-        deps = [under_test] + [m for m in modules if m != under_test and
-                               f"import {m.stem}" in
-                               under_test.read_text(encoding="utf-8")]
+        source = under_test.read_text(encoding="utf-8")
+        deps = [under_test] + [m for m in modules
+                               if m != under_test and _imports(source, m.stem)]
         pairs.append((test_file, deps, []))
     return pairs
 
