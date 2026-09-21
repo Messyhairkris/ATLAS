@@ -40,6 +40,20 @@ ACCEPTED, RUNNING, WAITING, ESCALATED, DEAD = (
     "accepted", "running", "waiting", "escalated", "failed")
 
 
+PROVIDER_ERROR_LIMIT = 3
+PROVIDER_BACKOFF_S = 60
+_PROVIDER_MARKERS = ("500 Internal Server Error", "502 Bad Gateway", "503 Service",
+                     "504 Gateway", "429 Too Many", "ReadTimeout", "ConnectTimeout",
+                     "ConnectError", "RemoteProtocolError")
+
+
+def _provider_error(brief: dict) -> bool:
+    """True when the job died because the model's API failed, not the member."""
+    error = str(brief.get("error") or "")
+    return bool(error) and not brief.get("failed_gates") and any(
+        m in error for m in _PROVIDER_MARKERS)
+
+
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -274,6 +288,27 @@ class Campaign:
                            member=task["member"], attempts=task["attempts"],
                            requests=task["requests"])
                 return
+            if _provider_error(brief):
+                # The model never answered (HTTP 5xx/429, timeout): nothing the member
+                # wrote was judged, so this is not an attempt and a senior has nothing
+                # to review. js-harness 2026-09-21: four of Barry's attempts died this
+                # way and were logged as "unknown", and the escalation was wasted.
+                task["attempts"] -= 1
+                task["provider_errors"] = task.get("provider_errors", 0) + 1
+                self.say(f"{task['id']}: provider error, not counted - "
+                         f"{str(brief.get('error'))[:120]}")
+                self.event("task_provider_error", task=task["id"],
+                           error=str(brief.get("error"))[:300])
+                if task["provider_errors"] >= PROVIDER_ERROR_LIMIT:
+                    task["state"] = DEAD
+                    task["failed_gates"].append(["provider_down"])
+                    self.say(f"{task['id']}: stopped - {task['member']}'s model failed "
+                             f"{task['provider_errors']} times in a row; reassign it")
+                    self.event("task_dead", task=task["id"], gates=["provider_down"])
+                    return
+                time.sleep(PROVIDER_BACKOFF_S * task["provider_errors"])
+                continue
+            task["provider_errors"] = 0
             gates = brief.get("failed_gates") or [brief.get("stop_reason") or "unknown"]
             task["failed_gates"].append(gates[:3])
             self.say(f"{task['id']}: failed - {gates[0][:160]}")

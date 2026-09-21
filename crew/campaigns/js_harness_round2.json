@@ -1,0 +1,54 @@
+{
+  "name": "js-harness-r2",
+  "goal": "Finish the JS harness. Round 1 accepted the lexer, import scanner and TAP parser; the export reader never got a word written (Barry's model returned HTTP 500s and timeouts), which blocked the gate. The lexer also has to learn regex literals: the gate misread a real module because a quote inside /\"/g looked like a string.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 160,
+  "max_attempts": 3,
+  "max_escalations": 2,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Lexer":  {"author": "Nemotron", "tester": "Barry"},
+    "Ledger": {"author": "Qwen",     "tester": "Hoss"},
+    "Judge":  {"author": "Nemotron", "tester": "Hoss"}
+  },
+  "tasks": [
+    {
+      "id": "js_lex",
+      "team": "Lexer",
+      "module": "js_lex.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_lex.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_lex.py"],
+      "api": ["KINDS", "segments", "code_only"],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "You wrote the first version of this module and it passed. The contract now has a fifth kind, 'regex' (rule 5), because a real module was misjudged: in s.replace(/\"/g, \"&quot;\") the quote inside the regex was read as the start of a string, and everything after it was mis-segmented. Keep every earlier rule and table row passing. Track what came before each '/' in code (ignoring comments); a string, template or regex before it counts as a value.",
+      "test_instructions": "Cover rule 5 from both sides: a '/' that must be a regex (after '(', '=', 'return', at the very start) and one that must be division (after a name, after ')', after a string). Include a '/' inside a character class and a regex interrupted by a newline. Keep the round-trip rule tested."
+    },
+    {
+      "id": "js_api",
+      "team": "Ledger",
+      "module": "js_api.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_api.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_api.py"],
+      "api": ["exported_names", "missing_api", "stub_functions"],
+      "depends": ["js_lex"],
+      "min_tests": 10,
+      "instructions": "You MUST import the accepted js_lex module (from js_lex import code_only). The hard part is stub_functions: default parameters contain braces and parentheses, so match the parameter list and the body by counting depth, never by searching for the first '}'. Do not write docstrings that explain reasons the contract does not give.",
+      "test_instructions": "Test each of the six export rules separately, and for stubs include a default parameter with braces, a nested throw that is NOT a stub, and a throw with a computed message that is NOT a stub. Cover every numbered rule; an earlier crew test file left two stated rules untested."
+    },
+    {
+      "id": "js_gate",
+      "team": "Judge",
+      "module": "js_gate.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_gate.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_gate.py"],
+      "api": ["VERDICTS", "judge"],
+      "depends": ["js_api"],
+      "uses": ["js_imports.py", "node_tap.py"],
+      "min_tests": 8,
+      "instructions": "You MUST import the three accepted modules. Rule order is the whole point: run_tests must never be called when a static rule rejected the module. Build the result dict in one helper, not in five places.",
+      "test_instructions": "Pass a run_tests that records its calls, and prove it is called zero times for every static rejection and exactly once otherwise. Test the rule-order case where a module is both unsafe and missing the API."
+    }
+  ]
+}
