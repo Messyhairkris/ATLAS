@@ -82,15 +82,20 @@
   },
   "deny_models": [],
   "rate_limit": {
-    "comment": "The provider reports the truth in the x-synthetic-quotas response header and the governor reads it: five-hour requests remaining AND weekly credits remaining in dollars. Measured 2026-09-20: a cheap-model call costs 0.0333 requests, not 1, and the binding limit is usually the weekly credit pool, not requests. The bucket numbers below are only a fallback for before the provider has answered us once. credit_reserve_percent is kept for Kris and Crush.",
+    "comment": "Published limits (https://synthetic.new/rate-limits, recorded 2026-09-21; details in crew/SYNTHETIC_LIMITS.md). Per pack: 500 requests/5h regenerating 5% every 15 min; $24/week credits regenerating 2% every 202 min; 1 concurrent request per model. Kris has 2 packs (1000 req/5h, $48/week, 2 per model) until 2026-09-30. Requests are weighted by the model's input price against Kimi-K3 = 1 (GLM-5.3-Flash ~0.1; measured 2026-09-20: a cheap-model call ~0.033). The provider's x-synthetic-quotas header is the truth and the governor reads it; the numbers here are the fallback before the first answer. credit_reserve_percent is kept for Kris and Crush.",
     "mode": "bucket",
     "max_requests": 1000,
     "regen_percent": 5,
-    "regen_hours": 3,
+    "regen_hours": 0.25,
     "reserve": 100,
     "min_headroom": 4,
     "window_seconds": 18000,
-    "credit_reserve_percent": 5
+    "credit_reserve_percent": 5,
+    "packs": 2,
+    "weekly_credits_usd": 48,
+    "credits_regen_percent": 2,
+    "credits_regen_minutes": 202,
+    "concurrent_requests_per_model": 2
   },
   "defaults": {
     "assigned_to": "Hoss",
