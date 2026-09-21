@@ -351,6 +351,7 @@ CONTRACT_CHARS = 12000
 
 
 HOUSE_STYLE = Path(__file__).resolve().parent / "contracts" / "HOUSE_STYLE.md"
+JS_HOUSE_STYLE = HOUSE_STYLE.with_name("JS_HOUSE_STYLE.md")
 
 
 def _contract_text(spec: dict, cfg: Config) -> str:
@@ -366,8 +367,9 @@ def _contract_text(spec: dict, cfg: Config) -> str:
         raise CrewError(f"spec.contract {spec['contract']} is not a readable file "
                         f"in the crew's read roots")
     text = path.read_text(encoding="utf-8")[:CONTRACT_CHARS]
-    if HOUSE_STYLE.is_file():
-        text += "\n\n---\n\n" + HOUSE_STYLE.read_text(encoding="utf-8")
+    style = JS_HOUSE_STYLE if spec.get("task_type", "").startswith("js_") else HOUSE_STYLE
+    if style.is_file():
+        text += "\n\n---\n\n" + style.read_text(encoding="utf-8")
     return text
 
 
@@ -528,7 +530,185 @@ def code_tests_gates(files, spec, cfg, toolbox):
     return steps
 
 
+# -- js_code_task / js_code_tests ---------------------------------------------------------
+#
+# The same contract-and-hidden-tests loop as code_task, for JavaScript ES modules. The
+# judging is done by crew/jsharness/ - gates the crew itself built and had checked by
+# hidden tests (js-harness campaign, 2026-09-21) - and Node runs sandboxed by its own
+# permission model. See crew/jsrun.py.
+
+_JS_TEST_CALL = re.compile(r"(?<![\w$.])(?:test|it)\s*\(")
+
+
+def _js_step(verdict: dict, file: str) -> dict:
+    ok = verdict["verdict"] == "accepted"
+    if ok:
+        return gates.step("js gate", True, "the hidden tests pass", file)
+    detail = f"{verdict['verdict']}: " + "; ".join(verdict["problems"][:8])
+    if verdict["verdict"] == "tests_failed":
+        detail += ("\nThe hidden tests fail. This is the evidence; fix the module, "
+                   "do not argue with it.")
+    return gates.step("js gate", False, detail, file)
+
+
+def js_code_task_normalize(spec: dict, cfg: Config) -> dict:
+    module = (spec.get("module") or "").strip()
+    if not module or "/" in module or "\\" in module or not module.endswith(".js"):
+        raise CrewError("spec.module must be a single .js file name, e.g. inline.js")
+    spec["task_type"] = "js_code_task"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required: the file stating the API and behavior")
+    _contract_text(spec, cfg)
+    if not _hidden_tests(spec, cfg):
+        raise CrewError("js_code_task needs hidden_tests (*.test.mjs): nothing else "
+                        "can decide the outcome")
+    _workspace_modules(spec, cfg)
+    spec["api"] = [str(a) for a in (spec.get("api") or [])]
+    if not spec["api"]:
+        raise CrewError("spec.api must list the names the module must export")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    for raw in spec.get("depends_modules") or []:
+        spec["read_roots"].append(str(Path(raw).resolve().parent))
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace").resolve()
+    if not cfg.writable(root / module):
+        raise CrewError(f"{root / module} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [module]}
+    spec.setdefault("test_timeout_s", 180)
+    return spec
+
+
+def js_code_task_preload(spec: dict, cfg: Config, toolbox) -> str:
+    text = code_task_preload(spec, cfg, toolbox)
+    return text.replace(
+        "Your source is checked first and REFUSED if it imports anything outside the "
+        "contract's allowlist, calls eval/exec/open, or reaches the filesystem, "
+        "network or registry.",
+        "This is a JavaScript ES module: use `export`, never `module.exports`. Your "
+        "source is checked first and REFUSED if it imports anything outside the "
+        "contract's allowlist (accepted modules are imported as \"./name.js\") or "
+        "uses eval, Function, process, require, fetch, XMLHttpRequest, WebSocket, "
+        "Worker, globalThis, window or document outside a string. Node then runs "
+        "the tests with no file, network or process access.")
+
+
+def js_code_task_gates(files, spec, cfg, toolbox):
+    from . import jsrun
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        steps.append(gates.ascii_only(source, out_file))
+        if all(st["ok"] for st in steps):
+            verdict = jsrun.judge_module(source, spec["api"],
+                                         _workspace_modules(spec, cfg),
+                                         _hidden_tests(spec, cfg), out_file,
+                                         int(spec["test_timeout_s"]))
+            steps.append(_js_step(verdict, out_file))
+    return steps
+
+
+def js_code_tests_normalize(spec: dict, cfg: Config) -> dict:
+    name = (spec.get("test_file") or "").strip()
+    if not name.endswith(".test.mjs") or "/" in name or "\\" in name:
+        raise CrewError("spec.test_file must be a single file named *.test.mjs")
+    spec["task_type"] = "js_code_tests"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required")
+    _contract_text(spec, cfg)
+    if not _workspace_modules(spec, cfg):
+        raise CrewError("spec.depends_modules must name the accepted module(s) "
+                        "these tests run against")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    spec.setdefault("min_tests", 6)
+    spec.setdefault("test_timeout_s", 180)
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace" / "tests").resolve()
+    if not cfg.writable(root / name):
+        raise CrewError(f"{root / name} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [name]}
+    return spec
+
+
+def js_code_tests_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    names = ", ".join(f'"./{m}"' for m in sorted(_workspace_modules(spec, cfg)))
+    return "\n".join([
+        f"OUTPUT FILE: {spec['output']['files'][0]}", "",
+        "You are the TESTER. Another crew member wrote the module; you write tests "
+        "for it from the CONTRACT, not from their code. You are not shown their "
+        "source on purpose: tests written by reading an implementation only prove "
+        "the implementation agrees with itself.", "",
+        f"Import it as an ES module from {names}. Use only `node:test` and "
+        f"`node:assert/strict`: `import test from \"node:test\";` and "
+        f"`import assert from \"node:assert/strict\";`.", "",
+        "CONTRACT:", "", contract, "",
+        f"RULES: at least {spec['min_tests']} test(...) calls; use assert.throws for "
+        f"errors, never try/catch with assert.fail; no other imports; no files, "
+        f"network, timers or process access; each test's name says which contract "
+        f"rule it checks. The harness runs your tests against the real module under "
+        f"Node. If they fail, either the module is wrong or your test is - both are "
+        f"reported, and a senior decides."])
+
+
+def js_code_tests_gates(files, spec, cfg, toolbox):
+    from . import jsrun
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        mods = _workspace_modules(spec, cfg)
+        problems = jsrun.scan_test_file(source, mods)
+        count = len(_JS_TEST_CALL.findall(jsrun.js_imports.code_only(source)))
+        steps += [gates.ascii_only(source, out_file),
+                  gates.step("safety", not problems,
+                             "the test file may not be executed: "
+                             + "; ".join(problems[:6]), out_file),
+                  gates.step("test count", count >= int(spec["min_tests"]),
+                             f"{count} test(...) calls; the contract asks for at "
+                             f"least {spec['min_tests']}", out_file)]
+        if all(st["ok"] for st in steps):
+            ok, tap, detail = jsrun.run_node_tests(mods, {out_file: source},
+                                                   int(spec["test_timeout_s"]))
+            if ok and detail["unexpected_files"]:
+                ok, why = False, ("the run left files behind: "
+                                  + ", ".join(detail["unexpected_files"]))
+            else:
+                why = "the tests fail against the real module:\n" + jsrun.summarize(tap)
+            steps.append(gates.step("tests run", ok, why, out_file))
+    return steps
+
+
 TASK_TYPES: Dict[str, Dict[str, object]] = {
+    "js_code_task": {
+        "description": "Write one JavaScript ES module against a contract. Judged by the crew-built JS harness (lexer, import allowlist, forbidden globals, API, stubs) and then by hidden node:test tests run under Node's permission sandbox.",
+        "spec": {"module": "required: the .js file to write",
+                 "contract": "required: path to the contract file",
+                 "api": "required: names the module must export",
+                 "hidden_tests": "required: *.test.mjs files the member never sees",
+                 "depends_modules": "optional: accepted .js modules it may import as ./name.js",
+                 "test_timeout_s": "optional, default 180",
+                 "instructions": "optional"},
+        "gates": "output path, ASCII only, then js_gate: safety, API, stubs, hidden tests",
+        "apply": "writes the module into the crew workspace (never into a real project)",
+        "normalize": js_code_task_normalize, "preload": js_code_task_preload,
+        "gates_fn": js_code_task_gates,
+    },
+    "js_code_tests": {
+        "description": "Write node:test tests for another member's accepted JavaScript module, from the contract alone.",
+        "spec": {"test_file": "required: *.test.mjs to write",
+                 "contract": "required: the same contract the author worked from",
+                 "depends_modules": "required: the accepted module(s) under test",
+                 "min_tests": "optional, default 6",
+                 "instructions": "optional"},
+        "gates": "output path, ASCII only, safety scan, enough test() calls, the tests pass against the real module",
+        "apply": "writes the test file into the crew workspace",
+        "normalize": js_code_tests_normalize, "preload": js_code_tests_preload,
+        "gates_fn": js_code_tests_gates,
+    },
     "code_task": {
         "description": "Write one self-contained Python module against a contract. The harness executes it against tests the member never sees, after refusing any source that reaches outside a pure function.",
         "spec": {"module": "required: the file to write, e.g. devices.py",

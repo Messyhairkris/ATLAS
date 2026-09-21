@@ -1,0 +1,79 @@
+{
+  "name": "js-harness",
+  "goal": "Build the gates that let the crew be judged on JavaScript the way the AST scan and pytest judge Python: a lexer that tells code from comments and strings, an import and forbidden-global scanner, an export and stub reader, a Node TAP parser, and the gate that combines them. Every author is also a tester of someone else's module, so the crew checks itself. First real use: Splat Studio's JS.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 220,
+  "max_attempts": 3,
+  "max_escalations": 2,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Lexer":   {"author": "Nemotron", "tester": "Qwen"},
+    "Customs": {"author": "Hoss",     "tester": "Barry"},
+    "Ledger":  {"author": "Barry",    "tester": "Hoss"},
+    "Tap":     {"author": "Qwen",     "tester": "Nemotron"},
+    "Judge":   {"author": "Nemotron", "tester": "Hoss"}
+  },
+  "tasks": [
+    {
+      "id": "js_lex",
+      "team": "Lexer",
+      "module": "js_lex.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_lex.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_lex.py"],
+      "api": ["KINDS", "segments", "code_only"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Everything else in the JS harness is built on this, so the round-trip rule matters most: joining the segment texts must give back the source exactly, for any input, including unterminated strings and comments. Walk the worked-example table row by row.",
+      "test_instructions": "Test the round-trip rule on unterminated input, an escaped quote, an escaped backslash right before a closing quote, and a comment marker inside a string. Test that adjacent code is merged but adjacent strings are not."
+    },
+    {
+      "id": "js_imports",
+      "team": "Customs",
+      "module": "js_imports.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_imports.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_imports.py"],
+      "api": ["FORBIDDEN_GLOBALS", "imports", "check_imports", "forbidden_uses"],
+      "depends": ["js_lex"],
+      "min_tests": 10,
+      "instructions": "You MUST import the accepted js_lex module and must not re-implement comment or string handling. Keep it short: each function is a few lines on top of segments() and code_only().",
+      "test_instructions": "Every numbered rule needs its own test, including the whole-word rule (x.from, reimport), a comment between 'from' and the string, and a property access such as obj.fetch that must NOT be reported. An earlier crew test file left two stated rules untested - do not do that here."
+    },
+    {
+      "id": "js_api",
+      "team": "Ledger",
+      "module": "js_api.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_api.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_api.py"],
+      "api": ["exported_names", "missing_api", "stub_functions"],
+      "depends": ["js_lex"],
+      "min_tests": 10,
+      "instructions": "You MUST import the accepted js_lex module. The hard part is stub_functions: default parameters contain braces and parentheses, so match the parameter list and the body by counting depth, never by searching for the first '}'. Do not write docstrings that explain reasons the contract does not give.",
+      "test_instructions": "Test each of the six export rules separately, and for stubs include a default parameter with braces, a nested throw that is NOT a stub, and a throw with a computed message that is NOT a stub."
+    },
+    {
+      "id": "node_tap",
+      "team": "Tap",
+      "module": "node_tap.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_tap.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_tap.py"],
+      "api": ["COUNT_KEYS", "parse_tap", "summary_line"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "The sample in the contract is real Node 25 output. summary_line exists so the crew's existing gate - which looks for a line like '3 failed, 29 passed in 1.2s' - works on JavaScript runs without changes, so its format must match exactly.",
+      "test_instructions": "Build tests from the contract's real sample. Use pytest.raises where needed, never try/except with assert False. Include a skipped test that is 'not ok', and a name containing ' # ' that is not a directive."
+    },
+    {
+      "id": "js_gate",
+      "team": "Judge",
+      "module": "js_gate.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_gate.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_gate.py"],
+      "api": ["VERDICTS", "judge"],
+      "depends": ["js_imports", "js_api", "node_tap"],
+      "min_tests": 8,
+      "instructions": "You MUST import the three accepted modules. Rule order is the whole point: run_tests must never be called when a static rule rejected the module. Build the result dict in one helper, not in five places.",
+      "test_instructions": "Pass a run_tests that records its calls, and prove it is called zero times for every static rejection and exactly once otherwise. Test the rule-order case where a module is both unsafe and missing the API."
+    }
+  ]
+}
