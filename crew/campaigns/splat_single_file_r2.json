@@ -1,0 +1,27 @@
+{
+  "name": "splat-single-file-r2",
+  "goal": "First JavaScript job judged by the crew-built JS harness: the Splat Studio module that packs an exported portfolio site into one .html that plays from a double-click. Kris has never been able to view an export because browsers will not run the site from file://.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 80,
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Packer": {"author": "Nemotron", "tester": "Qwen"}
+  },
+  "tasks": [
+    {
+      "id": "single_file",
+      "team": "Packer",
+      "module": "single-file.js",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/splat_single_file.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/single-file.test.mjs"],
+      "api": ["PACKED_GLOBAL", "rewriteSpecifiers", "bytesToBase64", "scriptSafe", "packedPage"],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "This runs inside a browser, so no Buffer, fs or require. The page template in packedPage must be reproduced byte for byte - build it from an array of lines joined with \"\\n\" and compare each line against the contract. The words window, document, URL and Blob may appear only inside the strings you generate, never as code.",
+      "test_instructions": "Walk every table row. For packedPage, check the exact template lines you can (title escaping, where css and body go, the final newline), that a '</script' inside modules or portfolio cannot close the script early, and both thrown errors. bytesToBase64 must be tested on an array larger than 32768 bytes."
+    }
+  ]
+}

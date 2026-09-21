@@ -37,7 +37,8 @@ whitespace between:
 Only specifiers that start with `./` or `../` are looked at. For each one:
 
 - if it is a key of `rename`, replace the specifier text with the value, keeping the
-  original quote character;
+  original quote character. **Only the characters between the quotes change**: the
+  `from` / `import` / `import(` before it and all whitespace stay exactly as they were;
 - otherwise leave it exactly as it is and add it to `unmapped`.
 
 Bare specifiers (`"three"`) are never changed and never reported. Return
@@ -138,6 +139,61 @@ from each asset name to `bytesToBase64` of its bytes:
 </script>
 </head>
 <body>{body}</body>
+</html>
+```
+
+**The `{...}` markers above are placeholders, not text.** The page never contains
+`{S(modules)}` or `{escaped title}`; it contains the values. Here is the complete,
+exact output for this small site - the hidden tests compare byte for byte:
+
+```js
+packedPage({
+  title: "A & B", css: "b{c:d}", body: "<p>hi</p>",
+  modules: { "x:main": 'import "x:lib";', "x:lib": "export const n = 1;" },
+  entry: "x:main", portfolio: '{"title":"A & B"}',
+  assets: { "m.spz": new Uint8Array([1, 2, 3]) },
+})
+```
+
+returns
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A &amp; B</title>
+<style>b{c:d}</style>
+<script>
+(function () {
+  var MODULES = {"x:main":"import \"x:lib\";","x:lib":"export const n = 1;"};
+  var ASSETS = {"m.spz":"AQID"};
+  var map = {};
+  for (var name in MODULES) {
+    map[name] = URL.createObjectURL(new Blob([MODULES[name]], { type: "text/javascript" }));
+  }
+  window.SPLAT_PACKED = {
+    portfolio: "{\"title\":\"A & B\"}",
+    asset: function (file) {
+      if (!(file in ASSETS)) return null;
+      var s = atob(ASSETS[file]), a = new Uint8Array(s.length);
+      for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+      return { fileBytes: a, fileName: file };
+    }
+  };
+  var im = document.createElement("script");
+  im.type = "importmap";
+  im.textContent = JSON.stringify({ imports: map });
+  document.head.appendChild(im);
+  var go = document.createElement("script");
+  go.type = "module";
+  go.textContent = "import " + JSON.stringify("x:main") + ";";
+  document.head.appendChild(go);
+})();
+</script>
+</head>
+<body><p>hi</p></body>
 </html>
 ```
 

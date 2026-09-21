@@ -69,6 +69,32 @@ PLAYBOOK for {task_type} (rules learned from earlier runs; follow every one):
 """
 
 
+_CODE_START = ("export ", "import ", "const ", "let ", "function ", "async function ",
+               "//", "/*", '"""', "from ", "def ", "class ", "#", '"use strict"',
+               "'use strict'")
+
+
+def _single_file_body(text: str, file_blocks: list, expected: List[str]):
+    """The file, when a one-file task's answer is plainly that file but misses SUBMIT.
+
+    splat-single-file 2026-09-21: Nemotron answered three attempts with the file
+    name on a line and then a ```javascript block, or with bare code, and all three
+    were thrown away as "invalid" without being judged. Being lenient here is safe:
+    whatever is taken still has to pass every gate, the hidden tests included.
+    """
+    if len(expected) != 1:
+        return None
+    if len(file_blocks) == 1:
+        return file_blocks[0][1].rstrip() + "\n"
+    if file_blocks:
+        return None
+    lines = text.splitlines()
+    if lines and lines[0].strip().strip("`*: ") == expected[0]:
+        lines = lines[1:]
+    body = "\n".join(lines).strip()
+    return body + "\n" if body.startswith(_CODE_START) else None
+
+
 def parse_reply(text: str, expected_files: List[str]) -> Tuple[str, object, object]:
     """-> ("submit", files, notes) | ("tool", name, args) | ("invalid", reason, None)"""
     text = (text or "").strip()
@@ -96,6 +122,9 @@ def parse_reply(text: str, expected_files: List[str]) -> Tuple[str, object, obje
     call = _find_tool_json(text)
     if call:
         return "tool", call[0], call[1]
+    only = _single_file_body(text, file_blocks, expected_files)
+    if only is not None:
+        return "submit", {expected_files[0]: only}, []
     return "invalid", ("reply was neither one JSON tool call nor SUBMIT with "
                        "fenced file blocks"), None
 
