@@ -54,5 +54,7 @@
       "test_instructions": "Prove three things above all: that a lock actually refuses a volume change, that re-plugging a remembered headset keeps its volumes and its lock while updating only when it was last used, and that reconnect_plan refuses to retry inside the cooldown and reports the seconds left. Also cover a settings file a human has edited badly: a volume of 900, a missing key, an entry with no name."
     }
   ],
-  "escalation_comment": "Zero for this run: the Claude CLI is not reachable from this session, so an escalation falls back to Kimi, the one expensive model in the pool. The first run's failure was my contract wording, which I have fixed, so there is nothing for a senior to add."
+  "escalation_comment": "Zero for this run: the Claude CLI is not reachable from this session, so an escalation falls back to Kimi, the one expensive model in the pool. The first run's failure was my contract wording, which I have fixed, so there is nothing for a senior to add.",
+  "tokens_per_attempt": 150000,
+  "token_comment": "Measured: Qwen spends ~78k tokens writing a 200-line module from a 6k-character contract. The 60k default killed three attempts in a row before any file was written. Tokens are nearly free; requests are the metered resource."
 }

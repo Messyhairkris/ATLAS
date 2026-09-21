@@ -121,6 +121,18 @@ class Campaign:
         return [t for t in self.tasks.values()
                 if t["state"] == WAITING and all(d in done for d in t["depends"])]
 
+    def _budget(self) -> dict:
+        """What one attempt may spend.
+
+        Requests are the metered resource and tokens are nearly free, so the
+        token ceiling exists only to stop a runaway. Measured 2026-09-20: Qwen
+        spent ~78k tokens on a 200-line module and three attempts in a row died
+        as budget_tokens at the 60k default, producing no file at all - which
+        reads like the model failing when it is our ceiling.
+        """
+        return {"max_requests": int(self.spec.get("requests_per_attempt", 14)),
+                "max_tokens": int(self.spec.get("tokens_per_attempt", 150000))}
+
     def _module_paths(self, task: dict) -> List[str]:
         """Accepted modules this task may import, TRANSITIVELY.
 
@@ -302,7 +314,7 @@ class Campaign:
                     "assigned_to": task["member"],
                     "output": {"root": str(self.workspace)},
                     "instructions": (task["instructions"] + history).strip(),
-                    "budget": {"max_requests": int(self.spec.get("requests_per_attempt", 14))}}
+                    "budget": self._budget()}
         else:
             spec = {"task_type": "code_tests",
                     "title": f"{self.name}: test {task['module']}",
@@ -312,7 +324,7 @@ class Campaign:
                     "assigned_to": task["member"],
                     "output": {"root": str(self.workspace / "tests")},
                     "instructions": (task["instructions"] + history).strip(),
-                    "budget": {"max_requests": int(self.spec.get("requests_per_attempt", 14))}}
+                    "budget": self._budget()}
         brief = self.crew.submit(spec, submitted_by=f"campaign:{self.name}",
                                  claim=True)
         job_id = brief["task_id"]
