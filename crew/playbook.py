@@ -22,7 +22,7 @@ PLAYBOOK_DIR = CREW_DIR / "playbooks"
 ENTRY = re.compile(r"^- \[(?P<id>[a-z]{2}-\d{3})\] \((?P<src>[^)]*)\) (?P<text>.+)$")
 PREFIX = {"vault_index": "vi", "research_digest": "rd", "organize_plan": "op",
           "test_triage": "tt", "ui_sweep": "us", "code_task": "ct",
-          "code_tests": "cs"}
+          "code_tests": "cs", "js_code_task": "jt", "js_code_tests": "js"}
 NEAR_DUP = 0.88
 
 

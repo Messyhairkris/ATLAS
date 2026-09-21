@@ -118,7 +118,9 @@ class Campaign:
             if t.get("cross_tests", True):
                 out.append({"id": t["id"] + "-tests", "team": t["team"],
                             "kind": "tests", "member": team["tester"],
-                            "test_file": f"test_{t['module'][:-3]}.py",
+                            "test_file": (f"{t['module'][:-3]}.test.mjs"
+                                          if t["module"].endswith(".js")
+                                          else f"test_{t['module'][:-3]}.py"),
                             "contract": t["contract"],
                             "module": t["module"],
                             "depends": [t["id"]],
@@ -341,7 +343,8 @@ class Campaign:
             history += ("\n\nSENIOR DIRECTIVES (a senior model read the failure; "
                         "follow these):\n- " + "\n- ".join(task["directives"]))
         if task["kind"] == "module":
-            spec = {"task_type": "code_task",
+            js = task["module"].endswith(".js")
+            spec = {"task_type": "js_code_task" if js else "code_task",
                     "title": f"{self.name}: write {task['module']}",
                     "module": task["module"], "contract": task["contract"],
                     "api": task["api"], "hidden_tests": task["hidden_tests"],
@@ -351,7 +354,8 @@ class Campaign:
                     "instructions": (task["instructions"] + history).strip(),
                     "budget": self._budget()}
         else:
-            spec = {"task_type": "code_tests",
+            js = task["module"].endswith(".js")
+            spec = {"task_type": "js_code_tests" if js else "code_tests",
                     "title": f"{self.name}: test {task['module']}",
                     "test_file": task["test_file"], "contract": task["contract"],
                     "depends_modules": self._module_paths(task),

@@ -341,6 +341,7 @@ class Crew:
                 "requests": r.get("requests"), "tokens": r.get("tokens"),
                 "failed_gates": [f"{s['rung']}: {s['detail']}" for s in r.get("steps", [])
                                  if not s["ok"]][:6],
+                "error": r.get("error"),
                 "notice": job.get("notice", False)}
 
     def status(self, job_id: Optional[str] = None, wait_seconds: float = 0) -> object:
