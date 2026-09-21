@@ -24,17 +24,19 @@
       },
       "chat_models": [
         "hf:openai/gpt-oss-120b",
-        "hf:zai-org/GLM-4.7-Flash",
         "hf:Qwen/Qwen3.8-27B",
-        "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+        "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+        "hf:zai-org/GLM-5.3-Flash",
+        "hf:deepseek-ai/DeepSeek-V4.1-Flash"
       ],
       "model_aliases": {
         "Hoss": "hf:openai/gpt-oss-120b",
-        "Barry": "hf:zai-org/GLM-4.7-Flash",
-        "Flash": "hf:zai-org/GLM-4.7-Flash",
+        "Barry": "hf:zai-org/GLM-5.3-Flash",
+        "Flash": "hf:zai-org/GLM-5.3-Flash",
         "Qwen": "hf:Qwen/Qwen3.8-27B",
         "Nemotron": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
-        "Kimi": "hf:moonshotai/Kimi-K3"
+        "Kimi": "hf:moonshotai/Kimi-K3",
+        "Gordon": "hf:deepseek-ai/DeepSeek-V4.1-Flash"
       },
       "embeddings": {
         "path": "/v1/embeddings",
@@ -63,7 +65,18 @@
         "hf:moonshotai/Kimi-K3": {
           "in_per_mtok": null,
           "out_per_mtok": null
+        },
+        "hf:zai-org/GLM-5.3-Flash": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:deepseek-ai/DeepSeek-V4.1-Flash": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
         }
+      },
+      "archived_models": {
+        "hf:zai-org/GLM-4.7-Flash": "Barry until 2026-09-21. Archived by Kris: weakest member every round, and HTTP 500s/timeouts on most runs of the JS-harness campaigns. Barry now runs GLM-5.3-Flash; job records before 2026-09-21 are the old model."
       }
     },
     "local-llama": {

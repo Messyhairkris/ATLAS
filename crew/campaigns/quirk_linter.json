@@ -1,0 +1,40 @@
+{
+  "name": "quirk-linter",
+  "goal": "Zero-token checks for mistakes a model is known to make, run before the gates: re-indented verbatim text (Nemotron, 29 lines in one real attempt) and forced failures hidden inside try blocks (a test-writing habit). Also the calibration run for the two new members: Barry on GLM-5.3-Flash and Gordon on DeepSeek-V4.1-Flash.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 100,
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 14,
+  "teams": {
+    "Indent": {"author": "Gordon", "tester": "Qwen"},
+    "Try":    {"author": "Barry",  "tester": "Hoss"}
+  },
+  "tasks": [
+    {
+      "id": "quirk_indent",
+      "team": "Indent",
+      "module": "quirk_indent.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/quirk_indent.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_quirk_indent.py"],
+      "api": ["VERBATIM_TAGS", "MIN_CHARS", "verbatim_lines", "indent_drift", "fix_indent_drift"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. The fix must change ONLY the leading spaces inside a drifting string literal - everything else in the source, including the quotes and a trailing backslash-n, stays byte for byte. Build the key map once and use it in both functions.",
+      "test_instructions": "Cover the placeholder rule from both sides ({css} is a placeholder, '{ type' with a space is not), a literal ending in backslash-n, two drifted literals on one line, idempotence of the fix, and a source with no drift returned unchanged with 0."
+    },
+    {
+      "id": "quirk_tests",
+      "team": "Try",
+      "module": "quirk_tests.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/quirk_tests.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_quirk_tests.py"],
+      "api": ["python_fail_in_try", "js_fail_in_try", "fail_in_try"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row for both languages. For Python the rule is about the NEAREST less-indented line only; for JavaScript track brace depth and which depths are open try blocks.",
+      "test_instructions": "Cover every table row, a nested if inside a try (Python: not reported; JavaScript: reported), a fail in a catch block (not reported), a one-line try, and the ValueError for an unknown language."
+    }
+  ]
+}

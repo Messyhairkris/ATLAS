@@ -100,11 +100,12 @@
     "observation_chars": 6000,
     "lease_seconds": 180,
     "max_tokens_by_member": {
-      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576.",
-      "Barry": 49152,
+      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured.",
+      "Barry": 32768,
       "Nemotron": 24576,
       "Hoss": 24576,
-      "Qwen": 32768
+      "Qwen": 32768,
+      "Gordon": 32768
     }
   },
   "deny_models_comment": "Empty: nothing is refused. The list was a measuring tool (Kimi was denied on 2026-09-19 to read roster-only spend: $0.15 crew vs $1.00 Kimi in 24h). Division of labor now: Crush drives Kimi, Claude drives Claude, and both delegate bounded work to the Crew. The crew's DEFAULT member is still Hoss (defaults.assigned_to); a big model only runs a crew job if an architect names it in assigned_to, which would usually mean the task was mis-scoped.",
