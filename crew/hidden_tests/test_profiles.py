@@ -210,6 +210,13 @@ def test_missing_is_what_he_has_used_and_is_not_here():
     assert p.missing(items, [BT_STEREO]) == []
 
 
+def test_a_device_used_at_the_very_first_second_is_still_missing():
+    """A seeded defect found this: `last_used > 0` became `> 1` and every test
+    still passed, because none of them used the boundary."""
+    items = [p.new_profile(BT_STEREO["name"], last_used=1.0)]
+    assert [x["name"] for x in p.missing(items, [])] == [BT_STEREO["name"]]
+
+
 def test_a_device_never_used_is_not_missing():
     items = [p.new_profile(USB_CANS["name"])]
     assert p.missing(items, []) == []
@@ -285,6 +292,15 @@ def test_it_will_not_retry_a_pairing_in_a_tight_loop():
     assert plan["should_try"] is False
     assert plan["wait_s"] == 25
     assert "tried" in plan["reason"]
+
+
+def test_a_device_never_tried_is_worth_asking_for_straight_away():
+    """Another seeded defect: `last_attempt > 0` became `>= 0`, which would treat
+    "never tried" as "tried at time zero" and wait out the cooldown at startup."""
+    prof = p.new_profile(BT_STEREO["name"], last_used=1.0)
+    plan = p.reconnect_plan(prof, [], now=1.0)
+    assert plan["should_try"] is True
+    assert plan["wait_s"] == 0
 
 
 def test_the_cooldown_rounds_the_wait_up_to_a_whole_second():
