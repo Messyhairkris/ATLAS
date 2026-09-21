@@ -25,6 +25,9 @@ spent the same way, by price. So:
 
 - The crew's request count in campaign reports is *calls*, not quota. Five hours of crew
   work on 2026-09-21 (JS harness, packer, guide, with a little Kimi) cost Kris **$1.35**.
+- quirk-linter campaign (2026-09-21, Kris's dashboard): Gordon (DeepSeek-V4.1-Flash) and Barry
+  (GLM-5.3-Flash) together cost **$0.11** for two accepted modules plus tests - under 0.01%
+  of the five-hour request cap.
 - Kimi (and Claude as a senior) are the expensive calls. Keep seniors capped
   (`max_escalations`).
 
