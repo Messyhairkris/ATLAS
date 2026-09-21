@@ -67,7 +67,7 @@ touches the harness itself, so a large model writes it on a branch.
 | splat-single-file-r2 | re-indented a byte-exact template (3/9/3 fails, then a syntax error) | MEMBER | Qwen authored r3: accepted first try, 2 requests |
 | splat-single-file-r3 | Nemotron's tests omitted the JSON quotes the contract shows | MEMBER | module accepted on the hidden tests; failed against the reference too |
 
-Of 10 failures, 4 were ours (harness), 3 the contract's, 1 the provider's, and only 3 the
+Of 10 failures, 3 were the harness's, 3 the contract's, 1 the provider's, and only 3 the
 members' own.
 
 ## 5. Members (from `runners/member_stats.py`, all code campaigns to 2026-09-21)
