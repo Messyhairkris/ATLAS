@@ -58,7 +58,7 @@ def load_modules(workspace: Path):
     """Import the crew's modules, reporting failures instead of crashing."""
     sys.path.insert(0, str(workspace))
     loaded, failed = {}, {}
-    for name in ("devices", "verbalize", "chattiness", "speech_queue"):
+    for name in ("devices", "verbalize", "chattiness", "speech_queue", "profiles"):
         try:
             loaded[name] = __import__(name)
         except Exception as exc:                            # noqa: BLE001
@@ -218,6 +218,11 @@ class Bench:
         self.wedged = False
         self.job_seq = 0
         self.queue = None
+        # The device memory, kept in a file beside the bench so it survives a
+        # restart - which is the whole point of remembering anything.
+        self.profiles_file = workspace.parent / "bench_profiles.json"
+        self.profiles: list = self.load_profiles()
+        self._reconnect_tries: dict = {}
 
         self.root = tk.Tk()
         self.root.title("TTS bench - the crew's modules, live")
@@ -342,13 +347,205 @@ class Bench:
             self._button(row, text, cmd)
         self.queue_box = self._mono(q, 5)
 
+        pr = self._panel("profiles.py (Qwen) - the headsets it remembers")
+        row = self.tk.Frame(pr, bg=BG)
+        row.pack(fill="x")
+        self._label(row, "these survive closing the bench:", fg=DIM).pack(
+            side="left", padx=(0, 10))
+        for text, cmd in (("remember the chosen device", self.remember_chosen),
+                          ("speak with its own volume", self.speak_with_profile),
+                          ("forget it", self.forget_chosen),
+                          ("what would reconnect", self.show_reconnect)):
+            self._button(row, text, cmd)
+        self.profile_rows = self.tk.Frame(pr, bg=BG)
+        self.profile_rows.pack(fill="x", pady=(6, 0))
+        self.profiles_box = self._mono(pr, 5)
+
         log = self._panel("what actually happened (with timings)")
         self.log_box = self._mono(log, 8)
 
         self.refresh_verbalize()
         self.refresh_chattiness()
         self.refresh_queue()
+        self.refresh_profiles()
         self.log("bench starting; waiting for the Windows speech engine")
+
+    # -- the device memory ---------------------------------------------------------
+    def load_profiles(self) -> list:
+        mod = self.mods.get("profiles")
+        if mod is None or not self.profiles_file.is_file():
+            return []
+        try:
+            return mod.load(self.profiles_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def save_profiles(self) -> None:
+        mod = self.mods.get("profiles")
+        if mod is None:
+            return
+        try:
+            self.profiles_file.write_text(mod.dump(self.profiles), encoding="utf-8")
+        except OSError as exc:
+            self.log(f"could not save the profiles: {exc}", BAD)
+
+    def refresh_profiles(self) -> None:
+        """Redraw the remembered devices, each with its own volumes and lock."""
+        mod = self.mods.get("profiles")
+        for child in self.profile_rows.winfo_children():
+            child.destroy()
+        self.profiles_box.delete("1.0", "end")
+        if mod is None:
+            self.profiles_box.insert("end", "profiles.py did not load")
+            return
+        present = {d["name"] for d in self.devices}
+        known = mod.known(self.profiles)
+        if not known:
+            self.profiles_box.insert(
+                "end", "nothing remembered yet.\n\nPick a device above, press "
+                "SPEAK THIS NOW so it is the one that spoke, then press "
+                "'remember the chosen device'.")
+            return
+        for profile in known:
+            row = self.tk.Frame(self.profile_rows, bg=BG)
+            row.pack(fill="x", pady=1)
+            here = profile["name"] in present
+            self._label(row, ("here  " if here else "away  ") + profile["name"],
+                        fg=OK if here else DIM,
+                        font=("Consolas", 9)).pack(side="left")
+            for purpose in ("speech", "alert"):
+                var = self.tk.IntVar(value=mod.volume_for(profile, purpose))
+                scale = self.tk.Scale(
+                    row, from_=0, to=100, orient="horizontal", variable=var,
+                    bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0,
+                    length=130, label=purpose, font=("Segoe UI", 7),
+                    state="disabled" if profile["locked"] else "normal",
+                    command=lambda value, n=profile["name"], p=purpose:
+                    self.set_profile_volume(n, p, value))
+                scale.pack(side="left", padx=(8, 0))
+            locked = self.tk.BooleanVar(value=bool(profile["locked"]))
+            self.tk.Checkbutton(
+                row, text="locked", variable=locked, bg=BG, fg=WARN,
+                selectcolor=PANEL, activebackground=BG,
+                activeforeground=TEST_COLOR, font=("Segoe UI", 8),
+                command=lambda n=profile["name"], v=locked:
+                self.lock_profile(n, v.get())).pack(side="left", padx=8)
+        lines = [f"{p['name']}  {p['kind']}/{p['link']}  "
+                 f"speech={mod.volume_for(p, 'speech')} "
+                 f"alert={mod.volume_for(p, 'alert')}"
+                 f"{'  LOCKED' if p['locked'] else ''}" for p in known]
+        away = [p["name"] for p in mod.missing(self.profiles, self.devices)]
+        if away:
+            lines.append("")
+            lines.append(f"not connected right now: {', '.join(away)}")
+        lines.append(f"saved in {self.profiles_file}")
+        self.profiles_box.insert("end", chr(10).join(lines))
+
+    def remember_chosen(self) -> None:
+        mod = self.mods.get("profiles")
+        chosen = self.chosen()
+        if mod is None or not chosen:
+            self.log("nothing to remember: no device chosen", WARN)
+            return
+        self.profiles = mod.remember(self.profiles, chosen["name"], now=time.time())
+        self.save_profiles()
+        self.refresh_profiles()
+        self.log(f"remembered {chosen['name']} - it now has its own volumes", OK)
+
+    def forget_chosen(self) -> None:
+        mod = self.mods.get("profiles")
+        chosen = self.chosen()
+        if mod is None or not chosen:
+            return
+        before = len(self.profiles)
+        self.profiles = [p for p in self.profiles
+                         if p.get("name") != chosen["name"]]
+        if len(self.profiles) == before:
+            self.log(f"{chosen['name']} was not remembered anyway", DIM)
+            return
+        self.save_profiles()
+        self.refresh_profiles()
+        self.log(f"forgot {chosen['name']}", DIM)
+
+    def set_profile_volume(self, name: str, purpose: str, value) -> None:
+        """Move one device's own volume - refused when the profile is locked."""
+        mod = self.mods.get("profiles")
+        if mod is None:
+            return
+        current = mod.find(self.profiles, name)
+        if current is None:
+            return
+        updated = mod.set_volume(current, purpose, int(float(value)))
+        if updated["volumes"] == current["volumes"]:
+            return
+        self.profiles = [updated if p.get("name") == name else p
+                         for p in self.profiles]
+        self.save_profiles()
+
+    def lock_profile(self, name: str, locked: bool) -> None:
+        mod = self.mods.get("profiles")
+        if mod is None:
+            return
+        current = mod.find(self.profiles, name)
+        if current is None:
+            return
+        self.profiles = [mod.set_lock(current, locked) if p.get("name") == name
+                         else p for p in self.profiles]
+        self.save_profiles()
+        self.refresh_profiles()
+        detail = ("its volumes now refuse every change" if locked
+                  else "its volumes can move again")
+        self.log(f"{name} is {'locked' if locked else 'unlocked'}: {detail}",
+                 WARN if locked else OK)
+
+    def speak_with_profile(self) -> None:
+        """Speak through the chosen device at ITS volume, not the slider's.
+
+        This is the difference a profile makes, and it has to be audible: a
+        remembered headset set to 20 must sound quieter than the same sentence at
+        the slider's 45.
+        """
+        mod = self.mods.get("profiles")
+        chosen = self.chosen()
+        if mod is None or not chosen:
+            self.log("choose a device first", WARN)
+            return
+        profile = mod.find(self.profiles, chosen["name"])
+        if profile is None:
+            self.log(f"{chosen['name']} is not remembered yet - press 'remember "
+                     f"the chosen device' first", WARN)
+            return
+        purpose = "alert" if self.level.get() == "verbatim" else "speech"
+        volume = mod.volume_for(profile, purpose)
+        text = self.text_in.get("1.0", "end").strip() or (
+            f"This is {chosen['name']} at its own {purpose} volume, {volume}.")
+        self.log(f"speaking at the profile's {purpose} volume {volume} "
+                 f"(the slider says {self.volume.get()})", TEST_COLOR)
+        self.speak_on(chosen["index"], chosen["name"], text, volume=volume)
+
+    def show_reconnect(self) -> None:
+        """What the app would do about a paired headset that is not here."""
+        mod = self.mods.get("profiles")
+        if mod is None:
+            return
+        away = mod.missing(self.profiles, self.devices)
+        if not away:
+            self.log("every remembered device is connected - nothing to reconnect",
+                     OK)
+            return
+        now = time.time()
+        for profile in away:
+            plan = mod.reconnect_plan(profile, self.devices, now=now,
+                                      last_attempt=self._reconnect_tries.get(
+                                          profile["name"], 0.0))
+            if plan["should_try"]:
+                self._reconnect_tries[profile["name"]] = now
+                self.log(f"WOULD ASK WINDOWS to reconnect {plan['name']} "
+                         f"({plan['reason']})", TEST_COLOR)
+            else:
+                self.log(f"would NOT try {plan['name']}: {plan['reason']}"
+                         + (f", {plan['wait_s']}s to wait" if plan["wait_s"]
+                            else ""), DIM)
 
     # -- logging ------------------------------------------------------------------
     def log(self, text: str, colour: str = FG) -> None:
@@ -377,6 +574,8 @@ class Bench:
                         policy=self.policy())
 
     def refresh_devices(self, *_):
+        if hasattr(self, "profile_rows"):
+            self.root.after_idle(self.refresh_profiles)
         d = self.mods.get("devices")
         box = self.devices_box
         box.delete("1.0", "end")
@@ -484,13 +683,17 @@ class Bench:
         self.worker.submit(kind="speak", id=None, index=index, text="ready",
                            volume=0, device="(priming, silent)")
 
-    def speak_on(self, index: int, name: str, text: str) -> None:
+    def speak_on(self, index: int, name: str, text: str,
+                 volume: int | None = None) -> None:
+        """Speak on one endpoint. `volume` overrides the slider - that is how a
+        remembered device speaks at its own volume rather than the bench's."""
         if self.wedged:
             self.log("the speech engine is stuck on the last utterance; press "
                      "'restart the speech engine' first", WARN)
             return
         d = self.mods.get("devices")
-        volume = d.clamp_volume(self.volume.get()) if d else 45
+        asked = self.volume.get() if volume is None else volume
+        volume = d.clamp_volume(asked) if d else asked
         if self.primed != index:
             self.prime(index)
         self.job_seq += 1
@@ -535,7 +738,7 @@ class Bench:
         dropped = self.worker.drop_queued()
         self.worker.request_stop()
         self.pending_jobs.clear()
-        self.log(f"stop: purging the current utterance"
+        self.log("stop: purging the current utterance"
                  + (f" and dropping {dropped} queued after it" if dropped else ""),
                  TEST_COLOR)
         self.speaking.config(text="stopped", fg=WARN)
