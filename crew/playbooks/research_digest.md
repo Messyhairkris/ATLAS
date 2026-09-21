@@ -17,3 +17,5 @@ follow every one.
 - [rd-010] (review Claude TTS-round1) For long inventories use one short table row per item and no repeated explanation; a reply cut off before the closing fence fails.
 - [rd-011] (review Claude job-20260919-132524-3c05) Never attribute a request or requirement to testers or users unless you can quote their words from a file you read.
 - [rd-012] (review Claude job-20260919-132957-7852) For a code map, first search for class and def names matching the topic words (e.g. announce|feedback|notify|speak|settings) and name the central function callers use; a map without it is incomplete.
+- [rd-013] (review Claude job-20260921-044834-7bf8) When a preloaded file is unavailable, say so in the first lines and spend the remaining requests on the question it was meant to answer, not on searching code for substitutes.
+- [rd-014] (review Claude job-20260921-050107-9537) Never compute totals, sums or averages in a report: quote each number as it appears in its source, or write (not stated in source). Arithmetic is done by the harness.
