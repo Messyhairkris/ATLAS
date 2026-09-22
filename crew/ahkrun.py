@@ -89,8 +89,8 @@ def _take_lock(wait_s: int) -> bool:
 
 
 def run_ahk_tests(modules: dict, tests: dict, title: str = "",
-                  per_test_timeout_s: int = 30, timeout_s: int = 300,
-                  keep: bool = False, grants=()) -> dict:
+                  per_test_timeout_s: int = 30, boot_timeout_s: int = 600,
+                  idle_timeout_s: int = 240, keep: bool = False, grants=()) -> dict:
     """{"ok", "summary", "log", "problems", "run_dir"} for one batch of tests.
     `grants` names permissions from GRANTABLE, e.g. ("clipboard",)."""
     problems = static_problems(modules, tests, grants)
@@ -99,7 +99,7 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
                 "log": "", "problems": problems, "run_dir": ""}
 
     import verify
-    if not _take_lock(timeout_s):
+    if not _take_lock(boot_timeout_s):
         return {"ok": False, "summary": "another sandbox run held the lock",
                 "log": "", "problems": [], "run_dir": ""}
     run_id = f"ahk-{int(time.time())}"
@@ -117,7 +117,7 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
             "exe_dir": f"{verify.WSB_DESKTOP}\\{AHK_DIR.name}", "exe": AHK_EXE,
             "godot_dir": f"{verify.WSB_DESKTOP}\\{AHK_DIR.name}",
             "tests": sorted(tests), "per_test_timeout_s": per_test_timeout_s,
-            "timeout_s": max(30, timeout_s - 60), "debloat": True,
+            "timeout_s": per_test_timeout_s * max(1, len(tests)) + 60, "debloat": True,
             "linger_s": verify.WSB_LINGER_S,
         }
         (run_dir / "job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
@@ -125,19 +125,29 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
         wsb.write_text(verify.build_wsb_config(run_dir, AHK_DIR), encoding="utf-8")
 
         done = run_dir / "runner_done.txt"
+        stage = run_dir / "stage.txt"
         finished = False
         for attempt in (1, 2):            # one warm retry for a cold boot (Kris's rule)
             subprocess.Popen(["cmd", "/c", "start", "", str(wsb)],
                              creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
-            deadline = time.time() + timeout_s
+            # Kris's box took more than 4 minutes to boot a sandbox, and the first
+            # version killed a runner that was working. Now: boot_timeout_s to
+            # show a first stage, then any further progress resets an idle clock.
+            deadline = time.time() + boot_timeout_s
+            seen = None
             while time.time() < deadline and not done.exists():
+                if stage.exists():
+                    mark = (stage.stat().st_mtime, stage.read_bytes())
+                    if mark != seen:
+                        seen = mark
+                        deadline = time.time() + idle_timeout_s
                 time.sleep(2)
             if done.exists():
                 finished = True
                 time.sleep(verify.WSB_LINGER_S)
                 break
             verify._kill_sandbox()
-            if (run_dir / "run.log").exists() or (run_dir / "runner.log").exists():
+            if stage.exists():
                 break                     # the runner started: a real failure
         verify._kill_sandbox()
 

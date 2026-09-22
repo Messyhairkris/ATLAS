@@ -98,6 +98,9 @@ function Set-Stage([int]$i) {
     }
     $checklist.Text = ($rows -join "`r`n")
     Log ('--- stage: ' + $Stages[$i])
+    # The host watches this file: a runner that is still moving is never killed
+    # as "never started" (Kris's box needs more than 4 minutes to boot one).
+    Set-Content -Path (Join-Path $JobDir 'stage.txt') -Value ([string]$i + ' ' + $Stages[$i]) -Encoding ASCII
 }
 
 function Snapshot {
@@ -146,6 +149,7 @@ try {
             $tap = Join-Path $JobDir ($t + '.tap')
             $err = Join-Path $JobDir ($t + '.stderr')
             $stageLabel.Text = 'Running ' + $t
+            Set-Content -Path (Join-Path $JobDir 'stage.txt') -Value ('2 running ' + $t) -Encoding ASCII
             Pump
             Log ('run: ' + $t)
             $proc = Start-Process -FilePath $exe `
