@@ -1179,6 +1179,75 @@ class UnifyImportSniffingTests(unittest.TestCase):
         self.assertFalse(_imports("print('import devices')", "devices"))
 
 
+class ClaudeMemberTests(unittest.TestCase):
+    """Haiku joins the crew through Anthropic's own SDK, never an OpenAI shim, and
+    must look to the agent loop exactly like every other member."""
+
+    def fake_client(self, seen, text="SUBMIT a.py"):
+        class Block:
+            type = "text"
+        block = Block()
+        block.text = text
+
+        class Usage:
+            input_tokens, output_tokens = 1000, 200
+
+        class Response:
+            content = [block]
+            usage = Usage()
+            stop_reason = "end_turn"
+
+        class Messages:
+            def create(self, **kwargs):
+                seen.update(kwargs)
+                return Response()
+
+        class Client:
+            messages = Messages()
+        return Client
+
+    def test_the_reply_has_the_shape_the_agent_loop_reads(self):
+        from crew import claude_chat
+        seen = {}
+        chat = claude_chat.claude_chat("claude-haiku-4-5", 4096,
+                                       client_factory=self.fake_client(seen))
+        out = chat([{"role": "system", "content": "rules"},
+                    {"role": "user", "content": "go"}], 1)
+        self.assertEqual(out["content"], "SUBMIT a.py")
+        self.assertEqual(out["raw"]["usage"]["total_tokens"], 1200)
+        self.assertEqual(seen["system"], "rules")
+        self.assertEqual(seen["model"], "claude-haiku-4-5")
+        self.assertNotIn("temperature", seen)
+
+    def test_haiku_is_priced_at_anthropics_rates(self):
+        from crew import claude_chat
+        self.assertEqual(claude_chat.price("claude-haiku-4-5", 1_000_000, 0), 1.0)
+        self.assertEqual(claude_chat.price("claude-haiku-4-5", 0, 1_000_000), 5.0)
+
+    def test_a_transcript_always_opens_with_the_user(self):
+        from crew import claude_chat
+        _system, turns = claude_chat.to_anthropic(
+            [{"role": "assistant", "content": "x"}, {"role": "tool", "content": "y"}])
+        self.assertEqual([t["role"] for t in turns], ["user", "assistant", "user"])
+
+    def test_haiku_resolves_from_the_crew_config_not_providers(self):
+        crew = Crew()
+        self.assertEqual(crew._model_for("Haiku"), "claude-haiku-4-5")
+
+    def test_without_the_sdk_the_error_names_what_is_missing(self):
+        from crew import claude_chat
+        from crew.config import CrewError
+        try:
+            import anthropic  # noqa: F401
+            self.skipTest("the SDK is installed here")
+        except ImportError:
+            pass
+        with self.assertRaises(CrewError) as caught:
+            claude_chat.claude_chat("claude-haiku-4-5")(
+                [{"role": "user", "content": "x"}], 1)
+        self.assertIn("ANTHROPIC_API_KEY", str(caught.exception))
+
+
 class PlaybookTests(CrewTestCase):
     def test_near_duplicates_refused_and_ids_increment(self):
         first = playbook.add("organize_plan", "Never move the PLAN note.", "t")

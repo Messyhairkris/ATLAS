@@ -110,7 +110,12 @@
       "Nemotron": 24576,
       "Hoss": 24576,
       "Qwen": 32768,
-      "Gordon": 32768
+      "Gordon": 32768,
+      "Haiku": 32768
+    },
+    "claude_members": {
+      "comment": "Claude models on the crew, reached through the official Anthropic SDK (crew/claude_chat.py), billed by Anthropic rather than Synthetic. Added 2026-09-21 for Kris's experiment: plan in Opus 5, delegate every job to small agents, unify in Opus 5. Needs `pip install anthropic` and ANTHROPIC_API_KEY before a job can run.",
+      "Haiku": "claude-haiku-4-5"
     }
   },
   "deny_models_comment": "Empty: nothing is refused. The list was a measuring tool (Kimi was denied on 2026-09-19 to read roster-only spend: $0.15 crew vs $1.00 Kimi in 24h). Division of labor now: Crush drives Kimi, Claude drives Claude, and both delegate bounded work to the Crew. The crew's DEFAULT member is still Hoss (defaults.assigned_to); a big model only runs a crew job if an architect names it in assigned_to, which would usually mean the task was mis-scoped.",

@@ -53,6 +53,12 @@ def _reply_tokens(cfg: Config, persona: str) -> int:
 
 def _default_chat(model: str, job_id: str, task_type: str, persona: str,
                   renew: Callable[[], None], reply_tokens: int = DEFAULT_REPLY_TOKENS):
+    from . import claude_chat
+    if claude_chat.is_claude(model):
+        # Claude is reached through Anthropic's own SDK, never an OpenAI shim,
+        # and it does not draw on the Synthetic request pool.
+        return claude_chat.claude_chat(model, reply_tokens=reply_tokens,
+                                       renew=renew)
     from providers.telemetry import context as telemetry_context
     from stages.llm_client import chat_completion
 
@@ -126,11 +132,18 @@ class Crew:
 
     def _model_for(self, persona: str) -> str:
         from providers.registry import denied_models, resolve_alias
+        # Claude members live in crew/config.json, not providers.json: they are
+        # not Synthetic models, and listing them there would put them in the
+        # wrong provider's pool, quotas and deny list.
+        claude = (self.cfg.defaults.get("claude_members") or {}).get(persona)
+        if claude:
+            return claude
         provider = os.environ.get("ATLAS_PROVIDER")
         model = resolve_alias(provider, persona)
         if model == persona and not persona.startswith("hf:"):
             raise CrewError(f"unknown crew member {persona!r}; use a nickname "
-                            f"from providers.json (Hoss, Barry, Qwen, Nemotron, Gordon)")
+                            f"from providers.json (Hoss, Barry, Qwen, Nemotron, Gordon) "
+                            f"or crew/config.json claude_members (Haiku)")
         if model.lower() in denied_models(provider):
             raise CrewError(f"{persona} is on the deny list for this round")
         return model
