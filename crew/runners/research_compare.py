@@ -32,7 +32,7 @@ from crew.core import Crew                                   # noqa: E402
 
 
 def run_one(member: str, question: str, name: str, out_dir: Path, budget: dict,
-            results: dict) -> None:
+            results: dict, read_roots=()) -> None:
     crew = Crew()
     started = time.time()
     record = {"member": member}
@@ -43,7 +43,8 @@ def run_one(member: str, question: str, name: str, out_dir: Path, budget: dict,
                              "assigned_to": member,
                              "output": {"root": str(out_dir),
                                         "files": [f"{name}-{member.lower()}.md"]},
-                             "budget": budget},
+                             "budget": budget,
+                             **({"read_roots": list(read_roots)} if read_roots else {})},
                             submitted_by="research_compare", claim=True)
         job = crew.run_job(brief["task_id"])
         result = (crew.store.load(brief["task_id"]).get("result") or {})
@@ -68,6 +69,9 @@ def main(argv=None) -> int:
     ap.add_argument("--name", required=True)
     ap.add_argument("--max-requests", type=int, default=12)
     ap.add_argument("--max-tokens", type=int, default=150000)
+    ap.add_argument("--read-root", action="append", default=[],
+                    help="read roots for the job, the FIRST resolving relative paths "
+                         "(default: every crew read root, vault first)")
     args = ap.parse_args(argv)
 
     question = Path(args.question).read_text(encoding="utf-8")
@@ -76,7 +80,7 @@ def main(argv=None) -> int:
     budget = {"max_requests": args.max_requests, "max_tokens": args.max_tokens}
     results: dict = {}
     threads = [threading.Thread(target=run_one, args=(m, question, args.name, out_dir,
-                                                      budget, results))
+                                                      budget, results, args.read_root))
                for m in args.members]
     for thread in threads:
         thread.start()

@@ -35,8 +35,11 @@ ABSENCE = re.compile(
     r"mention\w*|document\w*)\b"
     r"|\b(missing|absent|lacks?|lacking|untested|uncovered|unhandled|"
     r"undocumented|unimplemented|no such)\b", re.IGNORECASE)
-INFERRED = re.compile(r"\((inferred|inference|assumed|not verified|unverified)\)",
-                      re.IGNORECASE)
+# "(not stated in source)" is the playbook's own wording (rd-009) for a source that
+# is silent - and a silence has nothing to cite. Until 2026-09-21 the gate refused
+# the very lines the playbook asked for; Gordon lost a digest to it.
+INFERRED = re.compile(r"\((inferred|inference|assumed|not verified|unverified|"
+                      r"not stated in (the )?sources?)\)", re.IGNORECASE)
 
 
 
@@ -61,8 +64,15 @@ def _body_lines(text: str) -> Iterable[str]:
             yield line
 
 
+# "lines 219-315", "L40-60", "line 12": where something is, not a claim about it.
+# Both read tools number their lines, so members cite ranges; the citation gate
+# already checks the file was opened. (Barry lost a digest to this, 2026-09-21.)
+LINE_LOCATOR = re.compile(r"\b(?:lines?|L)\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*(?:,|and)\s*\d+"
+                          r"(?:\s*[-–]\s*\d+)?)*", re.IGNORECASE)
+
+
 def claims(line: str) -> List[str]:
-    bare = SRC_CITE.sub(" ", WIKILINK.sub(" ", line))
+    bare = LINE_LOCATOR.sub(" ", SRC_CITE.sub(" ", WIKILINK.sub(" ", line)))
     nums = [n.rstrip(".,") for n in CLAIM_NUMBER.findall(bare)]
     words = [w for w in VERDICT_WORDS if re.search(rf"\b{w}\b", bare)]
     return [n for n in nums if len(n) >= 2] + words
@@ -76,7 +86,9 @@ def _strip_locator(cite: str) -> str:
     if c.startswith(("http://", "https://")):
         return c.split("#", 1)[0]
     c = c.split("#", 1)[0]
-    c = re.sub(r"(:\d+(-\d+)?|\s+L?\d+(-\d+)?)$", "", c)
+    # Strip EVERY trailing locator: 'Catalog.md L22 L31' names two ranges of one
+    # file (ahk-use research, 2026-09-21: Barry lost a digest to the second one).
+    c = re.sub(r"(?:(?::\d+(?:-\d+)?)|(?:[\s,;]+L?\d+(?:-\d+)?))+$", "", c)
     return c.strip()
 
 

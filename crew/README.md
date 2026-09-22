@@ -18,6 +18,22 @@ architect ──crew_submit──► queue ──worker──► member (read-on
                                stage Supervised/Autonomous ─────────────────► auto-applied + notice
 ```
 
+## The roster (2026-09-21)
+
+| Member | Model | Reached through | Sees images | Best at, so far |
+|---|---|---|---|---|
+| **Hoss** (default) | gpt-oss-120b | Synthetic | no | cheapest first-try modules (~1 request); writes long; weak tests; fast but loose research |
+| **Qwen** | Qwen3.8-27B | Synthetic | yes (2/3 on a screenshot) | anything byte-exact; the best tester |
+| **Nemotron** | Nemotron-3-Super-120B | Synthetic | no | clean logic modules; careless tests; loops on research |
+| **Barry** | GLM-5.3-Flash (was 4.7) | Synthetic | claims yes, **wrong 4/4** - do not use | measured first time 2026-09-21: std140 accepted in 3 requests; thinks at length (ceiling 65,536) |
+| **Gordon** | DeepSeek-V4.1-Flash | Synthetic | **yes (3/3)** | new 2026-09-21: first-try modules at 1 request, the most accurate researcher |
+| **Haiku** | claude-haiku-4-5 | Anthropic SDK (`claude_chat.py`) | yes (not yet measured) | added 2026-09-21; needs `pip install anthropic` + `ANTHROPIC_API_KEY` |
+| Kimi | Kimi-K3 | Synthetic | yes | Crush's model and the senior fallback - expensive, not a crew member |
+
+Measured records: `python crew/runners/member_stats.py`. Vision: `VISION.md`.
+Prices and limits: `SYNTHETIC_LIMITS.md`. Claude members live in `config.json`
+`claude_members`, never in `providers.json`, so they stay out of Synthetic's quotas.
+
 ## Task types
 
 | Type | Member produces | Gates | Approve does |
@@ -27,6 +43,15 @@ architect ──crew_submit──► queue ──worker──► member (read-on
 | `organize_plan` | plan.json of moves/renames/tags | schema, sources exist, targets inside the folder and collision-free | saves the plan. Moves are **not** executed in v1 |
 | `test_triage` | a triage report of a test run | no invented test names, the run's summary line quoted verbatim, citations, grounding, absence claims | writes the report |
 | `ui_sweep` | a report on every control pressed | no invented control names, totals quoted, interference reported, citations, grounding, absence claims | writes the report |
+| `code_task` | one Python module against a contract | AST airlock (import allowlist, banned names), API present, no stubs, **hidden tests** | stages it in `outbox/workspace/` |
+| `code_tests` | pytest tests for another member's accepted module, from the contract alone | airlock, enough tests, they pass against the real module | stages them in `outbox/workspace/tests/` |
+| `js_code_task` / `js_code_tests` | a JavaScript ES module / `node:test` tests | the crew-built JS gate (`jsharness/`): lexer, import allowlist, forbidden globals, API, stubs, then hidden `*.test.mjs` under `node --permission` | stages them |
+
+Every code job also passes through `quirklint.py` (verbatim templates a member
+re-indented are restored; a forced failure inside `try` in a test fails). A campaign
+routes a `.js` module to the JS types automatically. AutoHotkey v1 has its static
+gate (`ahk_lex`, `ahk_scan`, `ahk_api`, crew-built, accepted in
+`outbox/workspace/ahk/`) but **no runner yet** - see "Known limits".
 
 The harness does the acting in the last two: it **runs the project's own test suite**, and it **drives the app** (each control highlighted in #FF7900 for half a second, then pressed, menus opened and their items pressed). The member only explains what happened, against evidence it cannot fake.
 
@@ -102,9 +127,48 @@ python -m crew submit spec.json --by Kris      # then: python -m crew run JOB
   - `action_log.jsonl`, `roster.json`, `claims/`, `outbox/`
 - Ledger — every model call lands in the harness telemetry file, tagged `duty=crew:<type>`, `run_id=<job>`, `role=junior`, `persona`, `requests=1`
 
-## Known limits (v0.1)
+## Every tool, and when to reach for it
+
+Building and running work:
+
+| Command | What it is for |
+|---|---|
+| `python -m crew campaign run crew/campaigns/<x>.json` | a whole project: author + tester teams, dependencies (`depends` inside the campaign, `uses` for modules accepted earlier), three attempts, budget, live `status.json` and a `REPORT.md` |
+| `python -m crew campaign plan <x>.json` | the task graph, before spending anything |
+| `python crew/runners/research_compare.py --members A B --question q.md --name n` | the same research question to several members at once; `--read-root` sets the folder relative citations resolve against |
+| `python crew/runners/load_lab.py <x>.json` | several jobs at once, measuring what it costs the machine |
+| `python -m crew budget` | the live provider quota; the governor holds jobs rather than failing them |
+
+Checking what came back - run the evidence, do not read and nod:
+
+| Command | What it proves |
+|---|---|
+| `python crew/runners/check_accepted.py [--workspace DIR]` | every accepted module, together, against every hidden test (pairs by name: `test_<stem>.py` or `test_tts_<stem>.py`) |
+| `python crew/runners/mutants.py --module m.py [--hidden]` | whether a test file tests anything: seeds one defect at a time and lists the survivors by line |
+| `python crew/runners/member_stats.py` | each member's record across every campaign |
+| `python -m crew unify --workspace [--check]` | mechanical cleanup with ruff, each stage kept only if the tests still pass; lists what needs a reader |
+| `python -m crew vendor <workspace> <package> --author m.py=Name` | moves accepted modules into a real project with import rewrites, provenance headers and re-verification |
+
+For a human:
+
+| Tool | What it is for |
+|---|---|
+| `runners/Launch Review Desk.bat` | the queue of work waiting on Kris: approve needs no words, reject/question/defer do; **SEND** hands decisions to the agent (`for_agent.json`, `handoff.json`) |
+| `runners/Launch TTS bench.bat` | hear the TTS modules on real devices, including remembered headsets |
+| `runners/ui_sweep.py` | press every control in a Windows app, visibly, and report what was observed |
+| `runners/format_check.py` | check an exported VtoT document against the formatting test spec |
+
+Writing new work: contracts in `contracts/` (paste `HOUSE_STYLE.md` or
+`JS_HOUSE_STYLE.md`), hidden tests in `hidden_tests/`, and a reference in
+`hidden_tests/reference/` that must pass them **before** a request is spent. A new
+language: `HARNESS_BUILDING.md`.
+
+## Known limits (2026-09-21)
 
 - Prose judgment (is this verdict *right*?) is still the reviewer's job. The gates catch numbers, citations, links, reading, and structure, not meaning.
 - `organize_plan` proposes only. The deterministic mover (with wikilink rewriting) comes next.
-- One worker per server process, one job at a time: deliberate, given the Synthetic request quota. The **request-budget governor** (`crew/ratelimit.py`) models Kris's allowance as a bucket of 500 refilling 5% every 3 hours (~8.3 requests/hour) and holds jobs when it runs low, keeping a reserve for human and Crush interactive work.
-- Web fetch is off until domains are allowlisted. Fetched pages are untrusted input, and output stays gated and reviewed either way.
+- One worker per server process. Separate campaigns run in parallel when their authors are different models (Synthetic allows concurrent requests per model; Kris's two packs allow two). The governor (`ratelimit.py`) reads the provider's own `x-synthetic-quotas` header; the binding limit is usually weekly **credits**, not requests.
+- A passed research gate means **cited and grounded, not correct**. Hoss's AHK digest passed with a wrong version number because that number appeared elsewhere on the cited page. Grade content against the source.
+- Web fetch covers only `fetch_allowlist`; pages are read in windows (`start`, `lines`) or searched (`pattern`). Fetched pages are untrusted input.
+- AutoHotkey code is judged statically but not yet run: AutoHotkey can press keys in whatever window has focus, and its error dialogs appear on the real desktop. The runner waits on Kris's decision (Windows Sandbox, or the desktop behind the static gate).
+- Vision is probed, not wired: no task type carries an image yet (`VISION.md`).

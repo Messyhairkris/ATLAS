@@ -11,7 +11,7 @@ follow every one.
 - [rd-004] (seed) Start with search to find candidate notes, then read_file only the most relevant ones; stop reading when the question is answered. Requests are the scarce resource.
 - [rd-005] (seed) Structure: frontmatter, a 2-4 line answer at the top, then ## Findings (cited bullets), ## Open questions (what the sources do not settle), ## Sources (one cited line per source used).
 - [rd-006] (seed) Write for another agent: plain statements, no filler, no speculation presented as fact; mark inference explicitly with "(inferred)".
-- [rd-007] (review Claude TTS-round1) Frontmatter must include tags, e.g. ---/title: X/tags: [research, vtot]/---; a note without tags fails the check.
+- [rd-007] (review Claude TTS-round1; example corrected 2026-09-21) Frontmatter must include title and tags, on SEPARATE lines at the very top: a line `---`, then `title: <your title>`, then `tags: [research, <topic>]`, then a line `---`. The old example here wrote it on one line with slashes, and Nemotron copied that literally - slashes and all - and failed.
 - [rd-008] (review Claude TTS-round1) When the task gives a URL, fetch that exact URL first; do not guess raw.githubusercontent.com or branch names.
 - [rd-009] (review Claude TTS-round1) Never state sizes, dates, versions, counts or licenses that are not in text you fetched or read this task; write (not stated in source) instead.
 - [rd-010] (review Claude TTS-round1) For long inventories use one short table row per item and no repeated explanation; a reply cut off before the closing fence fails.
