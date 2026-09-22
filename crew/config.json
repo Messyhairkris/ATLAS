@@ -105,8 +105,8 @@
     "observation_chars": 6000,
     "lease_seconds": 180,
     "max_tokens_by_member": {
-      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured.",
-      "Barry": 32768,
+      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured. 2026-09-21 (gl-std140): Barry on GLM-5.3-Flash spent 36,448 tokens reasoning against 32768 and was cut off before answering; raised to 65536, the provider's max_output_length for GLM-5.3-Flash.",
+      "Barry": 65536,
       "Nemotron": 24576,
       "Hoss": 24576,
       "Qwen": 32768,

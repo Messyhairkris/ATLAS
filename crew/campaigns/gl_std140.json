@@ -1,0 +1,42 @@
+{
+  "name": "gl-std140",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "max_requests": 50,
+  "goal": "The first OpenGL module: lay out and pack a GLSL std140 uniform block byte for byte, and print the matching GLSL so the shader and the bytes cannot drift. It is also the first real measurement of Barry since he moved to GLM-5.3-Flash.",
+  "teams": {
+    "Buffer": {
+      "author": "Barry",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "std140",
+      "team": "Buffer",
+      "module": "std140.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/gl_std140.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_std140.py"
+      ],
+      "api": [
+        "SCALARS",
+        "VECTORS",
+        "MATRICES",
+        "base",
+        "parse",
+        "layout",
+        "pack",
+        "glsl_block"
+      ],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "Every number in this contract is an OpenGL rule, and a wrong one fails silently in a shader, so follow the numbered rules exactly rather than what you remember about std140. A float after a vec3 fits into the vec3's padding. Every array element is padded to 16 bytes, even a float. Matrices are column-major columns padded to 16. Unwritten bytes are zero.",
+      "test_instructions": "Check bytes, not only offsets: use struct.unpack_from on pack() output. Cover every row of the layout table, the float-after-vec3 trap, the zero padding, a column-major mat3, and every ValueError the contract lists."
+    }
+  ]
+}

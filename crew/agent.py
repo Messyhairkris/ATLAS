@@ -59,7 +59,7 @@ TOOLS
 - list_dir(path=".")
 - read_file(path, start=1, lines=200)
 - search(pattern, path=".", max_hits=30)  (regex, case-insensitive, searches file contents)
-- fetch_url(url){fetch_note}
+- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}
 Relative paths resolve against the first read root.
 
 BUDGET: {max_requests} replies in total for this task, tool calls and submissions included. Submit before you run out.
@@ -166,6 +166,21 @@ NATIVE_ARG_NAMES = {"line_start": "start", "start_line": "start",
                     "filepath": "path", "dir": "path", "directory": "path"}
 
 
+def _thinking_cut_off(res: dict) -> bool:
+    """True when the provider stopped at the length limit before any answer.
+
+    The client falls back to the reasoning text when content is empty, so the
+    reply looks non-empty; only the raw message shows nothing was answered.
+    """
+    try:
+        choice = res["raw"]["choices"][0]
+    except (KeyError, IndexError, TypeError):
+        return False
+    message = choice.get("message") or {}
+    return (choice.get("finish_reason") == "length"
+            and not str(message.get("content") or "").strip())
+
+
 def native_tool_call(res: dict) -> Optional[Tuple[str, dict]]:
     try:
         calls = res["raw"]["choices"][0]["message"].get("tool_calls") or []
@@ -195,7 +210,7 @@ def native_tool_call(res: dict) -> Optional[Tuple[str, dict]]:
         allowed = {"read_file": {"path", "start", "lines"},
                    "list_dir": {"path"},
                    "search": {"pattern", "path", "max_hits"},
-                   "fetch_url": {"url"}}[name]
+                   "fetch_url": {"url", "start", "lines", "pattern"}}[name]
         return name, {k: v for k, v in mapped.items() if k in allowed}
     return None
 
@@ -243,6 +258,27 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
         tokens += usage.get("total_tokens", 0) or 0
         reply = res.get("content") or ""
         left = max_requests - requests
+        if _thinking_cut_off(res):
+            # The provider stopped the member mid-thought: no answer arrived, and
+            # the client's fallback put the reasoning where the answer goes.
+            # Judging that as a file would blame the member for our ceiling.
+            truncations += 1
+            log({"event": "reply", "n": requests, "kind": "thinking_cut_off",
+                 "tokens": usage.get("total_tokens", 0),
+                 "reasoning_chars": len(res.get("reasoning") or "")})
+            if truncations >= MAX_TRUNCATIONS:
+                stop_reason = "output_truncated"
+                break
+            # A placeholder keeps the turns alternating without replaying the
+            # half-finished reasoning back to the member.
+            messages.append({"role": "assistant",
+                             "content": "(cut off while thinking - no answer)"})
+            messages.append({"role": "user", "content":
+                             "YOU RAN OUT OF ROOM WHILE THINKING: the reply limit "
+                             "was reached before any answer. Think less; decide, "
+                             "then SUBMIT the file straight away. "
+                             f"({left} replies left)"})
+            continue
         native = native_tool_call(res) if not reply.strip() else None
         if native:
             # Re-express it in our text protocol so the transcript the member

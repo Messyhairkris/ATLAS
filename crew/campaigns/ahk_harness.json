@@ -1,0 +1,88 @@
+{
+  "name": "ahk-harness",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 90,
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "workspace_subdir": "ahk",
+  "goal": "The static half of a gate for AutoHotkey v1, so crew-written AHK can be judged before it is run: a lexer that knows code from comments and strings, a safety scanner that refuses anything able to touch Kris's real desktop, and a reader that checks the contract's functions exist and are not stubs. Kris asked for an AHK v1 module; AutoHotkey can press keys in whatever window has focus, so the gate comes first.",
+  "teams": {
+    "Lexers": {
+      "author": "Nemotron",
+      "tester": "Gordon"
+    },
+    "Wardens": {
+      "author": "Qwen",
+      "tester": "Nemotron"
+    },
+    "Readers": {
+      "author": "Hoss",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "ahk_lex",
+      "team": "Lexers",
+      "module": "ahk_lex.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_lex.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_ahk_lex.py"
+      ],
+      "api": [
+        "mask",
+        "unterminated",
+        "code_lines"
+      ],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "The masked text must have exactly the same length and line breaks as the source, including a trailing \r on each line. Keep the opening and closing quote characters of a string; blank only what is between them. A ';' is a comment only at the start of a line or right after a space or tab. Block comments are whole lines, opened by a line starting with /* and closed by a line starting with */.",
+      "test_instructions": "Check the exact masked strings from the contract table, that len(mask(s)) == len(s) with Windows line endings, a ';' inside a string, a;b, an escaped `;, doubled quotes, a one-line /* x */ that still opens a block, and unterminated on a string left open."
+    },
+    {
+      "id": "ahk_scan",
+      "team": "Wardens",
+      "module": "ahk_scan.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_scan.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_ahk_scan.py"
+      ],
+      "api": [
+        "BANNED",
+        "banned_words",
+        "problems"
+      ],
+      "depends": [
+        "ahk_lex"
+      ],
+      "min_tests": 12,
+      "instructions": "You MUST import code_lines and unterminated from ahk_lex and never inspect a comment or a string yourself. Every report must be exactly the sentence the contract gives, with the word as written in the source. A word preceded by a backtick or a '.' is not the command.",
+      "test_instructions": "Prove words inside strings and comments are ignored, a banned word right after a string is still caught, whole-word and case-insensitive matching, the allowed #Include, and the sorted order when several problems share a line."
+    },
+    {
+      "id": "ahk_api",
+      "team": "Readers",
+      "module": "ahk_api.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_api.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_ahk_api.py"
+      ],
+      "api": [
+        "KEYWORDS",
+        "functions",
+        "missing",
+        "stubs",
+        "top_level"
+      ],
+      "depends": [
+        "ahk_lex"
+      ],
+      "min_tests": 12,
+      "instructions": "You MUST import code_lines from ahk_lex. A line like 'if (x) {' is not a function because 'if' is a keyword. Count braces across lines to find the end of a function; braces inside strings and comments are already blanked by code_lines.",
+      "test_instructions": "Walk the contract example, then prove keyword lines are not functions, a call is not a definition, nested braces end in the right place, parameters lose ByRef, defaults and '*', and top_level ignores constants and directives."
+    }
+  ]
+}

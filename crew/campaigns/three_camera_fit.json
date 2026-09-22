@@ -1,0 +1,44 @@
+{
+  "name": "three-camera-fit",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "max_requests": 50,
+  "goal": "The first three.js module: fit a camera to whatever is in the scene, orbit it, and hand it to a real PerspectiveCamera in the order three.js needs. Kris asked for modules in niche tools and other languages; this is also Gordon's first module on the JS harness.",
+  "teams": {
+    "Lens": {
+      "author": "Gordon",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "camera_fit",
+      "team": "Lens",
+      "module": "camera-fit.js",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/three_camera_fit.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/camera-fit.test.mjs"
+      ],
+      "api": [
+        "DEFAULT_FOV",
+        "DEFAULT_MARGIN",
+        "MIN_RADIUS",
+        "MAX_ELEVATION",
+        "boundsOf",
+        "sphereOf",
+        "fitDistance",
+        "fitCamera",
+        "orbit",
+        "applyTo"
+      ],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "No imports and no globals: three.js is never imported, so the module can be tested anywhere; applyTo receives the camera as an argument. The smaller of the vertical and horizontal fields of view limits the fit - compute both. applyTo must call position.set, then set near and far, then lookAt, then updateProjectionMatrix, in that order.",
+      "test_instructions": "Walk every table row with a tolerance of 1e-6. Prove a narrow window (aspect below 1) needs a greater distance than a square one, that elevation is clamped at 89 degrees, and that applyTo sets near and far BEFORE updateProjectionMatrix - use a fake camera that records its calls in order."
+    }
+  ]
+}

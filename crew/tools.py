@@ -151,7 +151,38 @@ class Toolbox:
                 continue
         return self._clip("\n".join(hits) or f"no matches in {scanned} files")
 
-    def fetch_url(self, url: str) -> str:
+    def fetch_url(self, url: str, start: int = 1, lines: int = 120,
+                  pattern: str = "") -> str:
+        """A page as numbered lines, a window at a time - or the lines matching
+        `pattern`, so a long document can be searched instead of scrolled."""
+        text = self._page(url)
+        all_lines = text.splitlines()
+        if pattern:
+            try:
+                rx = re.compile(pattern, re.IGNORECASE)
+            except re.error as e:
+                raise ToolError(f"bad regex: {e}")
+            hits = [f"{n:>5}| {line.strip()[:200]}"
+                    for n, line in enumerate(all_lines, 1) if rx.search(line)][:40]
+            body = "\n".join(hits) or "no matching lines"
+            return self._clip(f"{url}\n{body}\n[{len(hits)} matching line(s) of "
+                              f"{len(all_lines)}; read around one with start=N]")
+        start = max(1, int(start or 1))
+        lines = max(1, min(int(lines or 120), 400))
+        chunk = all_lines[start - 1:start - 1 + lines]
+        body = "\n".join(f"{start + i:>5}| {line}" for i, line in enumerate(chunk))
+        more = start - 1 + lines < len(all_lines)
+        tail = (f"\n[lines {start}-{start + len(chunk) - 1} of {len(all_lines)}"
+                + ("; more below: fetch again with start=N, or pattern=...]"
+                   if more else "]"))
+        return self._clip(f"{url}\n{body}{tail}")
+
+    def _page(self, url: str) -> str:
+        """Fetch once per task; paging through a page must not cost a download
+        each time."""
+        cache = self.__dict__.setdefault("_pages", {})
+        if url in cache:
+            return cache[url]
         host = urllib.parse.urlparse(url or "").hostname or ""
         allowed = any(host == d or host.endswith("." + d)
                       for d in self.cfg.fetch_allowlist)
@@ -172,7 +203,8 @@ class Toolbox:
                                     re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)))
         text = re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text)).strip()
         self.evidence.add(url, text)
-        return self._clip(f"{url}\n{text}")
+        cache[url] = text
+        return text
 
     def call(self, name: str, args: Optional[dict]) -> str:
         args = args or {}

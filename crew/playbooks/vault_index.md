@@ -13,3 +13,4 @@ appended by reviewers, never rewritten wholesale.
 - [vi-006] (librarian-duty-1) A one-shot index from the inventory excerpts usually passes; read a full note only when its excerpt does not say what the note decides.
 - [vi-007] (review Claude job-20260919-102403-9a88) Never copy the thesis or verdict from the existing index; derive them from the newest run note and review, read in full.
 - [vi-008] (review Claude job-20260919-102403-9a88) The folder inventory is already in the task text; do not spend a request on list_dir of the same folder.
+- [vi-010] (Hoss via Claude) read the run note before quoting its score

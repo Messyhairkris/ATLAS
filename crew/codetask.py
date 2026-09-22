@@ -43,6 +43,9 @@ ALLOWED_IMPORTS = {
     "statistics", "bisect", "copy", "heapq", "operator", "textwrap", "numbers",
     "fractions", "decimal", "datetime", "warnings", "threading", "queue",
     "contextlib", "__future__", "configparser", "hashlib",
+    # struct packs numbers into bytes and back; it reads and writes nothing
+    # outside the program. Added for the OpenGL std140 packer, 2026-09-21.
+    "struct",
 }
 # `logging` is deliberately absent: logging.basicConfig(filename=...) writes a
 # file, and no contract needs logging inside a pure module.
