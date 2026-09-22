@@ -5,12 +5,16 @@ re-indented the way Nemotron does it - the linter must repair them and the gates
 (2) a JS test file with assert.fail inside try - the quirks step must fail it.
 """
 
+import os
 import re
+import tempfile
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
+# A throwaway job store: these fake jobs must never count in a real member's record.
+os.environ["CREW_HOME"] = tempfile.mkdtemp(prefix="crew-quirklint-e2e-")
 from crew.core import Crew  # noqa: E402
 
 REF = (ROOT / "crew/hidden_tests/reference/single-file.js").read_text(encoding="utf-8")
