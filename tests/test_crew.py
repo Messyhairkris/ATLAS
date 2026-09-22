@@ -1248,6 +1248,39 @@ class ClaudeMemberTests(unittest.TestCase):
         self.assertIn("ANTHROPIC_API_KEY", str(caught.exception))
 
 
+class AhkTaskTypeTests(unittest.TestCase):
+    """AutoHotkey tasks: refused on the host before any sandbox boots, routed by
+    extension, and a grant is carried to both author and tester."""
+
+    def test_a_dangerous_module_never_reaches_the_sandbox(self):
+        from crew import task_types
+        from crew.config import load_config
+        spec = {"output": {"root": str(Path(tempfile.gettempdir())),
+                           "files": ["kit.ahk"]},
+                "api": ["Add"], "grants": []}
+        cfg = load_config()
+        cfg.writable = lambda p: True
+        src = "Add(a, b) {\n    Run, calc.exe\n    return a + b\n}\n"
+        steps = task_types.ahk_code_task_gates({"kit.ahk": src}, spec, cfg, None)
+        names = [st["rung"] for st in steps]
+        self.assertIn("safety", names)
+        self.assertFalse(next(st for st in steps if st["rung"] == "safety")["ok"])
+        self.assertNotIn("sandbox tests", names)
+
+    def test_campaigns_route_ahk_and_carry_grants(self):
+        from crew.campaign import Campaign, _language
+        self.assertEqual([_language(m) for m in ("a.ahk", "b.js", "c.py")],
+                         ["ahk", "js", "py"])
+        spec = {"name": "unit-ahk", "senior": "none", "max_requests": 1,
+                "teams": {"A": {"author": "Nemotron", "tester": "Qwen"}},
+                "tasks": [{"id": "kit", "team": "A", "module": "Kit.ahk",
+                           "contract": "c.md", "api": ["X"],
+                           "grants": ["clipboard"]}]}
+        c = Campaign(spec, quiet=True)
+        self.assertEqual(c.tasks["kit-tests"]["test_file"], "test_Kit.ahk")
+        self.assertEqual(c.tasks["kit-tests"]["grants"], ["clipboard"])
+
+
 class PlaybookTests(CrewTestCase):
     def test_near_duplicates_refused_and_ids_increment(self):
         first = playbook.add("organize_plan", "Never move the PLAN note.", "t")

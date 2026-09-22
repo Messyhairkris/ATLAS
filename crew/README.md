@@ -49,9 +49,12 @@ Prices and limits: `SYNTHETIC_LIMITS.md`. Claude members live in `config.json`
 
 Every code job also passes through `quirklint.py` (verbatim templates a member
 re-indented are restored; a forced failure inside `try` in a test fails). A campaign
-routes a `.js` module to the JS types automatically. AutoHotkey v1 has its static
-gate (`ahk_lex`, `ahk_scan`, `ahk_api`, crew-built, accepted in
-`outbox/workspace/ahk/`) but **no runner yet** - see "Known limits".
+routes a `.js` module to the JS types automatically. AutoHotkey v1 has `ahk_code_task` / `ahk_code_tests`: the crew-built static gate
+(`ahk_lex`, `ahk_scan`, `ahk_api`) on the host, then the hidden tests **only inside
+Windows Sandbox** (`crew/ahkrun.py`, tests use `crew/ahk/tap.ahk`). A task can be
+granted `clipboard`; `Run`, `Send` and the rest stay refused. A campaign routes a
+`.ahk` module automatically. Each attempt boots a sandbox - several minutes on
+Kris's machine - so AHK campaigns are slow by design.
 
 The harness does the acting in the last two: it **runs the project's own test suite**, and it **drives the app** (each control highlighted in #FF7900 for half a second, then pressed, menus opened and their items pressed). The member only explains what happened, against evidence it cannot fake.
 
@@ -170,5 +173,5 @@ language: `HARNESS_BUILDING.md`.
 - One worker per server process. Separate campaigns run in parallel when their authors are different models (Synthetic allows concurrent requests per model; Kris's two packs allow two). The governor (`ratelimit.py`) reads the provider's own `x-synthetic-quotas` header; the binding limit is usually weekly **credits**, not requests.
 - A passed research gate means **cited and grounded, not correct**. Hoss's AHK digest passed with a wrong version number because that number appeared elsewhere on the cited page. Grade content against the source.
 - Web fetch covers only `fetch_allowlist`; pages are read in windows (`start`, `lines`) or searched (`pattern`). Fetched pages are untrusted input.
-- AutoHotkey code is judged statically but not yet run: AutoHotkey can press keys in whatever window has focus, and its error dialogs appear on the real desktop. The runner waits on Kris's decision (Windows Sandbox, or the desktop behind the static gate).
+- AutoHotkey runs only in Windows Sandbox (Kris, 2026-09-21). One sandbox at a time; runs queue behind a lock.
 - Vision is probed, not wired: no task type carries an image yet (`VISION.md`).

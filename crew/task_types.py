@@ -682,7 +682,193 @@ def js_code_tests_gates(files, spec, cfg, toolbox):
     return steps
 
 
+# -- AutoHotkey v1: static gate on the host, tests only in Windows Sandbox ----------
+
+_AHK_TEST_CALL = re.compile(r"^\s*(?:Is|Ok)\(", re.MULTILINE | re.IGNORECASE)
+AHK_TOLD = ("This is an AutoHotkey v1 (1.1.x) file of PURE functions: text or numbers "
+            "in, a value out. Expression syntax (:=), no legacy commands. It is REFUSED "
+            "before running if it uses a directive (#...), a hotkey or hotstring (::), a "
+            "label, '%' dynamic references, or any banned command - Run, Send, Click, "
+            "Win*, File*, Reg*, DllCall, MsgBox, Sleep, ExitApp and the rest - unless the "
+            "contract grants it. Code outside functions may only be NAME := value. It "
+            "then runs, with the tests, inside a disposable Windows Sandbox.")
+
+
+def _ahk_grants(spec: dict) -> list:
+    from .ahkrun import GRANTABLE
+    grants = [str(g) for g in (spec.get("grants") or [])]
+    unknown = [g for g in grants if g not in GRANTABLE]
+    if unknown:
+        raise CrewError(f"unknown grant(s) {unknown}; grantable: {sorted(GRANTABLE)}")
+    return grants
+
+
+def ahk_code_task_normalize(spec: dict, cfg: Config) -> dict:
+    module = (spec.get("module") or "").strip()
+    if not module or "/" in module or "\\" in module or not module.endswith(".ahk"):
+        raise CrewError("spec.module must be a single .ahk file name")
+    spec["task_type"] = "ahk_code_task"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required")
+    _contract_text(spec, cfg)
+    if not _hidden_tests(spec, cfg):
+        raise CrewError("ahk_code_task needs hidden_tests (test_*.ahk)")
+    _workspace_modules(spec, cfg)
+    spec["grants"] = _ahk_grants(spec)
+    spec["api"] = [str(a) for a in (spec.get("api") or [])]
+    if not spec["api"]:
+        raise CrewError("spec.api must list the functions the file must define")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace").resolve()
+    if not cfg.writable(root / module):
+        raise CrewError(f"{root / module} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [module]}
+    return spec
+
+
+def ahk_code_task_preload(spec: dict, cfg: Config, toolbox) -> str:
+    text = code_task_preload(spec, cfg, toolbox)
+    return text.replace(
+        "Your source is checked first and REFUSED if it imports anything outside the "
+        "contract's allowlist, calls eval/exec/open, or reaches the filesystem, "
+        "network or registry.", AHK_TOLD)
+
+
+def _ahk_static(source: str, name: str, spec: dict, includes=()) -> list:
+    """The crew-built checks, with the task's grants applied."""
+    from . import ahkrun
+    return ahkrun.static_problems({} if includes else {name: source},
+                                  {name: source} if includes else {},
+                                  spec.get("grants") or ())
+
+
+def _ahk_run(modules: dict, tests: dict, spec: dict, file: str) -> dict:
+    from . import ahkrun
+    result = ahkrun.run_ahk_tests(modules, tests, title=spec.get("title", ""),
+                                  grants=spec.get("grants") or ())
+    if result["ok"]:
+        return gates.step("sandbox tests", True, result["summary"], file)
+    why = result["summary"] + ("\n" + "\n".join(result["problems"][:6])
+                               if result["problems"] else "")
+    fails = [l for l in result["log"].splitlines() if l.startswith("not ok")][:8]
+    if fails:
+        why += "\n" + "\n".join(fails)
+    return gates.step("sandbox tests", False, why, file)
+
+
+def ahk_code_task_gates(files, spec, cfg, toolbox):
+    from . import ahkrun  # noqa: F401 - puts the crew-built AHK gate on sys.path
+    import ahk_api
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        problems = _ahk_static(source, out_file, spec)
+        missing = ahk_api.missing(source, spec["api"])
+        stubs = ahk_api.stubs(source)
+        loose = ahk_api.top_level(source)
+        steps += [gates.step("safety", not problems, "; ".join(problems[:8]), out_file),
+                  gates.step("api", not missing, "the contract requires these "
+                             "functions, which are missing: " + ", ".join(missing),
+                             out_file),
+                  gates.step("no stubs", not stubs, "these do nothing: "
+                             + ", ".join(stubs), out_file),
+                  gates.step("no loose code", not loose, "code outside a function "
+                             "runs the moment the file is included - lines "
+                             + ", ".join(map(str, loose[:10])), out_file)]
+        if all(st["ok"] for st in steps):
+            mods = {**_workspace_modules(spec, cfg), out_file: source}
+            steps.append(_ahk_run(mods, _hidden_tests(spec, cfg), spec, out_file))
+    return steps
+
+
+def ahk_code_tests_normalize(spec: dict, cfg: Config) -> dict:
+    name = (spec.get("test_file") or "").strip()
+    if not (name.startswith("test_") and name.endswith(".ahk")) or "/" in name:
+        raise CrewError("spec.test_file must be a single file named test_*.ahk")
+    spec["task_type"] = "ahk_code_tests"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required")
+    _contract_text(spec, cfg)
+    if not _workspace_modules(spec, cfg):
+        raise CrewError("spec.depends_modules must name the accepted module(s)")
+    spec["grants"] = _ahk_grants(spec)
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    spec.setdefault("min_tests", 6)
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace" / "tests").resolve()
+    if not cfg.writable(root / name):
+        raise CrewError(f"{root / name} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [name]}
+    return spec
+
+
+def ahk_code_tests_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    mods = sorted(_workspace_modules(spec, cfg))
+    return "\n".join([
+        f"OUTPUT FILE: {spec['output']['files'][0]}", "",
+        "You are the TESTER. Write AutoHotkey v1 tests for another member's module "
+        "from the CONTRACT, not from their code.", "",
+        "The file must start with exactly these lines, then the checks, then Done():",
+        "#Include tap.ahk", *[f"#Include {m}" for m in mods], "",
+        "Checks: Is(got, want, \"which contract rule\") compares with ==, and "
+        "Ok(condition, \"which contract rule\"). End with Done(). Nothing else from "
+        "the outside world; no labels, hotkeys or '%'.", "",
+        "CONTRACT:", "", contract, "",
+        f"RULES: at least {spec['min_tests']} Is/Ok checks. The tests run in a "
+        f"Windows Sandbox against the real module."])
+
+
+def ahk_code_tests_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        mods = _workspace_modules(spec, cfg)
+        from . import ahkrun
+        problems = ahkrun.static_problems(mods, {out_file: source},
+                                          spec.get("grants") or ())
+        count = len(_AHK_TEST_CALL.findall(source))
+        steps += [gates.step("safety", not problems, "; ".join(problems[:8]), out_file),
+                  gates.step("test count", count >= int(spec["min_tests"]),
+                             f"{count} Is/Ok checks; the contract asks for at least "
+                             f"{spec['min_tests']}", out_file)]
+        if all(st["ok"] for st in steps):
+            steps.append(_ahk_run(mods, {out_file: source}, spec, out_file))
+    return steps
+
+
 TASK_TYPES: Dict[str, Dict[str, object]] = {
+    "ahk_code_task": {
+        "description": "Write one AutoHotkey v1 file of pure functions against a contract. Judged by the crew-built static gate (safety, API, stubs, no loose code), then by hidden tests run only inside Windows Sandbox.",
+        "spec": {"module": "required: the .ahk file to write",
+                 "contract": "required: path to the contract file",
+                 "api": "required: functions the file must define",
+                 "hidden_tests": "required: test_*.ahk files the member never sees",
+                 "grants": "optional: permissions from ahkrun.GRANTABLE, e.g. [\"clipboard\"]",
+                 "instructions": "optional"},
+        "gates": "output path, ahk_scan safety, ahk_api (api, stubs, loose code), then the hidden tests in Windows Sandbox",
+        "apply": "writes the module into the crew workspace (never into a real project)",
+        "normalize": ahk_code_task_normalize, "preload": ahk_code_task_preload,
+        "gates_fn": ahk_code_task_gates,
+    },
+    "ahk_code_tests": {
+        "description": "Write AutoHotkey v1 tests (tap.ahk Is/Ok checks) for another member's accepted module, from the contract alone; run in Windows Sandbox.",
+        "spec": {"test_file": "required: test_*.ahk to write",
+                 "contract": "required: the same contract the author worked from",
+                 "depends_modules": "required: the accepted module(s) under test",
+                 "grants": "optional: as for ahk_code_task",
+                 "min_tests": "optional, default 6"},
+        "gates": "output path, safety scan, enough Is/Ok checks, the tests pass in Windows Sandbox",
+        "apply": "writes the test file into the crew workspace",
+        "normalize": ahk_code_tests_normalize, "preload": ahk_code_tests_preload,
+        "gates_fn": ahk_code_tests_gates,
+    },
     "js_code_task": {
         "description": "Write one JavaScript ES module against a contract. Judged by the crew-built JS harness (lexer, import allowlist, forbidden globals, API, stubs) and then by hidden node:test tests run under Node's permission sandbox.",
         "spec": {"module": "required: the .js file to write",
