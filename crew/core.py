@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from . import autofix, playbook, task_types
+from . import autofix, playbook, quirklint, task_types
 from .agent import run_member
 from .config import REPO_ROOT, Config, CrewError, load_config
 from .ratelimit import RateWindow
@@ -130,7 +130,7 @@ class Crew:
         model = resolve_alias(provider, persona)
         if model == persona and not persona.startswith("hf:"):
             raise CrewError(f"unknown crew member {persona!r}; use a nickname "
-                            f"from providers.json (Hoss, Barry, Qwen, Nemotron)")
+                            f"from providers.json (Hoss, Barry, Qwen, Nemotron, Gordon)")
         if model.lower() in denied_models(provider):
             raise CrewError(f"{persona} is on the deny list for this round")
         return model
@@ -181,12 +181,15 @@ class Crew:
                 """Lint near-misses for free, then gate. Corrections are
                 recorded and shown to the reviewer, never silent."""
                 fixed, notes = autofix.apply(files, spec.get("_run_log", ""), toolbox)
+                fixed, quirk_notes = quirklint.repair(fixed, spec, job["task_type"])
+                notes += quirk_notes
                 if notes:
                     files.clear()
                     files.update(fixed)      # the kept submission is the fixed one
                     fixes.extend(notes)
                     log_event({"event": "autofix", "notes": notes})
-                return ttdef["gates_fn"](files, spec, self.cfg, toolbox)
+                steps = ttdef["gates_fn"](files, spec, self.cfg, toolbox)
+                return steps + quirklint.gate_steps(files, job["task_type"])
 
             out = run_member(
                 persona=job["assigned_to"], task_type=job["task_type"],
