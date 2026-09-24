@@ -192,7 +192,7 @@ def run_tests(modules: Dict[str, str], test_files: Dict[str, str],
     if blocked:
         return False, "REFUSED to execute:\n" + "\n".join(blocked), {"blocked": blocked}
 
-    with tempfile.TemporaryDirectory(prefix="crew-code-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="crew-code-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         for name, src in {**modules, **test_files}.items():
             dest = work / name
