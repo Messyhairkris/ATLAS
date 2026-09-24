@@ -8,7 +8,18 @@
     "C:/Users/user/ATLAS-api-harness",
     "C:/Users/user/Cross_talk",
     "C:/Users/user/Voice_to_Text_Project",
-    "C:/Users/user/Desktop/AHK V1 Agentic Project"
+    "C:/Users/user/Desktop/AHK V1 Agentic Project",
+    "C:/Users/user/octofriend-vanilla",
+    "C:/Users/user/Vocto",
+    "C:/Users/user/yetifriend",
+    "C:/Users/user/.octofriend",
+    "C:/Users/user/Desktop/TRIZ",
+    "C:/Users/user/Desktop/Splat Portfolio project",
+    "C:/Users/user/.ahk-lsp",
+    "D:/Splat Portfolio Flash drive",
+    "D:/Touch_Up_Portable",
+    "D:/Looking for work tool kit",
+    "C:/Users/user/MakerCAD"
   ],
   "write_roots": [
     "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki",
@@ -25,9 +36,18 @@
     "**/*secret*",
     "**/*token*",
     "**/*credential*",
+    "**/*password*",
     "**/*.pem",
     "**/*.key",
     "**/id_rsa*",
+    "**/keys.json*",
+    "**/*.json5",
+    "**/AHK Vault/**",
+    "**/Heythere-json.AHK",
+    "**/heythere_ChatGPT.ahk",
+    "**/Chatgpt-Heythere.ahk",
+    "**/Spell-correct-shopify.txt",
+    "**/OctoFriend_failed_conversation conversion.txt",
     "**/runs/crew/jobs/**",
     "**/runs/crew/claims/**",
     "**/.claude/**",
@@ -37,7 +57,14 @@
     "**/Voice_to_Text_Project/implementation/dist/models/**",
     "**/Voice_to_Text_Project/implementation/dist/lexicon/**",
     "**/crew/hidden_tests/**",
-    "**/crew/campaigns/**"
+    "**/crew/campaigns/**",
+    "**/Vocto/octofriend/config/octofriend/**",
+    "**/.octofriend/config/**",
+    "**/.octofriend/data/**",
+    "**/.octofriend/backups/**",
+    "**/.octofriend/logs/**",
+    "**/.octofriend/bridge/**",
+    "**/.octofriend/memory/**"
   ],
   "fetch_allowlist": [
     "github.com",
@@ -106,13 +133,14 @@
     "observation_chars": 6000,
     "lease_seconds": 180,
     "max_tokens_by_member": {
-      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured. 2026-09-21 (gl-std140): Barry on GLM-5.3-Flash spent 36,448 tokens reasoning against 32768 and was cut off before answering; raised to 65536, the provider's max_output_length for GLM-5.3-Flash.",
+      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured. 2026-09-21 (gl-std140): Barry on GLM-5.3-Flash spent 36,448 tokens reasoning against 32768 and was cut off before answering; raised to 65536, the provider's max_output_length for GLM-5.3-Flash. 2026-09-22: GLM-4.7-Flash reactivated as its own member, Larry (separate from Barry) - starts at its old measured ceiling, 49152, rather than re-measuring from 16384.",
       "Barry": 65536,
       "Nemotron": 24576,
       "Hoss": 24576,
       "Qwen": 32768,
       "Gordon": 32768,
-      "Haiku": 32768
+      "Haiku": 32768,
+      "Larry": 49152
     },
     "claude_members": {
       "comment": "Claude models on the crew, reached through the official Anthropic SDK (crew/claude_chat.py), billed by Anthropic rather than Synthetic. Added 2026-09-21 for Kris's experiment: plan in Opus 5, delegate every job to small agents, unify in Opus 5. Needs `pip install anthropic` and ANTHROPIC_API_KEY before a job can run.",
@@ -121,5 +149,5 @@
   },
   "deny_models_comment": "Empty: nothing is refused. The list was a measuring tool (Kimi was denied on 2026-09-19 to read roster-only spend: $0.15 crew vs $1.00 Kimi in 24h). Division of labor now: Crush drives Kimi, Claude drives Claude, and both delegate bounded work to the Crew. The crew's DEFAULT member is still Hoss (defaults.assigned_to); a big model only runs a crew job if an architect names it in assigned_to, which would usually mean the task was mis-scoped.",
   "deny_globs_comment": "crew/hidden_tests is denied so a member can never read the tests that judge it, even if a task mistakenly widens its read roots. crew/campaigns is denied because a campaign file names every task and team.",
-  "read_roots_comment": "2026-09-21: Kris's AHK V1 Agentic Project added READ-ONLY so the crew can research how AutoHotkey v1 is used here. It is not a write root. Its .env files, .git, node_modules and .claude are refused by the deny globs above."
+  "read_roots_comment": "2026-09-21: Kris's AHK V1 Agentic Project added READ-ONLY so the crew can research how AutoHotkey v1 is used here. It is not a write root. Its .env files, .git, node_modules and .claude are refused by the deny globs above. 2026-09-22: octofriend-vanilla, Vocto, yetifriend and .octofriend added READ-ONLY - four dormant Octofriend-based experiments Kris wants archived (research -> cut list -> reorganize -> post-mortem -> zip; the folder-archaeology tool's next stage). None are write roots. .octofriend/config and .octofriend/data are NOT secret-named but hold app state (an engram.db, names.json) - excluded from anything the deterministic archive-apply step actually copies, regardless of what a member's cut list proposes; the usual deny globs (.env, secret/token/credential/pem/key, .git, node_modules) still apply to all four."
 }

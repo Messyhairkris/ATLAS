@@ -27,7 +27,8 @@
         "hf:Qwen/Qwen3.8-27B",
         "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
         "hf:zai-org/GLM-5.3-Flash",
-        "hf:deepseek-ai/DeepSeek-V4.1-Flash"
+        "hf:deepseek-ai/DeepSeek-V4.1-Flash",
+        "hf:zai-org/GLM-4.7-Flash"
       ],
       "model_aliases": {
         "Hoss": "hf:openai/gpt-oss-120b",
@@ -36,7 +37,8 @@
         "Qwen": "hf:Qwen/Qwen3.8-27B",
         "Nemotron": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
         "Kimi": "hf:moonshotai/Kimi-K3",
-        "Gordon": "hf:deepseek-ai/DeepSeek-V4.1-Flash"
+        "Gordon": "hf:deepseek-ai/DeepSeek-V4.1-Flash",
+        "Larry": "hf:zai-org/GLM-4.7-Flash"
       },
       "embeddings": {
         "path": "/v1/embeddings",
@@ -75,9 +77,7 @@
           "out_per_mtok": null
         }
       },
-      "archived_models": {
-        "hf:zai-org/GLM-4.7-Flash": "Barry until 2026-09-21. Archived by Kris: weakest member every round, and HTTP 500s/timeouts on most runs of the JS-harness campaigns. Barry now runs GLM-5.3-Flash; job records before 2026-09-21 are the old model."
-      }
+      "archived_models_comment": "hf:zai-org/GLM-4.7-Flash was Barry until 2026-09-21 (weakest member every round, HTTP 500s/timeouts on most JS-harness runs); Barry moved to GLM-5.3-Flash. Reactivated 2026-09-22 by Kris as its OWN member, Larry - not reassigned back to Barry - specifically to find what role a weaker, flakier model still serves, in the spirit of role-matching (Nemotron's clean-logic niche, Kimi's unify-only niche). Job records before 2026-09-21 with assigned_to=Barry are this model, not GLM-5.3-Flash."
     },
     "local-llama": {
       "type": "openai-compat",
