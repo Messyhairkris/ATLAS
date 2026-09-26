@@ -1,0 +1,9 @@
+{
+ "name": "test-pass-two-items",
+ "serve_dir": "C:/Users/user/ATLAS-api-harness/runs/crew/campaigns/tts-profiles",
+ "port": 8767,
+ "page": "Test%20pass%20-%20device%20profiles%20-%202026-09-20.html",
+ "setup_js": "() => { const ids = [...new Set([...document.querySelectorAll('button.pick')].map(b => b.dataset.id))].slice(0, 2); const o = {}; ids.forEach((id, i) => { for (const v of ['ok', 'warn', 'na']) o[v + (i + 1)] = 'button.pick[data-id=' + JSON.stringify(id) + '][data-v=' + v + ']'; }); return o; }",
+ "observe_js": "() => document.getElementById('tally').innerText.split(String.fromCharCode(10)).join(' ').trim()",
+ "max_states": 16
+}
