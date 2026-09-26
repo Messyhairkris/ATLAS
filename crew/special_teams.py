@@ -102,6 +102,50 @@ def _shrink(messages):
             m["_short"] = True
 
 
+CITE = re.compile(r"([\w./\\-]+\.(?:py|md|json)):(\d+)")
+
+
+def _local_checks(mission: dict, final: str, out_dir: Path, provider) -> list:
+    """Checks for file missions. A campaign design must leave its files staged and
+    its reference passing its own hidden tests under the airlock; a review's
+    every file:line must exist."""
+    checks = []
+    staged = out_dir / "staged"
+    for rel in mission.get("expect_staged", []):
+        checks.append({"check": f"staged {rel}", "ok": (staged / rel).is_file(),
+                       "detail": "" if (staged / rel).is_file() else "not staged"})
+    pair = mission.get("expect_green")
+    if pair:
+        runs = [c for c in getattr(provider, "checks", [])
+                if c["module"] == pair["module"] and c["tests"] == pair["tests"]]
+        last = runs[-1] if runs else None
+        # re-run on the FINAL staged files: a green check before a later edit proves nothing
+        if last is not None and hasattr(provider, "_check"):
+            try:
+                provider._check(pair)
+                last = provider.checks[-1]
+            except Exception as e:  # noqa: BLE001 - a missing file is a failed check
+                last = {"ok": False, "steps": [{"rung": "staged", "ok": False,
+                                                "detail": str(e)}]}
+        checks.append({"check": "reference passes its hidden tests (airlock)",
+                       "ok": bool(last and last["ok"]),
+                       "detail": "never checked" if last is None else
+                       "; ".join(f"{s['rung']}: {s['detail'][:120]}" for s in last["steps"]
+                                 if not s["ok"]) or "green"})
+    if mission.get("check_citations"):
+        roots = [Path(r) for r in mission["read_roots"]]
+        bad = []
+        for path, line in CITE.findall(final):
+            hit = next((r / path for r in roots if (r / path).is_file()), None)
+            if hit is None:
+                bad.append(f"{path} (no such file)")
+            elif int(line) > len(hit.read_text(encoding="utf-8", errors="replace").splitlines()):
+                bad.append(f"{path}:{line} (past end)")
+        checks.append({"check": "cited file:line exist", "ok": not bad,
+                       "detail": "; ".join(bad[:6]) or f"{len(CITE.findall(final))} citations exist"})
+    return checks
+
+
 def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dict:
     st_schema = _load_crew_module("st_schema")
     st_mission = _load_crew_module("st_mission")
@@ -133,23 +177,29 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         time.sleep(2)
     own_mcp = mcp is None
-    if own_mcp:
+    if own_mcp and mission.get("provider") == "local":
+        # files, not a browser: read the workspace, stage outputs, run the airlock
+        from crew.st_local import LocalProvider
+        mcp = LocalProvider(mission["read_roots"], out_dir / "staged",
+                            mission["allowed_tools"])
+    elif own_mcp:
         # Defence in depth from Qwen's research (job-20260925-074213-913c): the
         # browser may only request the mission's own origins, and no service
         # workers. Playwright MCP says it is "not a security boundary" - the
-        # mission guard is; these only narrow what a page can reach. (--no-webmcp,
-        # which stops pages registering their own tools, needs a newer version.)
+        # mission guard is; these only narrow what a page can reach.
         from urllib.parse import urlsplit
         origins = sorted({f"{urlsplit(u).scheme}://{urlsplit(u).netloc}"
-                          for u in mission["url_prefixes"] if urlsplit(u).netloc})
-        extra = ["--block-service-workers"] + (["--allowed-origins", ";".join(origins)]
-                                               if origins else [])
+                          for u in mission.get("url_prefixes", []) if urlsplit(u).netloc})
+        # --no-webmcp (0.0.82+, upgraded 2026-09-25): a page may not hand the
+        # member tools of its own - a prompt-injection route.
+        extra = ["--block-service-workers", "--no-webmcp"] + (
+            ["--allowed-origins", ";".join(origins)] if origins else [])
         mcp = McpClient(PLAYWRIGHT + extra + ["--output-dir", str(out_dir / "mcp")],
                         cwd=str(out_dir)).start()
     chat = chat or default_chat(mission.get("member", "Kimi"),
                                 int(mission.get("reply_tokens", 8192)))
     guard = st_mission.Mission(mission["allowed_tools"], mission["acting_tools"],
-                               mission["url_prefixes"], int(mission["max_steps"]),
+                               mission.get("url_prefixes", []), int(mission["max_steps"]),
                                int(mission["max_actions"]),
                                int(mission.get("max_errors_in_a_row", 3)),
                                int(mission.get("max_repeats", 2)))
@@ -166,8 +216,11 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
             for t in offered]
         system = (
             f"You are {mission.get('member', 'Kimi')}, on a special-teams mission for a "
-            "human+AI crew. You drive a real browser through the tools provided, and "
-            "only those.\n"
+            "human+AI crew. You work through the tools provided, and only those"
+            + (" - they drive a real browser." if mission.get("provider") != "local" else
+               " - they read the workspace, stage your output files (nothing else can be "
+               "written) and run the crew's safety and test gates on staged code.")
+            + "\n"
             "RULES: do exactly what the mission asks and nothing more - no extra "
             "clicks, pages or changes nobody requested. Every tool call is checked "
             "before it runs; a refusal comes back as the tool result with the reason. "
@@ -279,6 +332,7 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
     for term in mission.get("must_mention", []):
         checks.append({"check": f"mentions '{term}'",
                        "ok": term.lower() in (final or "").lower(), "detail": ""})
+    checks += _local_checks(mission, final or "", out_dir, mcp)
     end_balance = _balance()
     result = {"mission": name, "member": mission.get("member", "Kimi"),
               "passed": all(c["ok"] for c in checks), "stop": stop, "turns": turns,

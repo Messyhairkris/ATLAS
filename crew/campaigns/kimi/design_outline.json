@@ -1,0 +1,22 @@
+{
+ "name": "kimi-design-outline",
+ "member": "Kimi",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/ATLAS-api-harness/crew/contracts",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks",
+  "C:/Users/user/ATLAS-api-harness/crew/PERSONNEL.md",
+  "C:/Users/user/ATLAS-api-harness/crew/README.md"
+ ],
+ "goal": "You are the campaign architect for one crew coding task. A crew member (a cheap model) will write the module from YOUR contract and be judged by YOUR hidden tests, which it never sees. Design it so a careful small model can pass on the first try, and a careless one cannot pass by accident.\n\nTHE MODULE: outline.py - given the text of a file and its kind, return an outline so a reader can see a file's structure before reading it. Kinds: \"python\" (def / async def / class lines, top-level and nested, found by their leading keyword and indentation - the module may NOT use the ast module) and \"markdown\" (ATX headings # to ######, ignoring lines inside fenced code blocks). Each entry gives: 1-based line number, depth (python: nesting level inside enclosing class/def blocks, starting at 0; markdown: heading level minus 1), kind (\"class\", \"def\", \"async def\", \"heading\") and name (python: the identifier; markdown: the heading text, stripped). Also a function that renders the outline as text lines like \"L12  def parse\", indented two spaces per depth. Decide the exact API, the edge cases (decorators, comments, strings that contain 'def', tabs vs spaces, setext headings, closing #s, unknown kind) and the error behaviour yourself, and write them down precisely.\n\nCONSTRAINTS (the crew's airlock; check_staged enforces them): the module may import only from: dataclasses typing enum re math json collections itertools functools abc types string unicodedata statistics bisect copy heapq operator textwrap numbers fractions decimal datetime warnings threading queue contextlib __future__ configparser hashlib struct. No open(), eval, exec, file or network access: the text comes in as an argument. Tests use pytest and import the module by name.\n\nREAD FIRST: st_mission.md and gl_std140.md in crew/contracts are house contracts - copy their structure (purpose, Public API block, Allowed imports line, numbered rules, examples). HOUSE_STYLE.md is appended to every contract automatically. PERSONNEL.md says which member holds which post.\n\nSTAGE EXACTLY THESE FILES with stage_file:\n1. outline.md - the contract.\n2. outline.py - your reference implementation.\n3. test_outline.py - the hidden tests: at least 20 test functions, each naming the contract rule it checks; exact expected values, never just 'is not None'.\n4. campaign.json - in this shape: {\"name\": \"outline\", \"senior\": \"Claude\", \"senior_fallback\": \"Kimi\", \"max_attempts\": 3, \"max_escalations\": 0, \"max_requests\": 40, \"workspace_subdir\": \"outline\", \"goal\": \"...\", \"teams\": {\"Outline\": {\"author\": \"<member>\", \"tester\": \"<member>\"}}, \"tasks\": [{\"id\": \"outline\", \"team\": \"Outline\", \"module\": \"outline.py\", \"contract\": \"C:/Users/user/ATLAS-api-harness/crew/contracts/outline.md\", \"hidden_tests\": [\"C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_outline.py\"], \"api\": [every public name], \"depends\": [], \"min_tests\": 12, \"instructions\": \"...\", \"test_instructions\": \"...\"}]}. Pick author and tester from the posts in PERSONNEL.md.\n\nThen run check_staged(module=\"outline.py\", tests=\"test_outline.py\") until it passes. Final answer: the API in one paragraph, the three edge cases most likely to trip a small model, and your team choice with the reason.",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file", "check_staged"],
+ "acting_tools": ["stage_file", "check_staged"],
+ "max_steps": 36,
+ "max_actions": 16,
+ "max_turns": 40,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.5,
+ "reply_tokens": 32768,
+ "expect_staged": ["outline.md", "outline.py", "test_outline.py", "campaign.json"],
+ "expect_green": {"module": "outline.py", "tests": "test_outline.py"}
+}
