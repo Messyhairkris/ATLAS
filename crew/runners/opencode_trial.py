@@ -37,7 +37,24 @@ from crew.config import load_config  # noqa: E402
 LEDGER = Path("C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki/experiments/"
               "atlas-api-harness/runs/telemetry.jsonl")
 HOUSE_STYLE = REPO / "crew" / "contracts" / "HOUSE_STYLE.md"
-OPENCODE = shutil.which("opencode") or "opencode"
+def _opencode_exe() -> str:
+    """The native opencode.exe, never npm's opencode.CMD shim: a .CMD runs through
+    cmd.exe, which cuts the command line at the first newline, so every multi-line
+    prompt arrived as its FIRST LINE only - and with the message first, the -m/--dir/-f
+    flags after it were lost too (2026-09-26). Every earlier OpenCode trial got a
+    truncated prompt."""
+    found = shutil.which("opencode") or "opencode"
+    if not found.lower().endswith((".cmd", ".bat")):
+        return found
+    pkg = Path(found).parent / "node_modules" / "opencode-ai" / "node_modules"
+    for flavour in ("opencode-windows-x64", "opencode-windows-x64-baseline"):
+        exe = pkg / flavour / "bin" / "opencode.exe"
+        if exe.is_file():
+            return str(exe)
+    raise SystemExit(f"only the {found} shim was found; it would truncate prompts")
+
+
+OPENCODE = _opencode_exe()
 
 
 def opencode_config(model_id: str, output_tokens: int, context_tokens: int) -> dict:
@@ -119,6 +136,33 @@ def _grade(ws: Path, task: dict, deps: dict) -> list:
     return steps
 
 
+def _events(raw: str) -> list:
+    out = []
+    for line in raw.splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+def _writes_outside(events: list, ws: Path) -> list:
+    """Paths an edit/write tool call touched outside the run's own folder."""
+    root = ws.resolve()
+    bad = []
+    for e in events:
+        part = e.get("part") or {}
+        if e.get("type") == "tool_use" and part.get("tool") in ("edit", "write", "patch"):
+            path = ((part.get("state") or {}).get("input") or {}).get("filePath") or ""
+            try:
+                target = (root / path).resolve()
+            except (OSError, ValueError):
+                target = None
+            if path and (target is None or (target != root and root not in target.parents)):
+                bad.append(path)
+    return sorted(set(bad))
+
+
 def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     from providers.registry import resolve_alias
     cfg = load_config()
@@ -128,6 +172,11 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     if ws.exists():
         shutil.rmtree(ws)
     ws.mkdir(parents=True)
+    # Its own git repo: OpenCode's "project" is the nearest git root, and its
+    # external_directory fence is relative to that. Without this the project was the
+    # whole ATLAS repo and a run could edit any file in it (two runs edited another
+    # run's folder, 2026-09-26).
+    subprocess.run(["git", "init", "-q", str(ws)], capture_output=True)
     contract = Path(task["contract"]).read_text(encoding="utf-8")
     if HOUSE_STYLE.is_file():
         contract += "\n\n---\n\n" + HOUSE_STYLE.read_text(encoding="utf-8")
@@ -155,7 +204,6 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     # The key comes from the same place the crew's own calls get it (environment
     # variable, else providers.json's api_key_fallback) and goes straight into
     # the child's environment - it is never printed or written anywhere.
-    import os
     from providers.registry import _get_provider, _resolve_secret
     env = dict(os.environ)
     # OpenCode caps output at 32,000 tokens internally whatever the model config
@@ -166,17 +214,24 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
         key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
         if key:
             env["SYNTHETIC_API_KEY"] = key
+    session = {"id": None}
+
     def opencode(message: str, first: bool):
         # Round 1 ATTACHES the contract (-f), the way the crew preloads it: Nemotron,
         # left to find it, never opened it and invented an API (2026-09-26). Later
         # rounds continue the same session with the grader's failures - the same
         # feedback a crew member gets on a retry.
-        argv = [OPENCODE, "run", "-m", f"synthetic/{model_id}", "--format", "json",
-                "--dir", str(ws)] + (["-f", str(ws / "CONTRACT.md")] if first else ["--continue"])
+        # The message goes FIRST: -f takes several values and swallowed a trailing
+        # message as a second file ("File not found: You are a crew member..."). Later
+        # rounds name round 1's session: --continue resumes the newest session of the
+        # project, which was another member's run (2026-09-26).
+        argv = [OPENCODE, "run", message, "-m", f"synthetic/{model_id}", "--format", "json",
+                "--dir", str(ws)] + (["-f", str(ws / "CONTRACT.md")] if first
+                                     else ["--session", session["id"]])
         # Not subprocess.run(timeout=): on Windows it kills only the direct child, the
         # opencode.exe grandchild keeps the pipes open, and the wait never ends (Nemotron
         # v3 hung 3 h past a 30 min timeout, 2026-09-26). On timeout, kill the whole tree.
-        p = subprocess.Popen(argv + [message], cwd=str(ws), stdout=subprocess.PIPE,
+        p = subprocess.Popen(argv, cwd=str(ws), stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, encoding="utf-8",
                              errors="replace", env=env)
         try:
@@ -198,8 +253,20 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
         raw, err, code = opencode(message, first)
         raw_all += raw
         err_all += err or ""
+        events_now = _events(raw)
+        if first:
+            session["id"] = next((e["sessionID"] for e in events_now if e.get("sessionID")), None)
+        outside = _writes_outside(events_now, ws)
+        if outside:
+            steps = [{"rung": "fence", "ok": False,
+                      "detail": "wrote outside its folder: " + ", ".join(outside)}]
+            break
         steps = _grade(ws, task, deps)
         if all(s["ok"] for s in steps):
+            break
+        if not session["id"]:
+            steps.append({"rung": "session", "ok": False,
+                          "detail": "round 1 started no OpenCode session: " + (err or "")[:300]})
             break
         failed = "\n".join(f"- [{s['rung']}] {s['detail'][:1500]}" for s in steps if not s["ok"])
         message = ("THE GRADER FAILED YOUR MODULE. This is machine output, not an opinion - "
@@ -208,12 +275,7 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     seconds = round(time.time() - t0, 1)
     (home / "opencode.jsonl").write_text(raw_all, encoding="utf-8")
     (home / "opencode.stderr.txt").write_text(err_all, encoding="utf-8")
-    events = []
-    for line in raw_all.splitlines():
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            pass
+    events = _events(raw_all)
     usage = _usage(events)
     with open(LEDGER, "a", encoding="utf-8") as fh:        # close the ledger blind spot
         fh.write(json.dumps({"source": "opencode", "provider": "synthetic", "model": model_id,
