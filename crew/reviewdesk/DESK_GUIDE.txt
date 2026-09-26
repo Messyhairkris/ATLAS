@@ -1,0 +1,48 @@
+HOW TO USE THE REVIEW DESK
+
+This page is itself a review item. Everything below can be practised on it, and
+whatever you do here is your feedback about the Desk - it reaches the agent the
+same way every other decision does.
+
+THE FOUR STEPS
+ 1. Pick an item on the left. Its file opens in this pane, with line numbers.
+ 2. Read it. "open the file" opens it in its own program if you want more room.
+ 3. Decide, with the big buttons below the note box:
+      APPROVE   the work is right. The agent applies it: a commit is made, a file
+                is copied into place, or a crew job is marked done. No note needed.
+      REJECT    the work is wrong. Say why in the note. The agent fixes or drops it.
+      QUESTION  you want an answer first. Ask it in the note. The item comes back
+                marked [new], in orange, when the agent has answered or changed it.
+      DEFER     not now. Say why. It stays on your list and is never sent.
+    Anything but APPROVE needs a note of at least a few words.
+ 4. SEND hands every finished decision to the agent at once. In the pop-up,
+    "copy the message" gives you a line to paste into the chat if you want it
+    picked up right away; "close the Review Desk" closes everything.
+
+POINTING AT EXACT LINES
+ Select one or more lines in this pane, write your note, then press
+ "attach my note to the selected lines". The agent sees exactly which lines you
+ meant, even if the file changes around them. "clear the anchor" removes it.
+
+WHAT THE MARKS ON THE LEFT MEAN
+ [ok] approved    [no] rejected    [?] question    [...] deferred
+ [!]  decided but missing its reason
+ [new] changed since you last looked - read it again
+ Approved and sent items leave the list. Tick "show what I have finished" to
+ see them again.
+
+WHILE THE DESK IS OPEN
+ New items the agent queues appear by themselves ("N new item(s) arrived").
+ The top-left status overlay shows how many items are waiting ("NEEDS YOU").
+
+PRACTISE HERE - AND TELL US WHAT TO IMPROVE
+ On this page, your decision means:
+      APPROVE   this guide is clear; nothing to change.
+      QUESTION  something is unclear - ask, and the answer comes back here as [new].
+      REJECT    something is wrong or missing - say what.
+ Try pointing at a line: select the line that confused you (or the feature you
+ wish the Desk had), attach your note to it, press QUESTION or REJECT, then SEND.
+ The agent reads it, revises the Desk or this guide, and the guide comes back
+ marked [new] so you can check the change.
+
+ "how to use the Desk" at the top always brings you back to this page.

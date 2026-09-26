@@ -1107,6 +1107,38 @@ class ReviewHandoffTests(unittest.TestCase):
         self.assertEqual(ids, ["file:alpha.py", "commit:new"])
         self.assertEqual(self.rd.load_queue()[0]["decision"], "approve")
 
+    def test_desk_opens_on_the_guide_item_and_notes_on_it_reach_the_agent(self):
+        """2026-09-26: the Desk opened showing a file already approved. It now opens
+        on the guide - an ordinary item, so reviewing it teaches the notation and its
+        notes are the feedback about the Desk."""
+        import tkinter
+        items = self.rd.ensure_guide(self.queue(("alpha.py", "approve", ""), ("beta.py", "", "")))
+        self.rd.save_queue(items)
+        real_tk = tkinter.Tk
+
+        class Hidden(real_tk):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.withdraw()
+                self.attributes("-alpha", 0.0)
+        tkinter.Tk = Hidden
+        try:
+            desk = self.rd.Desk(self.rd.load_queue())
+        except tkinter.TclError as exc:
+            self.skipTest(f"no Tk here: {exc}")
+        finally:
+            tkinter.Tk = real_tk
+        self.addCleanup(desk.root.destroy)
+        self.assertEqual(desk.items[desk.current]["item_id"], self.rd.GUIDE_ID)
+        self.assertIn("HOW TO USE THE REVIEW DESK", desk.viewer.get("1.0", "end"))
+        desk.note.insert("1.0", "line 3 of the guide could say how SEND counts items")
+        desk.decide("question")
+        digest = json.loads(self.rd.digest_file().read_text(encoding="utf-8"))
+        self.assertEqual(digest["decisions"][self.rd.GUIDE_ID], "question")
+        self.assertIn("SEND counts", digest["notes"][self.rd.GUIDE_ID])
+        self.assertEqual(len(self.rd.ensure_guide(self.rd.load_queue())),
+                         len(self.rd.load_queue()))                # never added twice
+
     def test_only_complete_decisions_are_ready_and_defer_never_is(self):
         items = self.queue(("alpha.py", "approve", ""),
                            ("beta.py", "reject", "this name says nothing at all"),

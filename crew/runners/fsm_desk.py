@@ -93,6 +93,7 @@ class DeskSUL(SUL):
                           "origin": "fsm", "state": "pending", "decision": "", "note": ""})
         rd.save_queue(items)
         self.desk = rd.Desk(rd.load_queue())     # its Tk root is _HiddenTk: never drawn
+        self.desk.select(0)                      # the Desk now opens on its guide (2026-09-26)
         self.offers = []
         desk = self.desk
         desk.modal = lambda batch, complete: self.offers.append(

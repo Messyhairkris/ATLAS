@@ -69,6 +69,23 @@ def digest_file() -> Path:
     return home() / "for_agent.json"
 
 
+# The guide is an ordinary review item. Kris 2026-09-26: the Desk opened on a file he
+# had already approved ("a bit confusing"), and feedback about the Desk should use
+# the Desk's own notation - so reviewing the guide IS the practice, and its notes,
+# anchors and decisions are the feedback. When the PA revises the guide in answer,
+# it comes back marked [new], which shows the whole loop working.
+GUIDE_ID = "desk:guide"
+GUIDE_FILE = Path(__file__).resolve().parents[1] / "reviewdesk" / "DESK_GUIDE.txt"
+
+
+def ensure_guide(items: list) -> list:
+    if GUIDE_FILE.is_file() and not any(i["item_id"] == GUIDE_ID for i in items):
+        items = review_index.merge(items, [review_index.new_item(
+            item_id=GUIDE_ID, title="HOW TO USE THE REVIEW DESK - practise here, tell us "
+            "what to improve", path=str(GUIDE_FILE), origin="Review Desk")])
+    return items
+
+
 # -- the queue -------------------------------------------------------------------
 
 def load_queue() -> list:
@@ -372,8 +389,7 @@ class Desk:
         self._build()
         self.apply_scale(0)
         self.refresh_list()
-        if self.items:
-            self.select(0)
+        self.show_guide(add=False)         # never open on a finished item
         self.root.after(4000, self.poll_disk)
 
     # -- keeping in step with the queue file ----------------------------------------
@@ -433,6 +449,7 @@ class Desk:
                     fg=ACCENT).pack(side="left")
         self.counts = self._label(head, "", fg=DIM)
         self.counts.pack(side="left", padx=14)
+        self._button(head, "how to use the Desk", self.show_guide)
         self._button(head, "refresh from the crew", self.do_seed)
         self._button(head, "open the index", lambda: self.open_path(queue_file()))
         self._button(head, "A-", lambda: self.apply_scale(-1))
@@ -485,8 +502,8 @@ class Desk:
         self.viewer.pack(fill="both", expand=True)
         self.viewer.tag_config("anchored", background="#2A3340")
 
-        self._label(right, "your note - required for reject, question and defer",
-                    fg=DIM).pack(anchor="w", pady=(8, 0))
+        self.note_label = self._label(right, "", fg=DIM)
+        self.note_label.pack(anchor="w", pady=(8, 0))
         self.note = self.tk.Text(right, bg=PANEL, fg=FG, insertbackground=FG,
                                  font=self.fonts["body"], relief="flat", height=4,
                                  wrap="word")
@@ -588,9 +605,27 @@ class Desk:
             return
         self.select(self.visible[position])
 
+    def show_guide(self, add: bool = True) -> None:
+        """Select the guide item (adding it if the queue lacks it and add is set)."""
+        if add and not any(i["item_id"] == GUIDE_ID for i in self.items):
+            self.items[:] = ensure_guide(self.items)
+            if any(i["item_id"] == GUIDE_ID for i in self.items):
+                self.save(GUIDE_ID)
+                self.refresh_list()
+        ids = [i["item_id"] for i in self.items]
+        if GUIDE_ID in ids:
+            self.select(ids.index(GUIDE_ID))
+            self.reselect()
+        else:
+            self.current = None
+            self.title_label.config(text="pick an item on the left")
+
     def select(self, index) -> None:
         if index is None or not (0 <= index < len(self.items)):
             return
+        self.note_label.config(text="your note - required for reject, question and defer"
+                               + ("  (on this guide: your feedback about the Desk)"
+                                  if self.items[index]["item_id"] == GUIDE_ID else ""))
         self.current = index
         item = self.items[index]
         self.title_label.config(text=item["title"])
@@ -840,7 +875,7 @@ class Desk:
         self.say("decision cleared; it is waiting for you again", DIM)
 
     def do_seed(self) -> None:
-        self.items[:] = reconcile(seed(), self.items, self.touched)
+        self.items[:] = reconcile(ensure_guide(seed()), self.items, self.touched)
         self.sent = load_sent()
         self.refresh_list()
         self.say(f"{len(self.items)} item(s) in the queue", OK)
@@ -876,6 +911,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     items = seed(args.file) if (args.seed or args.file) else load_queue()
+    if not any(i["item_id"] == GUIDE_ID for i in items):
+        items = ensure_guide(items)
+        save_queue(items)
     if args.digest:
         print(json.dumps(write_digest(items), indent=2))
         return 0
