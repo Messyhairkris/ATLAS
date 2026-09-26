@@ -90,6 +90,10 @@ def regen_between(r: dict, a: dt.datetime, b: dt.datetime, period_min: float) ->
     amt = float(r.get("credits_next_regen_usd") or 0)
     if not nxt or not amt:
         return 0.0
+    if period_min <= 0:
+        # a zero or negative period never advances t: an infinite loop
+        # (found by Kimi's review, 2026-09-25). Count only the stated regen.
+        return amt if a < nxt <= b else 0.0
     total, t = 0.0, nxt
     while t <= b:
         if t > a:

@@ -84,18 +84,33 @@ def default_chat(member: str, reply_tokens: int):
     os.environ.setdefault("ATLAS_PROVIDER", "synthetic")
     model = resolve_alias("synthetic", member)
 
-    def chat(messages, tools):
+    def chat(messages, tools, tool_choice="auto"):
         os.environ["ATLAS_CHAT_MODEL"] = model
         # Moonshot: agentic results at temperature 1.0, top-p 1.0 (Kimi K3 README)
         return chat_completion("", messages=messages, max_tokens=reply_tokens,
                                temperature=1.0,
-                               extra_body={"tools": tools, "tool_choice": "auto",
+                               extra_body={"tools": tools, "tool_choice": tool_choice,
                                            "top_p": 1.0})
     return chat
 
 
-def _shrink(messages):
+def _shrink(messages, context_chars=None):
+    """Shorten old tool results. A browser mission needs only the latest page
+    snapshot (KEEP_FULL); a file mission needs what it has read, so with a
+    context budget the newest results stay whole until the budget is reached,
+    oldest shortened first. (2026-09-25: keeping only the latest result made
+    Kimi re-read special_teams.py 20 times in a review and never answer.)"""
     results = [m for m in messages if m.get("role") == "tool"]
+    if context_chars:
+        total = sum(len(str(m.get("content") or "")) for m in messages)
+        for m in results[:-KEEP_FULL]:
+            if total <= context_chars:
+                return
+            if len(m["content"]) > OLD_CHARS and not m.get("_short"):
+                total -= len(m["content"]) - OLD_CHARS
+                m["content"] = m["content"][:OLD_CHARS] + "\n...[older result shortened]"
+                m["_short"] = True
+        return
     for m in results[:-KEEP_FULL]:
         if len(m["content"]) > OLD_CHARS and not m.get("_short"):
             m["content"] = m["content"][:OLD_CHARS] + "\n...[older result shortened]"
@@ -136,7 +151,14 @@ def _local_checks(mission: dict, final: str, out_dir: Path, provider) -> list:
         roots = [Path(r) for r in mission["read_roots"]]
         bad = []
         for path, line in CITE.findall(final):
-            hit = next((r / path for r in roots if (r / path).is_file()), None)
+            # only inside the read roots: a cited "../secrets/x.json" must not make
+            # the harness open it (Kimi's review, 2026-09-25)
+            hit = None
+            for r in roots:
+                q = (r / path).resolve()
+                if q.is_file() and (q == r.resolve() or r.resolve() in q.parents):
+                    hit = q
+                    break
             if hit is None:
                 bad.append(f"{path} (no such file)")
             elif int(line) > len(hit.read_text(encoding="utf-8", errors="replace").splitlines()):
@@ -168,6 +190,22 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
                                            "at": dt.datetime.now().isoformat(timespec="seconds"),
                                            **kw}, indent=1), encoding="utf-8")
 
+    server = None
+    try:
+        return _run(mission, chat, mcp, out_dir, shots, transcript, log, status,
+                    st_schema, st_mission, name)
+    except BaseException:
+        # setup failed before the main try (bad port, MCP server missing): close
+        # what was opened and say so (Kimi's review: the handle leaked, status
+        # stayed "running")
+        if not transcript.closed:
+            transcript.close()
+        status("failed")
+        raise
+
+
+def _run(mission, chat, mcp, out_dir, shots, transcript, log, status, st_schema,
+         st_mission, name):
     server = None
     if mission.get("serve_dir"):
         # Playwright MCP refuses file: URLs; serve ONLY the mission's folder, on loopback.
@@ -236,6 +274,9 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": mission["goal"]}]
         status("running", steps=0)
+        context_chars = int(mission["context_chars"]) if mission.get("context_chars") else (
+            350000 if mission.get("provider") == "local" else None)
+        max_turns = int(mission.get("max_turns", mission["max_steps"] + 6))
         while True:
             stop = guard.stop_reason()
             if stop:
@@ -244,13 +285,19 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
             if start_balance and bal is not None and start_balance - bal > cap:
                 stop = f"credit_cap (${start_balance - bal:.2f} > ${cap:.2f})"
                 break
-            if turns >= int(mission.get("max_turns", mission["max_steps"] + 6)):
+            if turns >= max_turns:
                 stop = "max_turns"
                 break
-            _shrink(messages)
+            _shrink(messages, context_chars)
             wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
             res = chat(wire, tools)
             turns += 1
+            if turns == 1:
+                # The balance only updates when a call is made: a reading taken
+                # before this mission can be hours old and miss regenerations
+                # (2026-09-25: 14 h stale, the cap compared against it). The
+                # baseline is the reading this first call just refreshed.
+                start_balance = _balance() or start_balance
             usage = ((res.get("raw") or {}).get("usage") or {})
             tokens += int(usage.get("total_tokens") or 0)
             msg = ((res.get("raw") or {}).get("choices") or [{}])[0].get("message") or {}
@@ -305,13 +352,37 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
                             pass
                     observed.append(text)
                 text = text[:MAX_RESULT_CHARS]
+                left = int(mission["max_steps"]) - guard.steps
+                note = f"\n[{left} tool calls left]"
+                if left <= 3:
+                    note += (" ANSWER NOW: write your final report without a tool call, "
+                             "from what you already have.")
                 messages.append({"role": "tool", "tool_call_id": c["id"] or c["name"],
-                                 "content": text})
+                                 "content": text + note})
                 steps_log.append({"tool": c["name"], "args": c["args"], "result": kind,
                                   "ok": ok, "detail": text[:160].replace("\n", " ")})
                 log({"event": "tool", "tool": c["name"], "args": c["args"], "result": kind,
                      "ok": ok, "chars": len(text), "text": text[:3000]})
             status("running", steps=guard.steps, turns=turns, tokens=tokens)
+        if final is None and stop in ("max_steps", "max_turns", "refused_in_a_row"):
+            # Out of budget with nothing reported: one last turn, no tools, so the
+            # work already done is not thrown away (the crew's LAST REPLY rule).
+            messages.append({"role": "user", "content":
+                             "Your tool budget is spent. Write your final report NOW, "
+                             "without any tool call, from what you have already read. "
+                             "Mark anything you could not confirm as (unverified)."})
+            wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+            try:
+                res = chat(wire, tools, "none")
+            except TypeError:             # a test double with the two-argument signature
+                res = chat(wire, tools)
+            turns += 1
+            tokens += int(((res.get("raw") or {}).get("usage") or {}).get("total_tokens") or 0)
+            msg = ((res.get("raw") or {}).get("choices") or [{}])[0].get("message") or {}
+            if not msg.get("tool_calls"):
+                final = res.get("content") or msg.get("content") or ""
+                stop = f"answered_after_{stop}"
+            log({"event": "final_turn", "content": (final or "")[:2000]})
     finally:
         if own_mcp:
             mcp.close()
@@ -324,7 +395,7 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
     unseen_quotes = [q for q in QUOTE.findall(final or "") if len(q.strip()) >= 12
                      and re.sub(r"\s+", " ", q).strip() not in corpus]
     missing = [e for e in mission.get("expect_observed", []) if e not in corpus]
-    checks = [{"check": "answered", "ok": stop == "answered", "detail": stop},
+    checks = [{"check": "answered", "ok": str(stop).startswith("answered"), "detail": stop},
               {"check": "quotes seen", "ok": not unseen_quotes,
                "detail": "; ".join(unseen_quotes[:5]) or "every quote was returned by a tool"},
               {"check": "expected observations", "ok": not missing,
@@ -344,7 +415,7 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
                      f"{'ok' if s['ok'] else 'no'} |" for i, s in enumerate(steps_log))
     report = f"""# Special-teams mission: {name}
 
-Member: {result['member']} - native tool calling through Playwright MCP (headless, isolated).
+Member: {result['member']} - native tool calling; tools: {"workspace files (read, stage, check)" if mission.get("provider") == "local" else "Playwright MCP (headless, isolated)"}.
 Outcome: **{'PASSED' if result['passed'] else 'NOT PASSED'}** - stop: {stop}; {turns} turns;
 {tokens:,} tokens; guard {json.dumps(result['guard'])}.
 Credits (provider reading): start {start_balance}, end {end_balance}.

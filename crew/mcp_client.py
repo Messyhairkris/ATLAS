@@ -44,8 +44,27 @@ class McpClient:
         self.proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
         self.proc.stdin.flush()
 
+    MAX_LINE = 20_000_000     # bytes; one JSON-RPC message per line
+
+    def _lines(self):
+        """Lines of at most MAX_LINE bytes; an over-long one is skipped whole.
+        (Kimi's review, 2026-09-25: an unbounded line - a page-controlled
+        snapshot - could exhaust memory before any truncation applies.)"""
+        out = self.proc.stdout
+        while True:
+            raw = out.readline(self.MAX_LINE)
+            if not raw:
+                return
+            if len(raw) >= self.MAX_LINE and not raw.endswith(b"\n"):
+                while True:                       # drain the rest of that line
+                    more = out.readline(self.MAX_LINE)
+                    if not more or more.endswith(b"\n"):
+                        break
+                continue
+            yield raw
+
     def _reader(self) -> None:
-        for raw in self.proc.stdout:
+        for raw in self._lines():
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:

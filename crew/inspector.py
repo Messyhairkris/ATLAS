@@ -132,8 +132,13 @@ PROPOSAL_FOR = {
 
 
 def _baseline(cfg, member: str, task_type: str, before: str) -> dict:
+    """History of this member on this task type, WITHOUT the job that triggered
+    the trial. (Kimi's review, 2026-09-25: including it counted the triggering
+    failure in the baseline, lowered the bar, and biased trials toward 'kept' -
+    the LSP trial was kept that way.)"""
     from .personnel import history
-    runs = history(Path(cfg.state_home) / "jobs").get((member, task_type), [])
+    runs = [r for r in history(Path(cfg.state_home) / "jobs").get((member, task_type), [])
+            if r.get("job") != before]
     n = len(runs)
     return {"n": n, "pass_rate": round(sum(r["passed"] for r in runs) / n, 3) if n else 0.0,
             "requests_mean": round(sum(r["requests"] for r in runs) / n, 2) if n else 0.0}
@@ -161,6 +166,14 @@ def _start_trial(cfg, trials, member, task_type, knob, because, job_id) -> Optio
              "jobs": [], "status": "running"}
     trials.append(trial)
     return trial
+
+
+def _at_bound(trials, member, task_type, knob) -> bool:
+    kept = {}
+    for t in trials:
+        if t["member"] == member and t["task_type"] == task_type and t["status"] == "kept":
+            kept.update(t["overrides"])
+    return knob in kept and float(kept[knob]) >= LIMITS[knob][1]
 
 
 def _score(trial: dict) -> None:
@@ -204,6 +217,16 @@ def inspect_job(cfg, job: dict, transcript_path: Path) -> dict:
             t = _start_trial(cfg, trials, member, tt, knob, s["detail"], jid)
             if t:
                 started.append(t["id"])
+            elif _at_bound(trials, member, tt, knob):
+                # more of the same resource is not allowed: the PA must look
+                # (Kimi's review: this case was silently dropped)
+                proposed.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "job": jid,
+                                 "member": member, "task_type": tt, "store": "budget_bound",
+                                 "signature": s["signature"], "detail": s["detail"],
+                                 "proposal": f"'{knob}' is already at its limit and the member "
+                                             f"still hits '{s['signature']}': change the task "
+                                             f"(split it, preload context) or the post",
+                                 "status": "open"})
         if s["signature"] in PROPOSAL_FOR:
             store, text = PROPOSAL_FOR[s["signature"]]
             proposed.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "job": jid,

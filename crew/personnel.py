@@ -62,8 +62,8 @@ def history(jobs_dir: Path) -> Dict[tuple, List[dict]]:
         if "passed" not in r:
             continue
         out.setdefault((j.get("assigned_to"), j.get("task_type")), []).append(
-            {"passed": bool(r["passed"]), "requests": int(r.get("requests") or 0),
-             "tokens": int(r.get("tokens") or 0)})
+            {"job": j.get("task_id"), "passed": bool(r["passed"]),
+             "requests": int(r.get("requests") or 0), "tokens": int(r.get("tokens") or 0)})
     return out
 
 
@@ -99,8 +99,9 @@ def budget_for(data: dict, name: str, task_type: str,
     # Tokens: a runaway stop, not a diet - but tokens are credits, so the
     # member's own history sets it where there is one: twice what its 90th
     # percentile PASSING job used (Qwen's research needed ~141k on average and
-    # lost 11 jobs to a flat 60k ceiling). Without history, 30% of the working
-    # context per request. Verbose thinkers (token_factor) get more room.
+    # lost 11 jobs to a flat 60k ceiling). Without history, 15% of the working
+    # context per request (30% let a history-less scout reach 1M tokens).
+    # Verbose thinkers (token_factor) get more room.
     factor = float((member(data, name).get("quirks") or {}).get("token_factor", 1.0))
     factor *= float(trial.get("token_factor", 1.0))
     upper = int(requests * ctx * 0.6 * factor)

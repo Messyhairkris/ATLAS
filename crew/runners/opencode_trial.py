@@ -107,11 +107,22 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     prompt = PROMPT.format(module=task["module"])
     if task.get("instructions"):
         prompt += "\n\nEMPHASIS FOR THIS TASK: " + task["instructions"]
+    # The key comes from the same place the crew's own calls get it (environment
+    # variable, else providers.json's api_key_fallback) and goes straight into
+    # the child's environment - it is never printed or written anywhere.
+    import os
+    from providers.registry import _get_provider, _resolve_secret
+    env = dict(os.environ)
+    if not env.get("SYNTHETIC_API_KEY"):
+        key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
+        if key:
+            env["SYNTHETIC_API_KEY"] = key
     t0 = time.time()
     try:
         p = subprocess.run([OPENCODE, "run", "-m", f"synthetic/{model_id}", "--format", "json",
                             "--dir", str(ws), prompt], cwd=str(ws), capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=timeout_s)
+                           text=True, encoding="utf-8", errors="replace", timeout=timeout_s,
+                           env=env)
         raw, err, code = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         raw, err, code = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) \
