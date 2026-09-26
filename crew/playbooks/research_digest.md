@@ -19,3 +19,11 @@ follow every one.
 - [rd-012] (review Claude job-20260919-132957-7852) For a code map, first search for class and def names matching the topic words (e.g. announce|feedback|notify|speak|settings) and name the central function callers use; a map without it is incomplete.
 - [rd-013] (review Claude job-20260921-044834-7bf8) When a preloaded file is unavailable, say so in the first lines and spend the remaining requests on the question it was meant to answer, not on searching code for substitutes.
 - [rd-014] (review Claude job-20260921-050107-9537) Never compute totals, sums or averages in a report: quote each number as it appears in its source, or write (not stated in source). Arithmetic is done by the harness.
+- [rd-015] (review Crush job-20260924-160933-4dda) Keep research_digests to ONE preloaded file, one read pass, and a capped word count; multi-file digests blow the token budget.
+- [rd-016] (Qwen via Crush) Absence-claim checkers scan every line, including the top answer: keep "missing/absent/drops" wording only in cited bullets or with (inferred).
+- [rd-017] (Qwen via Crush) Summarize bug locations in the answer line without restating the absence claim itself.
+- [rd-018] (review Crush job-20260924-163428-6347) When exact numeric constants cannot be fetched, mark them (not stated in source) - the orchestrator fills them from richedit.h knowledge.
+- [rd-019] (review Crush job-20260924-163429-4ee9) Reject-with-harvest: when a failed output is already applied, a quick reject with a note beats another paid retry.
+- [rd-020] (review Crush job-20260924-163428-80fd) Hoss fabricates URLs under citation pressure (fake stackoverflow question IDs). Give him 'no URL you did not fetch' up front, not as an afterthought.
+- [rd-021] (review Crush job-20260924-170519-7313) When asking for a verdict word with must_mention, accept BOTH possible verdicts or the gate fails the good answer.
+- [rd-022] (review Crush job-20260924-171102-b5de) Larry as pure reporter (dir listing + orchestrator-supplied ground truth) is his sweet spot - first-try pass at 2 requests.

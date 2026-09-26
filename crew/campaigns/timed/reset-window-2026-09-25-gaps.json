@@ -1,0 +1,38 @@
+{
+  "name": "reset-window-2026-09-25-gaps",
+  "deadline": "2026-09-25T10:00:00",
+  "prior_usd_per_1k_tokens": 0.00098,
+  "regen_period_minutes": 202,
+  "items": [
+    {
+      "id": "triage-crew-tests",
+      "at_min": 3,
+      "kind": "job",
+      "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/triage_crew_tests.json",
+      "predict": {
+        "tokens": 30000,
+        "minutes": 4
+      }
+    },
+    {
+      "id": "research-playwright-mcp",
+      "at_min": 20,
+      "kind": "job",
+      "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/research_playwright_mcp.json",
+      "predict": {
+        "tokens": 140000,
+        "minutes": 10
+      }
+    },
+    {
+      "id": "scout-qwen-compare",
+      "at_min": 72,
+      "kind": "job",
+      "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/scout_qwen_compare.json",
+      "predict": {
+        "tokens": 60000,
+        "minutes": 8
+      }
+    }
+  ]
+}

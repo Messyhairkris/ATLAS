@@ -1,0 +1,9 @@
+{"task_type": "completion_audit", "title": "special-teams harness v1", "assigned_to": "@auditor",
+ "claim": "Kimi special-teams harness v1: crew-built st_schema.py and st_mission.py with tests, a harness (crew/special_teams.py) that drives Playwright MCP through Kimi's native tool calls under the mission guard, one mission run with its report, and the building doc (crew/PERSONNEL.md) updated to describe special teams.",
+ "read_roots": ["C:/Users/user/ATLAS-api-harness"],
+ "expected": [{"artifact": "schema module", "path": "runs/crew/outbox/workspace/special_teams/st_schema.py"},
+              {"artifact": "mission module", "path": "runs/crew/outbox/workspace/special_teams/st_mission.py"},
+              {"artifact": "module tests", "path": "runs/crew/outbox/workspace/special_teams/tests"},
+              {"artifact": "harness", "path": "crew/special_teams.py"},
+              {"artifact": "mission report", "path": "runs/crew/special_teams/test-pass-walk/REPORT.md"},
+              {"artifact": "building doc", "path": "crew/PERSONNEL.md"}]}

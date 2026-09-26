@@ -17,8 +17,11 @@ WIKILINK = re.compile(r"\[\[(?!\s*src:)([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]"
 # [src: x] is the citation form; [[src: x]] (a small-model mix of both forms,
 # seen 2026-09-19) is accepted as the same thing rather than failed.
 SRC_CITE = re.compile(r"\[\[?src:\s*([^\]]+?)\s*\]\]?")
-OPEN_SECTION = re.compile(r"^#+\s*(open questions?|unknowns?|not (yet )?(known|found))",
+OPEN_SECTION = re.compile(r"^#+\s*(open questions?|unknowns?|not (yet )?(known|found)|"
+                          r"excluded)",
                           re.IGNORECASE)  # NOT "gaps": absence claims live there
+# "excluded" (2026-09-25): a scout's list of what it looked at and left out has a
+# reason per line, not a source - Gordon's correct scout lost two lines to it.
 # The source list itself: its lines ARE citations, in whatever form.
 SOURCES_SECTION = re.compile(r"^#+\s*(sources?|references?|bibliography)\b", re.IGNORECASE)
 # A bullet that only labels the nested bullets under it ("- **Options:**").
@@ -307,15 +310,35 @@ def named_things_exist(text: str, run_log: str, kind: str = "test",
                 + ", ".join(invented[:8]), file)
 
 
-def reported_failures_exist(text: str, run_log: str, file: str = "") -> dict:
-    """Every test the report names must appear in the captured run output.
-    The log is the only admissible evidence for what failed, so a plausible
-    invented test name fails here."""
-    invented = sorted({t.strip() for t in TEST_ID.findall(text)
-                       if t.strip() and t.strip() not in run_log})
+def reported_failures_exist(text: str, run_log: str, file: str = "",
+                            toolbox=None) -> dict:
+    """No invented test names.
+
+    Under ## Failures (and ## Groups) a name must be in the captured run output:
+    the log is the only admissible evidence for what FAILED. Elsewhere - the
+    coverage section names tests that exist - a name may also come from a file
+    the member read or searched this job. Until 2026-09-25 every name had to be
+    in the log, and a quiet `pytest -q` prints only failures, so Qwen's correct
+    triage failed for naming five real tests it had read in tests/test_crew.py.
+    """
+    seen = "\n".join(toolbox.evidence.seen.values()) if toolbox else ""
+    invented, section = set(), ""
+    for line in text.splitlines():
+        if line.startswith("#"):
+            section = line.lstrip("#").strip().lower()
+            continue
+        failure_section = section.startswith(("failures", "groups"))
+        for t in TEST_ID.findall(line):
+            t = t.strip()
+            if not t or t in run_log:
+                continue
+            if not failure_section and t in seen:
+                continue
+            invented.add(t)
     return step("no-invented-tests", not invented,
-                "named in the report but absent from the run output: "
-                + ", ".join(invented[:8]), file)
+                "named in the report but absent from the run output"
+                + ("" if not toolbox else " (and, outside ## Failures, from every file you read)")
+                + ": " + ", ".join(sorted(invented)[:8]), file)
 
 
 def reports_interference(text: str, run_log: str, file: str = "") -> dict:
@@ -368,6 +391,215 @@ def reports_stalls(text: str, run_log: str, file: str = "") -> dict:
 # These are the only gates whose subject is EXECUTED. The order matters and the
 # task type enforces it: scan first, run second. A gate that runs member code
 # before the scan has passed would defeat the airlock.
+
+# -- clerk gates (scout, log_clerk, completion_audit) ----------------------------
+#
+# Ported from Crush-lite's worker contracts (.crush/lite/workers). Lite asked
+# for verbatim quotes and exact paths in the prompt; these make them checks.
+
+# Pair the backticks first and filter by length after: a length inside the
+# pattern lets `make all` (short) be skipped and "` ended with `" - the text
+# BETWEEN two spans - be read as a quote.
+QUOTE_SPAN = re.compile(r"`([^`\n]+)`")
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _quotes(text: str, inline: bool = True) -> List[tuple]:
+    """(quote, line) for every blockquote line, and with inline=True every
+    inline code span of 12+ characters with a space in it.
+
+    Inline spans count only where the playbook makes backticks THE quote form
+    (log_clerk). A scout quotes in blockquotes and uses backticks for labels:
+    `_reply_tokens(cfg, persona)` in a heading named a function Gordon had
+    quoted correctly below it, and failed him (2026-09-25)."""
+    out = []
+    for line in _body_lines(text):
+        s = line.strip()
+        if s.startswith(">"):
+            q = SRC_CITE.sub("", s.lstrip("> ")).strip()
+            if len(q) >= 8 and not q.startswith("```"):   # a fence, not text
+                out.append((q, s))
+            continue
+        if not inline:
+            continue
+        for q in QUOTE_SPAN.findall(s):
+            # short spans and `EVIDENCE_COMPLETE`, `a/b.py` are names, not quotes
+            if len(q.strip()) >= 12 and " " in q.strip():
+                out.append((q, s))
+    return out
+
+
+def required_sections(text: str, names: Iterable[str], file: str = "") -> dict:
+    heads = {_squash(l.lstrip("#")).lower() for l in text.splitlines()
+             if l.startswith("#")}
+    missing = [n for n in names
+               if not any(h.startswith(n.lower()) for h in heads)]
+    return step("sections", not missing,
+                "missing section headings: " + ", ".join(f"## {n}" for n in missing), file)
+
+
+def quotes_verbatim(text: str, toolbox, file: str = "", inline: bool = True) -> dict:
+    """Every quote appears, whitespace aside, in what the member observed:
+    in the text of the line's cited sources, or anywhere observed if the
+    line cites nothing. A paraphrase in quote marks is the failure mode."""
+    everything = _squash("\n".join(toolbox.evidence.seen.values()))
+    bad = []
+    for q, line in _quotes(text, inline):
+        keys = [k for k in (toolbox.evidence_key(c) for c in citations(line)) if k]
+        corpus = _squash("\n".join(toolbox.evidence.text_for(k) for k in keys)) \
+            if keys else everything
+        if _squash(q) not in corpus and _squash(q) not in everything:
+            bad.append(q[:60])
+    return step("verbatim", not bad,
+                "quoted text not found word for word in what you read: "
+                + " | ".join(bad[:4]), file)
+
+
+def findings_quoted(text: str, section: str = "findings", file: str = "") -> dict:
+    """Every top-level finding under the section is followed by a > quote
+    before the next finding. Without it, quotes_verbatim has nothing to check
+    and a scout's report is a list of claims (Gordon, LSP-off run, 2026-09-25:
+    right answer, zero quotes)."""
+    unquoted, inside, current, quoted = [], False, None, False
+    for line in list(_body_lines(text)) + ["# end"]:
+        s = line.strip()
+        is_top = bool(re.match(r"^([-*+]|\d+[.)])\s+\S", line))
+        if s.startswith("#") or is_top:
+            if current and not quoted:
+                unquoted.append(current[:60])
+            current, quoted = (s if inside and is_top else None), False
+            if s.startswith("#"):
+                inside = _squash(s.lstrip("#")).lower().startswith(section)
+            continue
+        if s.startswith(">"):
+            quoted = True
+    return step("quoted", not unquoted, "findings without a > verbatim quote under "
+                "them: " + " | ".join(unquoted[:3]), file)
+
+
+LOCATOR = re.compile(r"\bL(\d+)(?:\s*[-–]\s*L?(\d+))?\b")
+
+
+def locators_in_range(text: str, toolbox, file: str = "") -> dict:
+    """A line number a scout gives must exist in the file it cites."""
+    bad = []
+    for line in _body_lines(text):
+        locs = LOCATOR.findall(line)
+        if not locs:
+            continue
+        for c in citations(line):
+            key = toolbox.evidence_key(c)
+            if not key or not Path(key).is_file():
+                continue
+            try:
+                n = len(Path(key).read_text(encoding="utf-8", errors="replace")
+                        .splitlines())
+            except OSError:
+                continue
+            for a, b in locs:
+                if int(b or a) > n or int(a) < 1:
+                    bad.append(f"L{a}{'-' + b if b else ''} in {c} ({n} lines)")
+    return step("locations", not bad, "line numbers past the end of the file: "
+                + "; ".join(bad[:4]), file)
+
+
+def failures_in_order(text: str, log: str, section: str = "failures",
+                      file: str = "") -> dict:
+    """The log clerk's failures are listed earliest first: each quote's first
+    position in the log must not come before the previous one's."""
+    body, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            inside = _squash(line.lstrip("#")).lower().startswith(section)
+            continue
+        if inside:
+            body.append(line)
+    flat, last, bad = _squash(log), -1, []
+    for q, _ in _quotes("\n".join(body)):
+        pos = flat.find(_squash(q))
+        if pos < 0:
+            continue            # quotes_verbatim reports it
+        if pos < last:
+            bad.append(q[:50])
+        last = max(last, pos)
+    return step("order", not bad, "failures not in log order (earliest first): "
+                + " | ".join(bad[:3]), file)
+
+
+STATES = ("YES", "NO", "PARTIAL", "UNKNOWN")
+CONCLUSIONS = ("EVIDENCE_COMPLETE", "EVIDENCE_INCOMPLETE", "CANNOT_DETERMINE")
+
+
+def completion_inventory(text: str, expected: List[dict], toolbox,
+                         file: str = "") -> dict:
+    """Each expected artifact has one table row with a state; the harness
+    knows whether each given path exists, so NO/YES cannot be made up: a path
+    that does not exist is NO, one that exists is YES or PARTIAL and must have
+    been opened by the member. The conclusion follows from the states."""
+    rows = [[c.strip() for c in l.strip().strip("|").split("|")]
+            for l in _body_lines(text)
+            if l.strip().startswith("|") and not re.match(r"^\|?\s*:?-{3,}", l.strip())]
+    problems, states = [], []
+    for item in expected:
+        label = item["artifact"]
+        row = next((r for r in rows if r and _squash(r[0]).lower()
+                    == _squash(label).lower()), None)
+        if row is None:
+            problems.append(f"no row whose first cell is '{label}'")
+            continue
+        joined = " | ".join(row)
+        state = next((s for s in STATES if re.search(rf"\b{s}\b", " | ".join(row[1:2]))), None)
+        if state is None:
+            problems.append(f"'{label}': second cell must be one of {'/'.join(STATES)}")
+            continue
+        states.append(state)
+        if item.get("exists") is False and state != "NO":
+            problems.append(f"'{label}': {item['path']} does not exist, so the state is NO")
+        if item.get("exists") is True:
+            if state == "NO":
+                problems.append(f"'{label}': {item['path']} exists; YES or PARTIAL")
+            elif toolbox.evidence_key(item["path"], opened_only=True) is None:
+                problems.append(f"'{label}': open {item['path']} before judging it {state}")
+        if item.get("path") is None and state in ("YES", "PARTIAL") \
+                and not any(toolbox.evidence_key(c, opened_only=True)
+                            for c in citations(joined)):
+            problems.append(f"'{label}': a {state} needs a citation of a file you opened")
+    m = re.search(r"conclusion\W+(\w+)", text, re.IGNORECASE)
+    concl = m.group(1).upper() if m else None
+    if concl not in CONCLUSIONS:
+        problems.append(f"a 'Conclusion: {'|'.join(CONCLUSIONS)}' line is required")
+    elif states and len(states) == len(expected):
+        if concl == "EVIDENCE_COMPLETE" and any(s != "YES" for s in states):
+            problems.append("EVIDENCE_COMPLETE needs every state YES")
+        if concl == "EVIDENCE_INCOMPLETE" and all(s == "YES" for s in states):
+            problems.append("every state is YES, so the conclusion is EVIDENCE_COMPLETE")
+    return step("inventory", not problems, "; ".join(problems[:5]), file)
+
+
+def lsp_clean(lsp_cfg: dict, lang: str, modules: Dict[str, str], target: str,
+              file: str = "") -> dict:
+    """No ERROR-severity diagnostics (undefined names, syntax errors) from the
+    language's diagnostics server. Warnings never fail: an unused import is
+    style, and style is autofix's and the reviewer's business, not a retry's.
+
+    Runs before the hidden tests so a member learns "undefined name on L8"
+    instead of reading it out of a test traceback. The server not starting is
+    reported as passing with a note - a missing linter must not fail a module.
+    """
+    import tempfile
+    from .lsp import ERROR, LspError, check_source, format_diagnostics
+    try:
+        with tempfile.TemporaryDirectory(prefix="crew-lsp-") as tmp:
+            diags = check_source(lsp_cfg, lang, modules, target, Path(tmp))
+    except (LspError, OSError) as e:
+        return {**step("lsp", True, file=file), "note": f"lsp skipped: {e}"}
+    errors = format_diagnostics(diags, min_severity=ERROR)
+    return step("lsp", not errors,
+                "language-server errors: " + " | ".join(errors[:6]), file)
+
 
 def module_is_safe(source: str, file: str = "", allowed_modules=()) -> dict:
     """crew/codetask.py reads the source as an AST and refuses anything that

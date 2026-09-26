@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from . import autofix, playbook, quirklint, task_types
+from . import autofix, inspector, personnel, playbook, quirklint, task_types
 from .agent import run_member
 from .config import REPO_ROOT, Config, CrewError, load_config
 from .ratelimit import RateWindow
@@ -98,7 +98,11 @@ class Crew:
         if not (spec.get("title") or "").strip():
             raise CrewError("spec.title is required")
         spec = ttdef["normalize"](dict(spec), self.cfg)
+        staff = personnel.load() if self.cfg.defaults.get("budget_from_personnel") else None
         persona = spec.get("assigned_to") or self.cfg.defaults["assigned_to"]
+        if persona.startswith("@"):
+            persona = personnel.resolve(persona, staff or personnel.load(),
+                                        self.cfg.deny_models)
         model = self._model_for(persona)
         job_id = self.store.new_job_id()
         if tt == "organize_plan":
@@ -106,7 +110,19 @@ class Crew:
         deps = list(spec.get("dependencies") or [])
         for d in deps:
             self.store.load(d)  # raises if unknown
-        budget = spec.get("budget") or {}
+        budget = dict(spec.get("budget") or {})
+        if staff is not None:
+            # The member's measured need for this kind of job, not one number
+            # for everyone. An explicit spec budget still wins, key by key.
+            trial = inspector.active_trial(self.cfg, persona, tt)
+            fitted = personnel.budget_for(staff, persona, tt,
+                                          personnel.history(self.store.jobs_dir),
+                                          (trial or {}).get("overrides"))
+            if trial:
+                fitted["trial"] = trial["id"]
+                if "lsp" in trial["overrides"] and "lsp" not in spec:
+                    spec["lsp"] = bool(trial["overrides"]["lsp"])
+            budget = {**fitted, **budget}
         job = {
             "task_id": job_id, "project": self.cfg.project,
             "title": spec["title"].strip(), "task_type": tt,
@@ -116,7 +132,10 @@ class Crew:
             "context_files": spec.get("context_files") or [],
             "milestone_id": spec.get("milestone_id"),
             "submitted_by": submitted_by, "created_at": now_iso(),
-            "budget": {"max_requests": int(budget.get("max_requests",
+            "budget": {**{k: v for k, v in budget.items()
+                          if k in ("context_tokens", "observation_chars", "source",
+                                   "trial")},
+                       "max_requests": int(budget.get("max_requests",
                                                       self.cfg.defaults["max_requests"])),
                        "max_tokens": int(budget.get("max_tokens",
                                                     self.cfg.defaults["max_tokens"]))},
@@ -168,10 +187,18 @@ class Crew:
             with open(transcript, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"ts": now_iso(), **e}, ensure_ascii=False) + "\n")
 
+        lsp_pool = None
+        if spec.get("lsp") and self.cfg.data.get("lsp"):
+            from .lsp import LspPool
+            lsp_pool = LspPool(self.cfg.data["lsp"], Path(spec["read_roots"][0]))
         try:
             evidence = Evidence()
             toolbox = Toolbox(self.cfg, [Path(r) for r in spec["read_roots"]],
-                              evidence, self.cfg.defaults["observation_chars"])
+                              evidence,
+                              int(job["budget"].get("observation_chars")
+                                  or self.cfg.defaults["observation_chars"]),
+                              lsp=lsp_pool)
+            staff = personnel.load() if self.cfg.defaults.get("budget_from_personnel") else {}
             spec["_job_dir"] = str(jdir)
             preload = ttdef["preload"](spec, self.cfg, toolbox)
             constraints = "".join(f"\nREVIEWER CONSTRAINT {i + 1}: {c}"
@@ -211,7 +238,10 @@ class Crew:
                 grade=grade,
                 chat=chat, max_requests=job["budget"]["max_requests"],
                 max_tokens=job["budget"]["max_tokens"],
-                fetch_enabled=bool(self.cfg.fetch_allowlist), log=log_event)
+                fetch_enabled=bool(self.cfg.fetch_allowlist), log=log_event,
+                context_tokens=job["budget"].get("context_tokens"),
+                addenda=personnel.system_addenda(staff, job["assigned_to"]) if staff else "",
+                leash=personnel.leash(staff, job["assigned_to"]) if staff else None)
         except Exception as e:  # noqa: BLE001 - a job failure, not a crash
             log_event({"event": "error", "error": traceback.format_exc()[-2000:]})
             job = self.store.load(job_id)
@@ -221,6 +251,9 @@ class Crew:
             self.store.log("task_failed", "system", job_id, parent=claim_node,
                            error=str(e)[:300])
             return self._brief(job)
+        finally:
+            if lsp_pool:
+                lsp_pool.close()
 
         staged = jdir / "output"
         if staged.exists():
@@ -258,6 +291,11 @@ class Crew:
             job["status"] = REVIEW
         job["finished_at"] = now_iso()
         self.store.save(job)
+        if self.cfg.defaults.get("budget_from_personnel"):
+            try:
+                inspector.inspect_job(self.cfg, job, transcript)
+            except Exception as e:  # noqa: BLE001 - the Inspector must never fail a job
+                log_event({"event": "inspector_error", "error": str(e)[:300]})
         return self._brief(job)
 
     def _apply(self, job: dict, actor: str, parent: Optional[str] = None) -> List[str]:

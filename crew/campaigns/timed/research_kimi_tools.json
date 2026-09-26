@@ -1,0 +1,4 @@
+{"task_type": "research_digest", "title": "Kimi K3 native tool calling",
+ "assigned_to": "@researcher",
+ "instructions": "For the special-teams harness (Kimi K3 driving browser tools through native OpenAI-style tool calls): what does Moonshot document about (1) the tool-call request/response format - tools, tool_choice, parallel tool calls, how tool results are sent back; (2) recommended sampling settings (temperature) for agentic tool use; (3) known failure modes or cautions for agentic use. Start at https://github.com/MoonshotAI/Kimi-K3 and its README; quote what it says, mark anything it does not say as (not stated in source).",
+ "output": {"files": ["kimi-k3-native-tool-calling.md"]}}

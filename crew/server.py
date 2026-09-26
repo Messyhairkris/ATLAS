@@ -71,12 +71,19 @@ def crew_submit(task_type: str, title: str, instructions: str = "",
                 must_mention: Optional[List[str]] = None,
                 must_read: Optional[List[str]] = None,
                 dependencies: Optional[List[str]] = None,
+                log_file: str = "", claim: str = "",
+                expected: Optional[List[dict]] = None, lsp: bool = False,
                 max_requests: int = 0, submitted_by: str = "") -> str:
     """Submit ONE atomic task. Returns its task_id and status (ready, or blocked
     until dependencies complete).
 
     task_type: vault_index | research_digest | organize_plan | test_triage |
-      ui_sweep (see crew_task_types).
+      ui_sweep | scout | log_clerk | completion_audit (see crew_task_types).
+    log_file: for log_clerk - the log to report on.
+    claim / expected: for completion_audit - the work claimed complete, and
+      [{artifact, path?}, ...]; read_roots names the project.
+    lsp: give the member language-server tools (symbols, definition,
+      references, diagnostics) - see config.json "lsp".
     folder: required for vault_index and organize_plan (absolute path).
     app / watch_log: for ui_sweep - the .exe the harness drives (each control
       highlighted orange for half a second, then pressed) and the app log it
@@ -120,6 +127,14 @@ def crew_submit(task_type: str, title: str, instructions: str = "",
                                                 ("must_read", must_read)) if v}
     if dependencies:
         spec["dependencies"] = dependencies
+    if log_file:
+        spec["log_file"] = log_file
+    if claim:
+        spec["claim"] = claim
+    if expected:
+        spec["expected"] = expected
+    if lsp:
+        spec["lsp"] = True
     if max_requests:
         spec["budget"] = {"max_requests": max_requests}
     try:

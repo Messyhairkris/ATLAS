@@ -1,0 +1,75 @@
+{
+ "name": "reset-window-2026-09-25",
+ "deadline": "2026-09-25T10:00:00",
+ "prior_usd_per_1k_tokens": 0.0042,
+ "regen_period_minutes": 202,
+ "items": [
+  {
+   "id": "campaign-special-teams",
+   "at_min": 0,
+   "kind": "campaign",
+   "file": "C:/Users/user/ATLAS-api-harness/crew/campaigns/special_teams.json",
+   "predict": {
+    "tokens": 115000,
+    "minutes": 35
+   }
+  },
+  {
+   "id": "research-kimi-tools",
+   "at_min": 50,
+   "kind": "job",
+   "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/research_kimi_tools.json",
+   "predict": {
+    "tokens": 140000,
+    "minutes": 15
+   }
+  },
+  {
+   "id": "scout-lsp-2",
+   "at_min": 75,
+   "kind": "job",
+   "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/scout_lsp_2.json",
+   "predict": {
+    "tokens": 60000,
+    "minutes": 8
+   }
+  },
+  {
+   "id": "kimi-mission-test-pass",
+   "at_min": 100,
+   "kind": "command",
+   "requires": "C:/Users/user/ATLAS-api-harness/crew/special_teams.py",
+   "argv": [
+    "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
+    "C:/Users/user/ATLAS-api-harness/crew/special_teams.py",
+    "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/mission_test_pass.json"
+   ],
+   "timeout_s": 1800,
+   "predict": {
+    "tokens": 120000,
+    "minutes": 12,
+    "price_factor": 5
+   }
+  },
+  {
+   "id": "scout-lsp-3",
+   "at_min": 130,
+   "kind": "job",
+   "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/scout_lsp_3.json",
+   "predict": {
+    "tokens": 60000,
+    "minutes": 8
+   }
+  },
+  {
+   "id": "audit-special-teams",
+   "at_min": 155,
+   "kind": "job",
+   "spec": "C:/Users/user/ATLAS-api-harness/crew/campaigns/timed/audit_special_teams.json",
+   "predict": {
+    "tokens": 45000,
+    "minutes": 10
+   }
+  }
+ ]
+}

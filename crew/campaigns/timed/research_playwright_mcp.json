@@ -1,0 +1,3 @@
+{"task_type": "research_digest", "title": "Playwright MCP safety options", "assigned_to": "@researcher",
+ "instructions": "The crew runs @playwright/mcp 0.0.78 headless for a model-driven browser (special teams). Which command-line options and tools does Playwright MCP document for LIMITING what the browser may do: allowed/blocked origins, allowed hosts, file: access, capabilities (--caps), isolated profiles, output directories, timeouts, and any tool that runs arbitrary code? Quote the documentation. Start at https://github.com/microsoft/playwright-mcp and its README.",
+ "output": {"files": ["playwright-mcp-safety-options.md"]}}

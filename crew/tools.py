@@ -51,11 +51,12 @@ class Evidence:
 
 class Toolbox:
     def __init__(self, cfg: Config, read_roots: List[Path], evidence: Evidence,
-                 obs_chars: int = 6000):
+                 obs_chars: int = 6000, lsp=None):
         self.cfg = cfg
         self.roots = [Path(r).resolve() for r in read_roots]
         self.evidence = evidence
         self.obs_chars = obs_chars
+        self.lsp = lsp     # an lsp.LspPool when the job enables language servers
 
     # -- path handling ---------------------------------------------------------
     def resolve(self, raw: str) -> Path:
@@ -206,13 +207,113 @@ class Toolbox:
         cache[url] = text
         return text
 
+    # -- language-server tools (only when the job sets spec.lsp) ----------------
+    #
+    # Ported from Crush-lite's read-only profile (lsp_symbols, lsp_definition,
+    # lsp_references, lsp_diagnostics). Positions are the awkward part of LSP
+    # for a small model, so members name a SYMBOL and the harness finds it in
+    # the file. Results outside the read roots are counted, never shown.
+
+    def _lsp_file(self, path: str):
+        if not self.lsp:
+            raise ToolError("language-server tools are not enabled for this task")
+        p = self.resolve(path)
+        if not p.is_file():
+            raise ToolError(f"{path}: not a file")
+        lang = self.lsp.language_for(p)
+        if not lang:
+            raise ToolError(f"{path}: no language server for {p.suffix or 'this'} files")
+        return p, lang
+
+    def _lsp_call(self, fn):
+        from .lsp import LspError
+        try:
+            return fn()
+        except LspError as e:
+            raise ToolError(str(e))
+
+    def _position_of(self, p: Path, name: str):
+        if not name or not re.fullmatch(r"[A-Za-z_][\w.]*", name):
+            raise ToolError("name must be an identifier, e.g. parse or Box.size")
+        word = name.rsplit(".", 1)[-1]
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        # a bare name first (foo), then as an attribute (mod.foo)
+        for rx in (re.compile(rf"(?<![\w.]){re.escape(word)}\b"),
+                   re.compile(rf"\b{re.escape(word)}\b")):
+            for n, line in enumerate(lines):
+                m = rx.search(line.split("#", 1)[0])
+                if m:
+                    return n, m.start()
+        raise ToolError(f"{name!r} does not appear in {self.display(p)}")
+
+    def _show_locations(self, locs: List[dict], limit: int = 30) -> str:
+        from .lsp import uri_to_path
+        rows, hidden, cache = [], 0, {}
+        for loc in locs:
+            q = uri_to_path(loc["uri"])
+            if not self.cfg.readable(q, self.roots):
+                hidden += 1
+                continue
+            if q not in cache:
+                cache[q] = q.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = cache[q]
+            text = lines[loc["line"]].strip() if loc["line"] < len(lines) else ""
+            self.evidence.add(q.as_posix(), text)
+            rows.append(f"{self.display(q)}:{loc['line'] + 1}: {text[:200]}")
+            if len(rows) >= limit:
+                break
+        if hidden:
+            rows.append(f"({hidden} location(s) outside this job's read roots, "
+                        f"not shown)")
+        return "\n".join(rows) or "no locations found"
+
+    def symbols(self, path: str) -> str:
+        from .lsp import flatten_symbols
+        p, lang = self._lsp_file(path)
+        client = self._lsp_call(lambda: self.lsp.client(lang))
+        uri = client.open(p, language_id=lang)
+        rows = self._lsp_call(lambda: flatten_symbols(client.symbols(uri)))
+        body = "\n".join(f"{'  ' * d}L{line} {kind} {name}" for d, kind, name, line in rows)
+        self.evidence.add(p.as_posix(), body)
+        return self._clip(f"{self.display(p)} (outline)\n{body or '(no symbols)'}")
+
+    def definition(self, path: str, name: str) -> str:
+        p, lang = self._lsp_file(path)
+        line, char = self._position_of(p, name)
+        client = self._lsp_call(lambda: self.lsp.client(lang))
+        uri = client.open(p, language_id=lang)
+        locs = self._lsp_call(lambda: client.definition(uri, line, char))
+        return self._clip(f"definition of {name} (as used at "
+                          f"{self.display(p)}:{line + 1}):\n" + self._show_locations(locs))
+
+    def references(self, path: str, name: str) -> str:
+        p, lang = self._lsp_file(path)
+        line, char = self._position_of(p, name)
+        client = self._lsp_call(lambda: self.lsp.client(lang))
+        uri = client.open(p, language_id=lang)
+        locs = self._lsp_call(lambda: client.references(uri, line, char))
+        return self._clip(f"references to {name}:\n" + self._show_locations(locs))
+
+    def diagnostics(self, path: str) -> str:
+        from .lsp import format_diagnostics
+        p, lang = self._lsp_file(path)
+        client = self._lsp_call(lambda: self.lsp.client(lang, diagnostics=True))
+        uri = client.open(p, language_id=lang)
+        rows = format_diagnostics(self._lsp_call(lambda: client.diagnostics(uri)))
+        body = "\n".join(rows) or "no errors or warnings"
+        self.evidence.add(p.as_posix(), body)
+        return self._clip(f"{self.display(p)} (diagnostics)\n{body}")
+
     def call(self, name: str, args: Optional[dict]) -> str:
         args = args or {}
-        fn = {"list_dir": self.list_dir, "read_file": self.read_file,
-              "search": self.search, "fetch_url": self.fetch_url}.get(name)
+        tools = {"list_dir": self.list_dir, "read_file": self.read_file,
+                 "search": self.search, "fetch_url": self.fetch_url}
+        if self.lsp:
+            tools.update(symbols=self.symbols, definition=self.definition,
+                         references=self.references, diagnostics=self.diagnostics)
+        fn = tools.get(name)
         if fn is None:
-            raise ToolError(f"unknown tool {name!r}; tools: list_dir, "
-                            f"read_file, search, fetch_url")
+            raise ToolError(f"unknown tool {name!r}; tools: {', '.join(tools)}")
         try:
             return fn(**args)
         except TypeError as e:

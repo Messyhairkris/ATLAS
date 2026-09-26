@@ -200,3 +200,5 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 
 # ----- api-harness fork: run state is local, never committed -----
 runs/
+!crew/playbooks/completion_audit.md
+.playwright-mcp/

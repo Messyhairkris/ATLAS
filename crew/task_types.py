@@ -136,6 +136,174 @@ def research_digest_gates(files, spec, cfg, toolbox):
     return steps
 
 
+# -- clerks: scout, log_clerk, completion_audit -----------------------------------------
+#
+# Crush-lite's bounded read-only workers (.crush/lite/workers), moved into the
+# crew on 2026-09-25 so they run under a request budget and gates instead of
+# as open-ended Crush sessions. Each answers ONE question, judges nothing, and
+# its output is Shadow Knowledge: attributable, non-authoritative.
+
+def _report_output(spec: dict, cfg: Config, default_name: str) -> dict:
+    out = spec.get("output") or {}
+    root = Path(out.get("root") or cfg.state_home / "outbox").resolve()
+    name = (out.get("files") or [default_name])[0]
+    if not cfg.writable(root / name):
+        raise CrewError(f"{root / name} is outside the crew's write roots")
+    return {"root": str(root), "files": [name]}
+
+
+def _readable_file(raw: str, cfg: Config, what: str) -> Path:
+    p = Path(raw or "").resolve()
+    if not raw or not p.is_file() or not cfg.readable(p):
+        raise CrewError(f"{what} {raw!r} is not a readable file in the crew's read roots")
+    return p
+
+
+def scout_normalize(spec: dict, cfg: Config) -> dict:
+    if not (spec.get("instructions") or "").strip():
+        raise CrewError("scout needs instructions: what to locate")
+    roots = spec.get("read_roots") or [str(r) for r in cfg.read_roots]
+    for r in roots:
+        if not cfg.readable(Path(r)):
+            raise CrewError(f"read root {r} is outside the crew's read roots")
+    spec["read_roots"] = [str(Path(r).resolve()) for r in roots]
+    spec["output"] = _report_output(
+        spec, cfg, "scout-" + _slug(spec.get("title") or spec["instructions"]) + ".md")
+    return spec
+
+
+def scout_preload(spec: dict, cfg: Config, toolbox) -> str:
+    return research_digest_preload(spec, cfg, toolbox)
+
+
+def scout_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    steps = [gates.output_paths(files, spec["output"]["files"],
+                                Path(spec["output"]["root"]), cfg.writable)]
+    text = files.get(out_file, "")
+    if text:
+        steps += [gates.frontmatter(text, ("title", "tags"), out_file),
+                  gates.required_sections(text, ("Findings", "Unknowns"), out_file),
+                  gates.cited_lines(text, toolbox, out_file),
+                  gates.findings_quoted(text, "findings", out_file),
+                  gates.quotes_verbatim(text, toolbox, out_file, inline=False),
+                  gates.locators_in_range(text, toolbox, out_file),
+                  gates.grounded(text, toolbox, out_file),
+                  gates.absence_claims(text, toolbox, out_file)]
+        steps += gates.acceptance(text, spec, toolbox, out_file)
+    return steps
+
+
+LOG_HEAD_CHARS, LOG_TAIL_CHARS = 3000, 5000
+
+
+def log_clerk_normalize(spec: dict, cfg: Config) -> dict:
+    log = _readable_file(spec.get("log_file"), cfg, "spec.log_file")
+    spec["log_file"] = str(log)
+    spec["read_roots"] = [str(log.parent)]
+    spec["output"] = _report_output(spec, cfg, f"log-clerk-{_slug(log.stem)}.md")
+    return spec
+
+
+def log_clerk_preload(spec: dict, cfg: Config, toolbox) -> str:
+    """The head AND the tail: the first failure is usually the load-bearing one
+    and lives near the top; the exit code and summary live at the end."""
+    log = Path(spec["log_file"]).read_text(encoding="utf-8", errors="replace")
+    if len(log) > LOG_HEAD_CHARS + LOG_TAIL_CHARS:
+        n = log.count("\n", 0, len(log) - LOG_TAIL_CHARS) + 1
+        shown = (log[:LOG_HEAD_CHARS] + f"\n...[middle omitted; the tail starts "
+                 f"near line {n}; read_file the log for the middle]...\n"
+                 + log[-LOG_TAIL_CHARS:])
+    else:
+        shown = log
+    spec["_run_log"] = log
+    toolbox.evidence.add("log", shown)
+    return (f"LOG FILE: {Path(spec['log_file']).name} (in your first read root)\n"
+            f"OUTPUT FILE: {spec['output']['files'][0]}\n\nLOG (cite it as "
+            f"[src: log]; if you read_file more of it, cite the file name):\n\n{shown}")
+
+
+def log_clerk_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    steps = [gates.output_paths(files, spec["output"]["files"],
+                                Path(spec["output"]["root"]), cfg.writable)]
+    text = files.get(out_file, "")
+    if text:
+        steps += [gates.frontmatter(text, ("title", "tags"), out_file),
+                  gates.required_sections(text, ("Exit codes", "Failures"), out_file),
+                  gates.cited_lines(text, toolbox, out_file),
+                  gates.quotes_verbatim(text, toolbox, out_file),
+                  gates.failures_in_order(text, spec.get("_run_log", ""), "failures",
+                                          out_file),
+                  gates.grounded(text, toolbox, out_file)]
+        steps += gates.acceptance(text, spec, toolbox, out_file)
+    return steps
+
+
+def completion_audit_normalize(spec: dict, cfg: Config) -> dict:
+    if not (spec.get("claim") or "").strip():
+        raise CrewError("completion_audit needs claim: the work claimed complete")
+    expected = spec.get("expected") or []
+    if not expected or not all(isinstance(e, dict) and e.get("artifact") for e in expected):
+        raise CrewError("completion_audit needs expected: [{artifact, path?}, ...]")
+    roots = spec.get("read_roots") or []
+    if not roots:
+        raise CrewError("completion_audit needs read_roots: the project to inspect")
+    for r in roots:
+        if not cfg.readable(Path(r)):
+            raise CrewError(f"read root {r} is outside the crew's read roots")
+    spec["read_roots"] = [str(Path(r).resolve()) for r in roots]
+    base = Path(spec["read_roots"][0])
+    for e in expected:
+        if e.get("path"):
+            p = Path(e["path"])
+            p = (p if p.is_absolute() else base / p).resolve()
+            if not cfg.readable(p.parent if not p.exists() else p):
+                raise CrewError(f"expected path {e['path']} is outside the read roots")
+            e["path"] = str(p)
+    spec["expected"] = expected
+    spec["output"] = _report_output(
+        spec, cfg, "completion-" + _slug(spec.get("title") or spec["claim"]) + ".md")
+    return spec
+
+
+def completion_audit_preload(spec: dict, cfg: Config, toolbox) -> str:
+    """The harness checks existence itself - a mechanical fact is never left
+    to a model. The member judges what existence cannot: YES vs PARTIAL, and
+    where an artifact with no given path is."""
+    rows = []
+    for e in spec["expected"]:
+        if e.get("path"):
+            p = Path(e["path"])
+            e["exists"] = p.exists()
+            size = (f"{p.stat().st_size} B" if p.is_file() else "directory") \
+                if p.exists() else "NOT FOUND"
+            rows.append(f"- {e['artifact']}: {toolbox.display(p)} - {size}")
+        else:
+            e["exists"] = None
+            rows.append(f"- {e['artifact']}: (no path given - find it, or UNKNOWN)")
+    inventory = "\n".join(rows)
+    toolbox.evidence.add("inventory", inventory)
+    return (f"OUTPUT FILE: {spec['output']['files'][0]}\n\nCLAIMED WORK:\n"
+            f"{spec['claim'].strip()}\n\nINVENTORY (the harness checked these paths; "
+            f"cite it as [src: inventory]):\n{inventory}\n\nREAD ROOTS:\n"
+            + "\n".join(f"- {r}" for r in spec["read_roots"]))
+
+
+def completion_audit_gates(files, spec, cfg, toolbox):
+    out_file = spec["output"]["files"][0]
+    steps = [gates.output_paths(files, spec["output"]["files"],
+                                Path(spec["output"]["root"]), cfg.writable)]
+    text = files.get(out_file, "")
+    if text:
+        steps += [gates.frontmatter(text, ("title", "tags"), out_file),
+                  gates.completion_inventory(text, spec["expected"], toolbox, out_file),
+                  gates.cited_lines(text, toolbox, out_file),
+                  gates.quotes_verbatim(text, toolbox, out_file)]
+        steps += gates.acceptance(text, spec, toolbox, out_file)
+    return steps
+
+
 # -- organize_plan ---------------------------------------------------------------------
 
 def organize_plan_normalize(spec: dict, cfg: Config) -> dict:
@@ -236,7 +404,7 @@ def test_triage_gates(files, spec, cfg, toolbox):
     if text:
         log = spec.get("_run_log", "")
         steps += [gates.frontmatter(text, ("title", "tags"), out_file),
-                  gates.reported_failures_exist(text, log, out_file),
+                  gates.reported_failures_exist(text, log, out_file, toolbox),
                   gates.quotes_the_totals(text, log, out_file),
                   gates.cited_lines(text, toolbox, out_file),
                   gates.grounded(text, toolbox, out_file),
@@ -395,6 +563,19 @@ def _workspace_modules(spec: dict, cfg: Config) -> Dict[str, str]:
     return out
 
 
+def _lsp_step(spec: dict, cfg: Config, modules: Dict[str, str], out_file: str,
+              steps: List[dict]) -> List[dict]:
+    """The language-server rung, only when the job asked for it (spec.lsp) and
+    only once the cheaper structural gates pass - a module the safety scan
+    refused is not worth starting a server for."""
+    if not spec.get("lsp") or not all(st["ok"] for st in steps):
+        return []
+    lsp_cfg = cfg.data.get("lsp") or {}
+    lang = next((k for k, v in lsp_cfg.items() if isinstance(v, dict)
+                 and Path(out_file).suffix in v.get("extensions", [])), None)
+    return [gates.lsp_clean(lsp_cfg, lang, modules, out_file, out_file)] if lang else []
+
+
 def code_task_normalize(spec: dict, cfg: Config) -> dict:
     module = (spec.get("module") or "").strip()
     if not module or "/" in module or "\\" in module or not module.endswith(".py"):
@@ -458,6 +639,7 @@ def code_task_gates(files, spec, cfg, toolbox):
                   gates.module_is_safe(source, out_file, dep_names),
                   gates.defines_api(source, spec["api"], out_file),
                   gates.not_stubbed(source, spec["api"], out_file)]
+        steps += _lsp_step(spec, cfg, {out_file: source, **deps}, out_file, steps)
         if all(st["ok"] for st in steps):
             hidden = _hidden_tests(spec, cfg)
             if hidden:
@@ -523,6 +705,7 @@ def code_tests_gates(files, spec, cfg, toolbox):
         steps += [gates.ascii_only(source, out_file),
                   gates.test_file_is_safe(source, out_file, mod_names),
                   gates.enough_tests(source, int(spec["min_tests"]), out_file)]
+        steps += _lsp_step(spec, cfg, {out_file: source, **mods}, out_file, steps)
         if all(st["ok"] for st in steps):
             steps.append(gates.tests_run_green(
                 mods, {out_file: source}, int(spec["test_timeout_s"]), out_file,
@@ -968,6 +1151,38 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
         "apply": "writes the digest to the output root",
         "normalize": research_digest_normalize, "preload": research_digest_preload,
         "gates_fn": research_digest_gates,
+    },
+    "scout": {
+        "description": "Locate where information lives: exact paths, line numbers and verbatim quotes, plus what could not be found. Judges nothing (ported from Crush-lite's scout).",
+        "spec": {"instructions": "required: what to locate",
+                 "read_roots": "optional: subset of crew read roots to search",
+                 "context_files": "optional: files to preload (saves requests)",
+                 "lsp": "optional: true gives symbols/definition/references/diagnostics tools",
+                 "output": "optional {root, files:[name.md]}; default runs/crew/outbox"},
+        "gates": "output path, frontmatter, Findings/Unknowns sections, every item cited, quotes verbatim, line numbers exist in the cited file, numbers grounded, absence claims evidenced",
+        "apply": "writes the scout report to the output root",
+        "normalize": scout_normalize, "preload": scout_preload, "gates_fn": scout_gates,
+    },
+    "log_clerk": {
+        "description": "Say what literally happened in a build/test/terminal log: exit codes, failures quoted verbatim earliest first, warnings. No diagnosis (ported from Crush-lite's log-clerk).",
+        "spec": {"log_file": "required: the log (a text file inside the crew's read roots)",
+                 "instructions": "optional: what to focus on",
+                 "output": "optional {root, files:[name.md]}; default runs/crew/outbox"},
+        "gates": "output path, frontmatter, Exit codes/Failures sections, every item cited, quotes verbatim from the log, failures in log order, numbers grounded",
+        "apply": "writes the log report to the output root",
+        "normalize": log_clerk_normalize, "preload": log_clerk_preload,
+        "gates_fn": log_clerk_gates,
+    },
+    "completion_audit": {
+        "description": "Check claimed work against expected artifacts: YES/NO/PARTIAL/UNKNOWN per artifact and a conclusion. The harness checks existence itself; the member judges completeness. Not an approval (ported from Crush-lite's completion-auditor).",
+        "spec": {"claim": "required: the work claimed complete",
+                 "expected": "required: [{artifact: 'test file', path: 'tests/test_x.py'}, ...]; path optional",
+                 "read_roots": "required: the project to inspect",
+                 "output": "optional {root, files:[name.md]}; default runs/crew/outbox"},
+        "gates": "output path, frontmatter, one row per artifact whose state agrees with what exists on disk, existing artifacts opened before judged, conclusion consistent with the states, every item cited",
+        "apply": "writes the audit to the output root",
+        "normalize": completion_audit_normalize, "preload": completion_audit_preload,
+        "gates_fn": completion_audit_gates,
     },
     "organize_plan": {
         "description": "Propose (never perform) moves/renames/tags for one folder as plan.json.",

@@ -1,0 +1,4 @@
+{"task_type": "test_triage", "title": "crew test suite after the building changes", "assigned_to": "Qwen",
+ "project_root": "C:/Users/user/ATLAS-api-harness", "test_command": "crew-tests",
+ "instructions": "The crew's own suite, run after today's changes (personnel budgets, Inspector, clerk task types, LSP tools). Report what ran, what failed, and where coverage of the new modules (personnel.py, inspector.py, special_teams.py, mcp_client.py, lsp.py) is thin - name the module and function at risk.",
+ "output": {"files": ["test-triage-crew-2026-09-25.md"]}}

@@ -1,0 +1,40 @@
+{
+  "name": "special-teams",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "max_requests": 60,
+  "workspace_subdir": "special_teams",
+  "goal": "The two pure modules of the Kimi special-teams harness: st_schema checks a model's native tool calls before anything runs (Continual Harness saw one malformed call repeated 1,003 times), st_mission guards the mission (allowed tools, URL allowlist, step/action budgets, repeats) against Kimi's known excessive proactiveness. First campaign on personnel-fitted budgets (no requests_per_attempt).",
+  "teams": {
+    "Schema": {"author": "Hoss", "tester": "Qwen"},
+    "Mission": {"author": "Nemotron", "tester": "Hoss"}
+  },
+  "tasks": [
+    {
+      "id": "st_schema",
+      "team": "Schema",
+      "module": "st_schema.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/st_schema.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_st_schema.py"],
+      "api": ["parse_tool_calls", "validate_args", "check_call"],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "Error strings are part of the API: copy their wording from the contract exactly, including quotes. In validate_args report required-missing first, then walk args in their own order. bool is not an integer or a number.",
+      "test_instructions": "Assert the exact error strings from the contract. Cover: JSON string vs dict arguments, empty arguments, invalid JSON, non-object JSON, missing name, integer/number refusing bool, enum only after the type is right, additionalProperties absent vs false, unknown tool listing sorted names, a tool without parameters."
+    },
+    {
+      "id": "st_mission",
+      "team": "Mission",
+      "module": "st_mission.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/st_mission.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_st_mission.py"],
+      "api": ["url_allowed", "Mission"],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "check() returns the FIRST refusal in the contract's numbered order and counts it; an allowed check changes nothing. Repeats count RECORDED calls only, keyed by name plus json.dumps(args, sort_keys=True). url_allowed never raises: bad input is False. file: paths compare case-insensitively, http paths case-sensitively.",
+      "test_instructions": "Walk the contract example line by line. Cover refusal order (step budget, then tool, then action budget, then url, then repeats), encoded ../, folder prefixes ending in /, netloc and scheme mismatches, refused-in-a-row reset by record(), and the summary() dict exactly."
+    }
+  ]
+}

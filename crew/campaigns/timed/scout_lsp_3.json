@@ -1,0 +1,3 @@
+{"task_type": "scout", "title": "who calls gates.cited_lines", "assigned_to": "@scout",
+ "instructions": "Which task types' gate functions call gates.cited_lines, and which of those calls pass require=False? For each give the gate function, file and line.",
+ "read_roots": ["C:/Users/user/ATLAS-api-harness/crew"], "output": {"files": ["scout-cited-lines-callers.md"]}}

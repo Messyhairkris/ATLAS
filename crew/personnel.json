@@ -1,0 +1,163 @@
+{
+  "comment": "The building: one personnel file per crew member, and the posts (roles) they hold. Started 2026-09-25 from public reviews (sources per member) and our own job history (190 jobs with results). 'measured' lines are ours and outrank 'public' ones. Budgets come from crew/personnel.py: a job's request budget is what that member's PASSING jobs of that type have needed (p75 + headroom) once there are enough of them, else the task type's baseline; its context is capped at context_ceiling of the member's window. quirks.addenda are appended to the member's system prompt; quirks.leash overrides the agent loop's stop rules. The Inspector (crew/inspector.py) proposes changes to budgets, leash and addenda from failure signatures and runs them as trials; it never edits gates, hidden tests, contracts or deny globs.",
+
+  "context_policy": {
+    "comment": "Every model tested (Chroma 'Context Rot', 18 models) got worse as input grew, at every length, well before the window was full - so this is a CEILING, never a target to fill. What the crew suffered from until now was the opposite: 3 full tool results of 6,000 chars for every member, whatever its window. Kris 2026-09-25: allow 1/2 to 3/4 of the window; start at 1/2 and let trials raise it.",
+    "context_ceiling": 0.5,
+    "context_ceiling_max": 0.75,
+    "practical_cap_tokens": 200000,
+    "chars_per_token": 3.5
+  },
+
+  "task_baselines": {
+    "comment": "Requests a job of this type gets before we have 3+ passing jobs of this member on it. Measured medians from the history where they exist.",
+    "log_clerk": 5, "completion_audit": 12, "scout": 18, "research_digest": 16,
+    "vault_index": 8, "organize_plan": 8, "test_triage": 8, "ui_sweep": 8,
+    "code_task": 14, "code_tests": 12, "js_code_task": 14, "js_code_tests": 12,
+    "ahk_code_task": 14, "ahk_code_tests": 12
+  },
+
+  "posts": {
+    "comment": "assigned_to: \"@post\" resolves to the first holder that is not denied. Order = who we send first. Built from the measured table in PERSONNEL.md.",
+    "clerk": ["Larry", "Hoss"],
+    "auditor": ["Larry", "Gordon"],
+    "scout": ["Gordon", "Qwen"],
+    "researcher": ["Qwen", "Gordon", "Hoss"],
+    "module_author_py": ["Hoss", "Nemotron", "Qwen"],
+    "module_author_js": ["Gordon", "Qwen"],
+    "tester": ["Hoss", "Qwen"],
+    "byte_exact": ["Qwen", "Hoss"],
+    "vision": ["Gordon", "Qwen"],
+    "special_teams": ["Kimi"]
+  },
+
+  "members": {
+    "Hoss": {
+      "model": "hf:openai/gpt-oss-120b",
+      "context_window": 131072,
+      "vision": false,
+      "public": {
+        "strengths": ["near o4-mini on reasoning benchmarks", "strong tool use and few-shot function calling", "cheap and fast (5.1B active)"],
+        "weaknesses": ["hallucination in chain of thought", "calls tools that do not exist (apply_patch, 860 times in one study)", "weaker at code and knowledge than dense peers"],
+        "sources": ["https://www.emergentmind.com/topics/openai-gpt-oss-120b", "https://huggingface.co/openai/gpt-oss-120b"]
+      },
+      "measured": "code_task 5/5 (1.4 req), code_tests 6/6 (1.3 req): the most reliable cheap coder. research 15/30, 8 no_progress stops, fabricated StackOverflow URLs (rd-020). Emits native repo_browser tool calls (mapped in agent.py).",
+      "posts": ["module_author_py", "tester", "clerk", "researcher"],
+      "quirks": {
+        "addenda": ["Never write a URL, file path, test name or tool name you did not see in a result this job. If you are unsure, say (not stated in source).", "Your only tools are the ones listed above; there is no apply_patch, shell or editor."],
+        "leash": {}
+      }
+    },
+    "Qwen": {
+      "model": "hf:Qwen/Qwen3.8-27B",
+      "context_window": 262144,
+      "vision": true,
+      "public": {
+        "strengths": ["most capable Qwen open model: coding, research, long-horizon agentic tasks", "effective tool calling", "strong vision"],
+        "weaknesses": ["defaults to wildly overthinking", "very verbose (200M tokens on an index where the median is 82M)", "slow (~41 tok/s)"],
+        "sources": ["https://simonw.substack.com/p/qwen-38-27b-is-excellent-but-it-defaults", "https://artificialanalysis.ai/models/qwen3-8-27b", "https://huggingface.co/Qwen/Qwen3.8-27B"]
+      },
+      "measured": "research 22/32 - the best researcher - but 141k tokens per job and 11 jobs stopped by OUR token ceiling (budget_tokens). code_task 7/14, code_tests 5/6, byte-exact work first-try. 2/3 on screenshots.",
+      "posts": ["researcher", "byte_exact", "tester", "scout", "vision", "module_author_js"],
+      "quirks": {
+        "addenda": ["Decide early: after two tool results, write down what you still need; stop reading when you have it. A long think that ends in no answer is worth nothing."],
+        "leash": {},
+        "token_factor": 2.0
+      }
+    },
+    "Nemotron": {
+      "model": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+      "context_window": 262144,
+      "vision": false,
+      "public": {
+        "strengths": ["built for multi-agent and high-volume agentic work", "fast (~167 tok/s), low latency", "long-context reasoning"],
+        "weaknesses": ["very verbose", "no vision"],
+        "sources": ["https://artificialanalysis.ai/models/nvidia-nemotron-3-super-120b-a12b", "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"]
+      },
+      "measured": "Python code_task 7/8, but js_code_task 0/8, js_code_tests 0/5, research 0/8 (loops: 8 no_progress, 2 loop_repeat, 3 contract_abandoned). Re-indents verbatim templates (quirklint). Careless tests.",
+      "posts": ["module_author_py"],
+      "quirks": {
+        "addenda": ["Copy any template or example from the contract exactly as given, including its indentation."],
+        "leash": {"max_repeats": 2}
+      }
+    },
+    "Gordon": {
+      "model": "hf:deepseek-ai/DeepSeek-V4.1-Flash",
+      "context_window": 1000000,
+      "vision": true,
+      "public": {
+        "strengths": ["unusually strong for a Flash model (GPQA 90.9, Terminal-Bench 90.6)", "fast (~232 tok/s), cheap on input-heavy agentic work", "native vision"],
+        "weaknesses": ["very verbose", "sparse attention trained at 64K and extended to 1M: the far end of the window is the least trained"],
+        "sources": ["https://blog.buildfastwithai.com/deepseek-v4-1-flash-review", "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash", "https://artificialanalysis.ai/models/deepseek-v4-1-flash"]
+      },
+      "measured": "vision 3/3. research 12/32 with 4 loop_repeat stops. scout 2/2 correct answers (2026-09-25) but both used all 12 requests; JS module first try.",
+      "posts": ["scout", "researcher", "vision", "module_author_js", "auditor"],
+      "quirks": {
+        "addenda": ["Before each search, check the results you already have; never repeat a search with the same words."],
+        "leash": {}
+      }
+    },
+    "Barry": {
+      "model": "hf:zai-org/GLM-5.3-Flash",
+      "context_window": 1000000,
+      "vision": false,
+      "public": {
+        "strengths": ["strong coding/agent benchmarks for its price (Terminal-Bench 84.3)", "hybrid sparse+linear attention keeps long context cheap"],
+        "weaknesses": ["slow (~43 tok/s)", "verbose", "long reasoning before answering"],
+        "sources": ["https://artificialanalysis.ai/models/glm-5-3-flash", "https://huggingface.co/zai-org/GLM-5.3-Flash"]
+      },
+      "measured": "code_task 3/9, code_tests 3/11, research 11/21 at 15 requests and 119k tokens per job. Claims to see images and is wrong 4/4 - vision is set false on purpose. Thinks past a 36k ceiling (needs 65536).",
+      "posts": [],
+      "quirks": {
+        "addenda": ["Think briefly. Your answer channel must contain the tool call or the SUBMIT block."],
+        "leash": {}
+      }
+    },
+    "Larry": {
+      "model": "hf:zai-org/GLM-4.7-Flash",
+      "context_window": 131072,
+      "vision": false,
+      "public": {
+        "strengths": ["interleaved thinking before each tool call", "decent coding for 30B-A3B", "cheap"],
+        "weaknesses": ["wobbles in long reasoning chains", "less reliable when prompts are long and instructions strict"],
+        "sources": ["https://llm-stats.com/blog/research/glm-4.7-flash-launch", "https://wavespeed.ai/blog/posts/glm-4-7-flash-vs-glm-4-7/"]
+      },
+      "measured": "log_clerk 1/1 first try at 2 requests; completion_audit 1/1 (right answer, 12 requests); pure-reporter jobs pass first try (rd-022). research 3/12.",
+      "posts": ["clerk", "auditor"],
+      "quirks": {
+        "addenda": ["Search a large file for the words you need before reading it; read only the matching part."],
+        "leash": {}
+      }
+    },
+    "Haiku": {
+      "model": "claude-haiku-4-5",
+      "context_window": 200000,
+      "vision": true,
+      "billing": "Anthropic, not Synthetic (crew/claude_chat.py)",
+      "public": {
+        "strengths": ["73.3% SWE-bench Verified; ~90% of Sonnet 4.5 on agentic coding", "made for sub-agent orchestration and multi-step tool use", "4-5x faster than Sonnet"],
+        "weaknesses": ["clearly below the larger Claudes on hard problems", "200k context, not 1M"],
+        "sources": ["https://www.anthropic.com/news/claude-haiku-4-5", "https://openrouter.ai/anthropic/claude-haiku-4.5"]
+      },
+      "measured": "never run: needs `pip install anthropic` and ANTHROPIC_API_KEY where the crew runs.",
+      "posts": [],
+      "quirks": {"addenda": [], "leash": {}}
+    },
+    "Kimi": {
+      "model": "hf:moonshotai/Kimi-K3",
+      "context_window": 1000000,
+      "vision": true,
+      "public": {
+        "strengths": ["best open model for long tool-using work (SWE Marathon 42.0, BrowseComp 91.2)", "sustained multi-hour sessions, large repositories, terminal tools"],
+        "weaknesses": ["hallucination rate 51% (up from 39% in K2.6)", "'excessive proactiveness' on agentic tasks", "reasoning depth trails frontier"],
+        "sources": ["https://github.com/MoonshotAI/Kimi-K3", "https://whatllm.org/blog/kimi-k3", "https://techsy.io/en/blog/kimi-k3-review"]
+      },
+      "measured": "research 0/5 on the crew's plain-text tool protocol: 3 contract_abandoned. Capable (Crush's base), but it wants NATIVE tool calling. Unify step; senior fallback.",
+      "posts": ["special_teams"],
+      "quirks": {
+        "addenda": ["Do only what the task asks. Do not add steps, files or changes nobody requested."],
+        "leash": {}
+      }
+    }
+  }
+}

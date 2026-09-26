@@ -88,6 +88,11 @@
       ],
       "timeout_s": 900
     },
+    "crew-tests": {
+      "comment": "The crew's own suite only (tests/test_crew.py): the rest of the repo has Unix-only tests that fail to collect on Windows.",
+      "argv": ["{python}", "-m", "pytest", "-q", "tests/test_crew.py"],
+      "timeout_s": 900
+    },
     "pytest-verbose": {
       "argv": [
         "{python}",
@@ -108,6 +113,18 @@
       "timeout_s": 1800
     }
   },
+  "lsp": {
+    "comment": "Language servers a job may use when its spec sets lsp: true (a campaign sets it with top-level \"lsp\": true). Members get symbols/definition/references/diagnostics as read-only tools, confined to their read roots; code jobs also get an 'lsp' gate rung that fails only on ERROR-severity diagnostics. Ported 2026-09-25 from Crush-lite's read-only LSP profile. Python: pylsp navigates (jedi) but has no linter plugin installed, so ruff's built-in server does diagnostics. pylsp cold-starts in ~23s on this machine, hence start_timeout_s.",
+    "python": {
+      "command": ["C:/Users/user/AppData/Local/Programs/Python/Python314/Scripts/pylsp.exe"],
+      "diagnostics_command": ["C:/Users/user/AppData/Local/Programs/Python/Python314/Scripts/ruff.exe", "server"],
+      "diagnostics_settings": {"settings": {"configurationPreference": "editorOnly", "lint": {"select": ["E9", "F"]}}},
+      "extensions": [".py"],
+      "settings": {"pylsp": {"plugins": {"pycodestyle": {"enabled": false}, "mccabe": {"enabled": false}, "jedi_symbols": {"all_scopes": true, "include_import_symbols": false}}}},
+      "timeout_s": 30,
+      "start_timeout_s": 120
+    }
+  },
   "deny_models": [],
   "rate_limit": {
     "comment": "Published limits (https://synthetic.new/rate-limits, recorded 2026-09-21; details in crew/SYNTHETIC_LIMITS.md). Per pack: 500 requests/5h regenerating 5% every 15 min; $24/week credits regenerating 2% every 202 min; 1 concurrent request per model. Kris has 2 packs (1000 req/5h, $48/week, 2 per model) until 2026-09-30. Requests are weighted by the model's input price against Kimi-K3 = 1 (GLM-5.3-Flash ~0.1; measured 2026-09-20: a cheap-model call ~0.033). The provider's x-synthetic-quotas header is the truth and the governor reads it; the numbers here are the fallback before the first answer. credit_reserve_percent is kept for Kris and Crush.",
@@ -126,6 +143,8 @@
     "concurrent_requests_per_model": 2
   },
   "defaults": {
+    "budget_from_personnel": true,
+    "budget_from_personnel_comment": "2026-09-25: a job's requests, tokens, working context and observation size come from crew/personnel.json and the member's own passing history (crew/personnel.py) instead of one number for everyone; the Inspector (crew/inspector.py) runs after every job. An explicit spec budget still wins. Set false to return to the flat defaults below.",
     "assigned_to": "Hoss",
     "max_requests": 12,
     "max_tokens": 60000,

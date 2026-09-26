@@ -155,6 +155,9 @@ class Campaign:
         as budget_tokens at the 60k default, producing no file at all - which
         reads like the model failing when it is our ceiling.
         """
+        if ("requests_per_attempt" not in self.spec
+                and self.cfg.defaults.get("budget_from_personnel")):
+            return {}     # 2026-09-25: fitted per member by personnel.budget_for
         return {"max_requests": int(self.spec.get("requests_per_attempt", 14)),
                 "max_tokens": int(self.spec.get("tokens_per_attempt", 150000))}
 
@@ -377,6 +380,8 @@ class Campaign:
                     "instructions": (task["instructions"] + history).strip(),
                     "budget": self._budget(),
                     **({"grants": task["grants"]} if task.get("grants") else {})}
+        if self.spec.get("lsp"):
+            spec["lsp"] = True       # language-server tools + the lsp gate rung
         brief = self.crew.submit(spec, submitted_by=f"campaign:{self.name}",
                                  claim=True)
         job_id = brief["task_id"]

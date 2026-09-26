@@ -1,0 +1,18 @@
+{
+  "name": "test-pass-walk",
+  "member": "Kimi",
+  "goal": "Open http://127.0.0.1:8765/Test%20pass%20-%20device%20profiles%20-%202026-09-20.html - a test-pass page a person works through by hand. Then: (1) report the page title and the progress counters exactly as shown, before you touch anything; (2) on the FIRST test point only, press its OK button, then type the note checked by special teams into that point's 'What happened?' box; (3) report the progress counters again, exactly as shown after your changes; (4) report anything on the page that looks broken - garbled characters, placeholder text left in, and the like - quoting it. Press nothing else.",
+  "serve_dir": "C:/Users/user/ATLAS-api-harness/runs/crew/campaigns/tts-profiles",
+  "port": 8765,
+  "url_prefixes": ["http://127.0.0.1:8765/"],
+  "allowed_tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_type",
+                    "browser_find", "browser_console_messages", "browser_wait_for"],
+  "acting_tools": ["browser_click", "browser_type"],
+  "max_steps": 12,
+  "max_actions": 2,
+  "max_turns": 14,
+  "credit_cap_usd": 1.5,
+  "reply_tokens": 8192,
+  "expect_observed": ["1 OK", "1 / 26"],
+  "must_mention": ["PROJECT"]
+}

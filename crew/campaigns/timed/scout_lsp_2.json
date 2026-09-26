@@ -1,0 +1,3 @@
+{"task_type": "scout", "title": "callers of personnel functions", "assigned_to": "@scout",
+ "instructions": "Which functions call personnel.budget_for, personnel.history or personnel.resolve? For each call give the calling function, file and line, and the arguments passed.",
+ "read_roots": ["C:/Users/user/ATLAS-api-harness/crew"], "output": {"files": ["scout-personnel-callers.md"]}}

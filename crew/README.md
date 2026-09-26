@@ -46,6 +46,32 @@ Prices and limits: `SYNTHETIC_LIMITS.md`. Claude members live in `config.json`
 | `code_task` | one Python module against a contract | AST airlock (import allowlist, banned names), API present, no stubs, **hidden tests** | stages it in `outbox/workspace/` |
 | `code_tests` | pytest tests for another member's accepted module, from the contract alone | airlock, enough tests, they pass against the real module | stages them in `outbox/workspace/tests/` |
 | `js_code_task` / `js_code_tests` | a JavaScript ES module / `node:test` tests | the crew-built JS gate (`jsharness/`): lexer, import allowlist, forbidden globals, API, stubs, then hidden `*.test.mjs` under `node --permission` | stages them |
+| `scout` | where information lives: path, line range and a `>` verbatim quote per finding, plus Unknowns | sections, every finding cited and quoted, quotes word for word, line numbers exist in the file, grounding, absence claims | writes the report |
+| `log_clerk` | what literally happened in a log: exit codes, failures quoted exactly, earliest first. No diagnosis | sections, citations, quotes word for word from the log, failures in log order, grounding | writes the report |
+| `completion_audit` | YES/NO/PARTIAL/UNKNOWN per expected artifact, and a conclusion | the harness checks existence itself: a missing path must be NO, an existing one must be opened before YES/PARTIAL; conclusion consistent with the states | writes the audit |
+
+The three clerk types (2026-09-25) are Crush-lite's workers (`~/.crush/lite/workers`)
+moved into the crew, so they run under a request budget and gates instead of as
+open-ended Crush sessions. First live runs: Larry passed `log_clerk` in 2 requests
+and `completion_audit` in 12 (right answer, after the gate corrected a NO to
+PARTIAL); Gordon's `scout` answers were correct but need a budget above 12.
+
+## Language-server tools (`lsp`)
+
+A job with `"lsp": true` (a campaign: top-level `"lsp": true`; MCP: `crew_submit(lsp=True)`)
+gives the member four more read-only tools - `symbols(path)`, `definition(path, name)`,
+`references(path, name)`, `diagnostics(path)` - answered by real language servers
+(`crew/lsp.py`, configured under `"lsp"` in `config.json`). Members name a symbol, not
+a position; results outside the read roots are counted, never shown. Python uses
+pylsp to navigate and ruff's built-in server (rules `E9`,`F` only) for diagnostics.
+Code jobs with `lsp` also get an **`lsp` gate rung** before the hidden tests that
+fails only on ERROR diagnostics (undefined names, syntax); a server that will not
+start is skipped with a note, never a failure. pylsp cold-starts in ~23 s here.
+
+Measured 2026-09-25: the same scout question with and without `lsp` cost the same
+(12 requests, ~35k tokens, both correct), and 66 past Python code jobs had no
+undefined-name or syntax failures for the gate to catch. Treat it as available,
+not yet proven.
 
 Every code job also passes through `quirklint.py` (verbatim templates a member
 re-indented are restored; a forced failure inside `try` in a test fails). A campaign
@@ -62,7 +88,7 @@ Any task can also carry **acceptance gates**: `must_mention`, `must_read` (the m
 
 ## Safety posture
 
-- **Read-only tools.** `list_dir`, `read_file`, `search`, and `fetch_url` (off unless `fetch_allowlist` in `config.json` names domains). The member cannot write, run, move, or delete anything.
+- **Read-only tools.** `list_dir`, `read_file`, `search`, and `fetch_url` (off unless `fetch_allowlist` in `config.json` names domains); with `lsp`, also `symbols`, `definition`, `references`, `diagnostics`. The member cannot write, run, move, or delete anything.
 - **Path limits.** Paths are resolved and confined to the job's read roots. `deny_globs` (secrets, `.git`, `.obsidian`, crush.json, crew internals) always win.
 - **Writes** happen only on approval (or at Supervised+), only inside `write_roots`, with a backup of anything overwritten.
 - **Leash.**

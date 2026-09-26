@@ -1288,6 +1288,333 @@ class PlaybookTests(CrewTestCase):
         self.assertIsNone(playbook.add("organize_plan", "never move the plan note", "t"))
 
 
+class ClerkTaskTests(CrewTestCase):
+    """scout / log_clerk / completion_audit: Crush-lite's workers, gated."""
+
+    def setUp(self):
+        super().setUp()
+        self.proj = self.vault / "wiki" / "proj"
+        self.proj.mkdir(parents=True)
+        (self.proj / "engine.py").write_text(
+            "import os\n\n\ndef announce(text):\n    return speak(text, loud=True)\n")
+        (self.proj / "build.log").write_text(
+            "$ make all\ncompiling a.c\na.c:3: error: expected ';' before '}'\n"
+            "compiling b.c\nb.c:9: warning: unused variable 'n'\n"
+            "make: *** [all] Error 2\n")
+
+    def _status(self, c, job):
+        c.tick()
+        return c.result(job["task_id"])["status"]
+
+    SCOUT = ("SUBMIT\n```scout-announce.md\n---\ntitle: S\ntags: [scout]\n---\n"
+             "announce is in engine.py [src: wiki/proj/engine.py]\n\n## Findings\n"
+             "- announce defined at L4-5 [src: wiki/proj/engine.py]\n"
+             "  > {quote}\n\n## Unknowns\n- where speak is defined\n```")
+
+    def _scout(self, c):
+        return c.submit({"task_type": "scout", "title": "announce",
+                         "instructions": "Where is announce defined?",
+                         "read_roots": [str(self.vault)]}, "Claude")
+
+    def test_scout_quotes_are_checked_word_for_word(self):
+        read = '{"tool": "read_file", "args": {"path": "wiki/proj/engine.py"}}'
+        good = self.SCOUT.format(quote="return speak(text, loud=True)")
+        paraphrase = self.SCOUT.format(quote="return speak(text, volume=loud)")
+        c = self.crew([read, paraphrase, good])
+        self.assertEqual(self._status(c, self._scout(c)), "review")
+        self.assertIn("verbatim", self.model.seen[-1][-1]["content"])
+
+    def test_scout_line_numbers_must_exist(self):
+        read = '{"tool": "read_file", "args": {"path": "wiki/proj/engine.py"}}'
+        past_end = self.SCOUT.format(quote="return speak(text, loud=True)") \
+            .replace("L4-5", "L40-45")
+        c = self.crew([read, past_end, past_end])
+        self._scout(c)
+        c.tick()
+        self.assertIn("past the end", self.model.seen[-1][-1]["content"])
+
+    LOG = ("SUBMIT\n```log-clerk-build.md\n---\ntitle: L\ntags: [log]\n---\n"
+           "The build failed. [src: log]\n\n## Exit codes\n"
+           "- `make all` ended with `make: *** [all] Error 2` [src: log]\n\n"
+           "## Failures\n{failures}\n```")
+
+    def _log(self, c):
+        return c.submit({"task_type": "log_clerk", "title": "build log",
+                         "log_file": str(self.proj / "build.log")}, "Claude")
+
+    def test_log_clerk_failures_verbatim_and_in_order(self):
+        first = "1. compile_error: `a.c:3: error: expected ';' before '}'` [src: log]"
+        second = "2. warning: `b.c:9: warning: unused variable 'n'` [src: log]"
+        swapped = self.LOG.format(failures=f"{second}\n{first}")
+        good = self.LOG.format(failures=f"{first}\n{second}")
+        c = self.crew([swapped, good])
+        self.assertEqual(self._status(c, self._log(c)), "review")
+        self.assertIn("log order", self.model.seen[-1][-1]["content"])
+
+    def test_log_clerk_invented_error_line_fails(self):
+        invented = self.LOG.format(
+            failures="1. compile_error: `a.c:3: error: missing semicolon here` [src: log]")
+        c = self.crew([invented, invented])
+        self._log(c)
+        c.tick()
+        self.assertIn("verbatim", self.model.seen[-1][-1]["content"])
+
+    AUDIT = ("SUBMIT\n```completion-announce.md\n---\ntitle: A\ntags: [audit]\n---\n"
+             "| Artifact | State | Path | Note |\n|---|---|---|---|\n"
+             "| source change | {src} | wiki/proj/engine.py | ok [src: {cite}] |\n"
+             "| test file | {test} | wiki/proj/test_engine.py | none [src: inventory] |\n\n"
+             "Conclusion: {concl}\n```")
+
+    def _audit(self, c):
+        return c.submit({"task_type": "completion_audit", "title": "announce",
+                         "claim": "announce() added with tests",
+                         "read_roots": [str(self.vault)],
+                         "expected": [{"artifact": "source change",
+                                       "path": "wiki/proj/engine.py"},
+                                      {"artifact": "test file",
+                                       "path": "wiki/proj/test_engine.py"}]}, "Claude")
+
+    def test_completion_audit_states_must_match_the_disk(self):
+        claims_test_exists = self.AUDIT.format(src="YES", cite="inventory", test="YES",
+                                               concl="EVIDENCE_COMPLETE")
+        c = self.crew([claims_test_exists, claims_test_exists])
+        self._audit(c)
+        c.tick()
+        fb = self.model.seen[-1][-1]["content"]
+        self.assertIn("does not exist, so the state is NO", fb)
+        self.assertIn("open", fb)      # engine.py exists but was never opened
+
+    def test_completion_audit_passes_when_opened_and_consistent(self):
+        read = '{"tool": "read_file", "args": {"path": "wiki/proj/engine.py"}}'
+        good = self.AUDIT.format(src="YES", cite="wiki/proj/engine.py", test="NO",
+                                 concl="EVIDENCE_INCOMPLETE")
+        c = self.crew([read, good])
+        self.assertEqual(self._status(c, self._audit(c)), "review")
+
+    def test_completion_audit_conclusion_follows_states(self):
+        read = '{"tool": "read_file", "args": {"path": "wiki/proj/engine.py"}}'
+        wrong = self.AUDIT.format(src="YES", cite="wiki/proj/engine.py", test="NO",
+                                  concl="EVIDENCE_COMPLETE")
+        c = self.crew([read, wrong, wrong])
+        self._audit(c)
+        c.tick()
+        self.assertIn("EVIDENCE_COMPLETE needs every state YES",
+                      self.model.seen[-1][-1]["content"])
+
+    def test_clerk_playbooks_exist(self):
+        for t in ("scout", "log_clerk", "completion_audit"):
+            self.assertGreaterEqual(len(playbook.entries(t)), 8, t)
+
+
+class LspTests(CrewTestCase):
+    """Language-server tools are opt-in, and a missing server never fails work."""
+
+    def test_lsp_tools_absent_unless_enabled(self):
+        from crew.tools import Evidence, Toolbox, ToolError
+        tb = Toolbox(self.cfg, [self.vault], Evidence())
+        with self.assertRaises(ToolError):
+            tb.call("symbols", {"path": "wiki/lab/PLAN.md"})
+
+    def test_lsp_gate_skips_when_server_cannot_start(self):
+        from crew import gates
+        cfg = {"python": {"command": [str(self.tmp / "no-such-server.exe")],
+                          "extensions": [".py"], "start_timeout_s": 5}}
+        st = gates.lsp_clean(cfg, "python", {"m.py": "x = y\n"}, "m.py", "m.py")
+        self.assertTrue(st["ok"])
+        self.assertIn("lsp skipped", st["note"])
+
+    def test_lsp_gate_fails_only_on_errors(self):
+        from crew import gates
+        ruff = shutil.which("ruff")
+        if not ruff:
+            self.skipTest("ruff not installed")
+        cfg = {"python": {"command": [ruff, "server"], "extensions": [".py"],
+                          "diagnostics_command": [ruff, "server"],
+                          "diagnostics_settings": {"settings": {
+                              "configurationPreference": "editorOnly",
+                              "lint": {"select": ["E9", "F"]}}}}}
+        bad = gates.lsp_clean(cfg, "python", {"m.py": "def f():\n    return g()\n"},
+                              "m.py", "m.py")
+        self.assertFalse(bad["ok"])
+        self.assertIn("F821", bad["detail"])
+        warn_only = gates.lsp_clean(cfg, "python",
+                                    {"m.py": "import os\n\n\ndef f():\n    return 1\n"},
+                                    "m.py", "m.py")
+        self.assertTrue(warn_only["ok"])
+
+
+class PersonnelTests(CrewTestCase):
+    """The building: posts, fitted budgets, quirk profiles, context trimming."""
+
+    STAFF = {"context_policy": {"context_ceiling": 0.5, "context_ceiling_max": 0.75,
+                                "practical_cap_tokens": 200000},
+             "task_baselines": {"scout": 18},
+             "posts": {"scout": ["Kimi", "Gordon"]},
+             "members": {"Gordon": {"context_window": 1000000,
+                                    "quirks": {"addenda": ["Never repeat a search."],
+                                               "leash": {"max_repeats": 2}}},
+                         "Hoss": {"context_window": 131072}}}
+
+    def test_post_resolves_to_first_holder_not_denied(self):
+        from crew import personnel
+        self.assertEqual(personnel.resolve("@scout", self.STAFF, ["Kimi"]), "Gordon")
+        self.assertEqual(personnel.resolve("Hoss", self.STAFF), "Hoss")
+        with self.assertRaises(CrewError):
+            personnel.resolve("@nobody", self.STAFF)
+
+    def test_budget_follows_passing_history_then_baseline(self):
+        from crew import personnel
+        hist = {("Hoss", "scout"): [{"passed": True, "requests": n, "tokens": 20000}
+                                    for n in (2, 3, 4, 9)]}
+        b = personnel.budget_for(self.STAFF, "Hoss", "scout", hist)
+        self.assertEqual(b["max_requests"], 4 + personnel.HEADROOM)   # p75 of 2,3,4,9
+        self.assertEqual(b["context_tokens"], 65536)                  # half of 131072
+        self.assertEqual(b["max_tokens"], 60000)      # 2 x p90 (40k) is under the floor
+        g = personnel.budget_for(self.STAFF, "Gordon", "scout", hist)
+        self.assertEqual(g["max_requests"], 18)                       # baseline, no history
+        self.assertEqual(g["context_tokens"], 100000)                 # capped window
+        capped = personnel.budget_for(self.STAFF, "Gordon", "scout", hist,
+                                      {"context_ceiling": 0.9, "extra_requests": 4})
+        self.assertEqual(capped["context_tokens"], 150000)            # max 0.75
+        self.assertEqual(capped["max_requests"], 22)
+
+    def test_house_notes_and_leash(self):
+        from crew import personnel
+        self.assertIn("Never repeat a search.", personnel.system_addenda(self.STAFF, "Gordon"))
+        self.assertEqual(personnel.system_addenda(self.STAFF, "Hoss"), "")
+        self.assertEqual(personnel.leash(self.STAFF, "Gordon"), {"max_repeats": 2})
+
+    def test_context_trimming_keeps_what_fits(self):
+        from crew.agent import _trim_old_results
+        def msgs():
+            return [{"role": "user", "content": "x" * 5000, "_result": True} for _ in range(8)]
+        flat = msgs()
+        _trim_old_results(flat)
+        self.assertEqual(sum(1 for m in flat if m.get("_trimmed")), 5)   # old rule: keep 3
+        roomy = msgs()
+        _trim_old_results(roomy, context_tokens=100000)                   # 350k chars fit
+        self.assertFalse(any(m.get("_trimmed") for m in roomy))
+        tight = msgs()
+        _trim_old_results(tight, context_tokens=4000)                     # 14k chars
+        self.assertEqual(sum(1 for m in tight if not m.get("_trimmed")), 3)
+
+    def test_submit_fits_budget_and_resolves_post(self):
+        self.cfg.data.setdefault("defaults", {})["budget_from_personnel"] = True
+        self.cfg.defaults["budget_from_personnel"] = True
+        c = self.crew([])
+        job = c.submit({"task_type": "log_clerk", "title": "l", "assigned_to": "@clerk",
+                        "log_file": str(self.lab / "PLAN.md")}, "Claude")
+        j = c.store.load(job["task_id"])
+        self.assertEqual(j["assigned_to"], "Larry")
+        self.assertIn("context_tokens", j["budget"])
+        self.assertIn("source", j["budget"])
+
+
+class InspectorTests(CrewTestCase):
+    """The recursive pass: signatures -> bounded trials or PA proposals."""
+
+    def _job(self, jid, passed, stop, requests, max_requests=12, trial=None):
+        return {"task_id": jid, "assigned_to": "Gordon", "task_type": "scout",
+                "budget": {"max_requests": max_requests, "max_tokens": 100000,
+                           **({"trial": trial} if trial else {})},
+                "result": {"passed": passed, "stop_reason": stop, "requests": requests}}
+
+    def _inspect(self, job, transcript=()):
+        from crew import inspector
+        p = self.tmp / f"{job['task_id']}.jsonl"
+        p.write_text("\n".join(json.dumps(e) for e in transcript), encoding="utf-8")
+        return inspector.inspect_job(self.cfg, job, p)
+
+    def test_budget_exhaustion_starts_one_bounded_trial(self):
+        from crew import inspector
+        rec = self._inspect(self._job("j1", False, "budget_requests", 12))
+        self.assertEqual(len(rec["trials_started"]), 1)
+        rec2 = self._inspect(self._job("j2", False, "budget_requests", 12))
+        self.assertEqual(rec2["trials_started"], [])        # one change at a time
+        t = inspector.active_trial(self.cfg, "Gordon", "scout")
+        self.assertEqual(t["overrides"], {"extra_requests": 4})
+
+    def test_trial_is_kept_or_reverted_by_measurement(self):
+        from crew import inspector
+        self._inspect(self._job("j1", False, "budget_requests", 12))
+        tid = inspector.active_trial(self.cfg, "Gordon", "scout")["id"]
+        for i in range(inspector.TRIAL_WINDOW):
+            self._inspect(self._job(f"t{i}", True, "passed", 9, 16, trial=tid))
+        trial = next(t for t in inspector._load_trials(self.cfg) if t["id"] == tid)
+        self.assertEqual(trial["status"], "kept")
+        self.assertEqual(inspector.active_trial(self.cfg, "Gordon", "scout")["overrides"],
+                         {"extra_requests": 4})             # kept trials stay applied
+
+    def test_stuck_gate_is_a_proposal_never_an_edit(self):
+        bad = {"rung": "citations", "ok": False, "detail": "x"}
+        tr = [{"event": "submission", "steps": [bad]}, {"event": "submission", "steps": [bad]}]
+        rec = self._inspect(self._job("j1", False, "no_change", 5), tr)
+        self.assertIn("gate_stuck", [s["signature"] for s in rec["signatures"]])
+        props = (self.cfg.state_home / "inspector" / "proposals.jsonl").read_text()
+        self.assertIn("gate_suspect", props)
+
+
+class SpecialTeamsTests(CrewTestCase):
+    """Kimi's harness: nothing runs unchecked, and claims must match what tools returned."""
+
+    class FakeMcp:
+        def __init__(self):
+            self.calls = []
+
+        def tools(self):
+            return [{"name": n, "inputSchema": {"type": "object",
+                                                "properties": {"url": {"type": "string"},
+                                                               "target": {"type": "string"},
+                                                               "element": {"type": "string"},
+                                                               "function": {"type": "string"},
+                                                               "filename": {"type": "string"}}}}
+                    for n in ("browser_navigate", "browser_click", "browser_run_code_unsafe",
+                              "browser_evaluate", "browser_take_screenshot", "browser_snapshot")]
+
+        def call(self, name, args):
+            self.calls.append(name)
+            return {"ok": True, "text": "page says 1 OK and 1 / 26", "images": 0}
+
+    def test_guard_refuses_and_grades_quotes(self):
+        import crew.special_teams as st
+        st.WORKSPACE = REPO_ROOT / "crew" / "hidden_tests" / "reference"
+        mcp = self.FakeMcp()
+
+        def tc(i, name, args):
+            return {"id": f"c{i}", "function": {"name": name, "arguments": json.dumps(args)}}
+        script = [[tc(1, "browser_navigate", {"url": "http://127.0.0.1:1/x"}),
+                   tc(2, "browser_run_code_unsafe", {"code": "1"}),
+                   tc(3, "browser_navigate", {"url": "https://evil.example/"})],
+                  [tc(4, "browser_click", {"element": "OK", "target": "e1"})],
+                  "Counters: `page says 1 OK and 1 / 26`; also `a quote nobody returned`"]
+
+        def chat(messages, tools):
+            names = {t["function"]["name"] for t in tools}
+            assert "browser_run_code_unsafe" not in names and "browser_evaluate" not in names
+            step = script.pop(0)
+            msg = {"content": step} if isinstance(step, str) else {"content": "", "tool_calls": step}
+            return {"content": msg["content"], "raw": {"usage": {"total_tokens": 5},
+                                                        "choices": [{"message": msg}]}}
+        mission = {"name": "unit", "goal": "g", "url_prefixes": ["http://127.0.0.1:1/"],
+                   "allowed_tools": ["browser_navigate", "browser_click", "browser_snapshot"],
+                   "acting_tools": ["browser_click"], "max_steps": 6, "max_actions": 1,
+                   "expect_observed": ["1 OK"]}
+        r = st.run_mission(mission, chat=chat, mcp=mcp, out_dir=self.tmp / "st")
+        self.assertEqual(mcp.calls.count("browser_run_code_unsafe"), 0)
+        self.assertNotIn("https://evil.example/", json.dumps(r))
+        # run_code is stopped by the schema check (never offered); the evil URL
+        # passes the schema and is refused by the mission guard
+        self.assertEqual(r["guard"]["refused"], 1)
+        self.assertIn("browser_evaluate", mcp.calls)     # the orange highlight ran before the click
+        self.assertLess(mcp.calls.index("browser_evaluate"), mcp.calls.index("browser_click"))
+        quotes = next(c for c in r["checks"] if c["check"] == "quotes seen")
+        self.assertFalse(quotes["ok"])
+        self.assertIn("a quote nobody returned", quotes["detail"])
+        self.assertTrue(next(c for c in r["checks"] if c["check"] == "expected observations")["ok"])
+        steps = (self.tmp / "st" / "REPORT.md").read_text(encoding="utf-8")
+        self.assertIn("refused", steps)
+
+
 class McpSurfaceTests(unittest.TestCase):
     def test_tools_registered_and_no_promotion_tool(self):
         from crew import server

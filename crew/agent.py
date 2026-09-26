@@ -59,7 +59,7 @@ TOOLS
 - list_dir(path=".")
 - read_file(path, start=1, lines=200)
 - search(pattern, path=".", max_hits=30)  (regex, case-insensitive, searches file contents)
-- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}
+- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}{lsp_tools}
 Relative paths resolve against the first read root.
 
 BUDGET: {max_requests} replies in total for this task, tool calls and submissions included. Submit before you run out.
@@ -215,8 +215,32 @@ def native_tool_call(res: dict) -> Optional[Tuple[str, dict]]:
     return None
 
 
-def _trim_old_results(messages: List[dict]) -> None:
+CHARS_PER_TOKEN = 3.5
+
+
+def _trim_old_results(messages: List[dict], context_tokens: Optional[int] = None) -> None:
+    """Shorten old tool results so the prompt stays small.
+
+    Without a context budget: keep the newest KEEP_FULL_RESULTS in full (the
+    rule until 2026-09-25). With one (personnel.json context_ceiling of the
+    member's window): keep as many of the newest results in full as fit under
+    it, oldest trimmed first, never fewer than KEEP_FULL_RESULTS. A 1M-window
+    member re-reading a file it was shown three turns ago was our trimming,
+    not its memory."""
     results = [m for m in messages if m.get("_result")]
+    if context_tokens:
+        limit = int(context_tokens * CHARS_PER_TOKEN)
+        total = sum(len(m["content"]) for m in messages)
+        for m in results[:-KEEP_FULL_RESULTS]:
+            if total <= limit:
+                break
+            if not m.get("_trimmed") and len(m["content"]) > TRIMMED_CHARS:
+                total -= len(m["content"]) - TRIMMED_CHARS
+                m["content"] = (m["content"][:TRIMMED_CHARS]
+                                + "\n...[older result trimmed; call the tool again "
+                                  "if you need it]")
+                m["_trimmed"] = True
+        return
     for m in results[:-KEEP_FULL_RESULTS]:
         if not m.get("_trimmed") and len(m["content"]) > TRIMMED_CHARS:
             m["content"] = (m["content"][:TRIMMED_CHARS]
@@ -225,15 +249,29 @@ def _trim_old_results(messages: List[dict]) -> None:
             m["_trimmed"] = True
 
 
+LSP_TOOLS = """
+- symbols(path)  (a language server's outline of a code file: classes, functions, methods with line numbers)
+- definition(path, name)  (where the symbol `name`, as used in that file, is defined)
+- references(path, name)  (every use of the symbol `name` found in that file)
+- diagnostics(path)  (a linter's errors and warnings for a code file)"""
+
+
 def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                expected_files: List[str], toolbox, grade: Callable[[Dict[str, str]], List[dict]],
                chat: Callable[[List[dict], int], dict], max_requests: int,
                max_tokens: int, fetch_enabled: bool,
-               log: Callable[[dict], None] = lambda e: None) -> dict:
+               log: Callable[[dict], None] = lambda e: None,
+               context_tokens: Optional[int] = None, addenda: str = "",
+               leash: Optional[dict] = None) -> dict:
+    leash = leash or {}
+    max_repeats = int(leash.get("max_repeats", MAX_REPEATS))
+    max_invalid = int(leash.get("max_invalid_in_a_row", MAX_INVALID_IN_A_ROW))
+    max_empty = int(leash.get("max_empty", MAX_EMPTY))
     system = SYSTEM_TEMPLATE.format(
         persona=persona, task_type=task_type, playbook=playbook.strip(),
         max_requests=max_requests, example_file=expected_files[0],
-        fetch_note="" if fetch_enabled else "  (disabled for this task)")
+        fetch_note="" if fetch_enabled else "  (disabled for this task)",
+        lsp_tools=LSP_TOOLS if getattr(toolbox, "lsp", None) else "") + addenda
     messages: List[dict] = [{"role": "system", "content": system},
                             {"role": "user", "content": task_text}]
     tracker = AttemptTracker()
@@ -250,7 +288,7 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
         if tokens >= max_tokens:
             stop_reason = "budget_tokens"
             break
-        _trim_old_results(messages)
+        _trim_old_results(messages, context_tokens)
         wire = [{"role": m["role"], "content": m["content"]} for m in messages]
         res = chat(wire, requests)
         requests += 1
@@ -293,7 +331,7 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
             log({"event": "reply", "n": requests, "kind": "empty",
                  "tokens": usage.get("total_tokens", 0),
                  "reasoning_chars": len(res.get("reasoning") or "")})
-            if empties >= MAX_EMPTY:
+            if empties >= max_empty:
                 stop_reason = "empty_replies"
                 break
             messages.append({"role": "assistant", "content": "(empty reply)"})
@@ -329,7 +367,7 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
 
         if kind == "invalid":
             invalid_run += 1
-            if invalid_run >= MAX_INVALID_IN_A_ROW:
+            if invalid_run >= max_invalid:
                 stop_reason = "contract_abandoned"
                 break
             messages.append({"role": "user", "content":
@@ -344,7 +382,7 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
             if calls[key] > 1:
                 repeats += 1
                 log({"event": "repeat", "call": key})
-                if repeats >= MAX_REPEATS:
+                if repeats >= max_repeats:
                     stop_reason = "loop_repeat"
                     break
                 messages.append({"role": "user", "content":
