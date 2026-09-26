@@ -173,13 +173,22 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
         # feedback a crew member gets on a retry.
         argv = [OPENCODE, "run", "-m", f"synthetic/{model_id}", "--format", "json",
                 "--dir", str(ws)] + (["-f", str(ws / "CONTRACT.md")] if first else ["--continue"])
+        # Not subprocess.run(timeout=): on Windows it kills only the direct child, the
+        # opencode.exe grandchild keeps the pipes open, and the wait never ends (Nemotron
+        # v3 hung 3 h past a 30 min timeout, 2026-09-26). On timeout, kill the whole tree.
+        p = subprocess.Popen(argv + [message], cwd=str(ws), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                             errors="replace", env=env)
         try:
-            p = subprocess.run(argv + [message], cwd=str(ws), capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=timeout_s, env=env)
-            return p.stdout, p.stderr, p.returncode
-        except subprocess.TimeoutExpired as e:
-            out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            return out, "timeout", -1
+            out, err = p.communicate(timeout=timeout_s)
+            return out, err, p.returncode
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+            try:
+                out, _ = p.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                out = ""
+            return out or "", "timeout", -1
 
     t0 = time.time()
     raw_all, err_all, rounds, steps, code = "", "", 0, [], 0

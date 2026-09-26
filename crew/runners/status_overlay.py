@@ -16,7 +16,9 @@ runs/crew/load/load.jsonl, so campaigns can be matched to machine stress later.
 
 Starts compact and ghosted (50% opaque, click-through). Hover + middle-click
 wakes it: full opacity, detailed, clickable, with the Review Desk one click away.
-It returns to ghost a few seconds after the cursor leaves.
+It returns to ghost a few seconds after the cursor leaves. Right-click while
+awake picks the corner it sits in (remembered in runs/crew/load/overlay.json),
+for when a tool underneath is hidden even by the ghost.
 
     pythonw C:/Users/user/ATLAS-api-harness/crew/runners/status_overlay.py
 """
@@ -32,6 +34,10 @@ sys.path.insert(0, str(REPO))
 
 RUNS = REPO / "runs" / "crew"
 LOAD_LOG = RUNS / "load" / "load.jsonl"
+OVERLAY_PREFS = RUNS / "load" / "overlay.json"
+CORNERS = {"top-left": "Top left", "top-right": "Top right",
+           "bottom-left": "Bottom left", "bottom-right": "Bottom right"}
+MARGIN = 8
 RECENT_S = 3 * 3600                  # a "running" file older than this is stale
 DESKTOP_TASKS = {"ui_sweep", "ahk_code_task", "ahk_code_tests"}   # these drive the screen
 BG, FG, DIM, ACCENT, OK, BAD = "#161A20", "#E8EAED", "#9AA4B2", "#FF9E3D", "#5BD675", "#FF6B6B"
@@ -196,7 +202,12 @@ def main():
     root.overrideredirect(True)                  # no title bar; never in the taskbar
     root.attributes("-topmost", True)
     root.configure(bg=BG)
-    root.geometry("+8+8")
+    try:
+        corner = json.loads(OVERLAY_PREFS.read_text(encoding="utf-8")).get("corner")
+    except Exception:  # noqa: BLE001 - no prefs yet
+        corner = None
+    state_corner = {"corner": corner if corner in CORNERS else "top-left"}
+    root.geometry(f"+{MARGIN}+{MARGIN}")
     state = {"awake": False, "last_inside": 0.0, "mb_down": False, "last_log": 0.0}
     frame = tk.Frame(root, bg=BG, padx=10, pady=8, highlightthickness=1,
                      highlightbackground=ACCENT)
@@ -309,7 +320,8 @@ def main():
              else "You can keep working - nothing here uses your screen")
             + (f"\nCPU {load.get('cpu', 0):.0f}%  mem {load.get('mem', 0):.0f}%  "
                f"workers {load.get('workers', 0)}   ({now:%H:%M:%S})"
-               if load and state["awake"] else "")))
+               if load and state["awake"] else "")
+            + ("\nright-click here: move to another corner" if state["awake"] else "")))
         if time.time() - state["last_log"] >= 30 and load:
             state["last_log"] = time.time()
             LOAD_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -317,10 +329,48 @@ def main():
                 fh.write(json.dumps({"ts": now.isoformat(timespec="seconds"), **load,
                                      "active_steps": len(steps), "review_waiting": waiting,
                                      "steps": [s["what"] for s in steps]}) + "\n")
+        root.update_idletasks()
+        place()
         if schedule:
             root.after(3000, refresh)
 
-    root.bind("<Button-3>", lambda _e: root.destroy())   # awake only (ghost passes clicks)
+    class RECT(ctypes.Structure):
+        _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long),
+                    ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+    def place():
+        """Pin the window to its corner of the work area (the screen minus the
+        taskbar); re-run after every refresh because the size changes."""
+        wa = RECT()
+        user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(wa), 0)   # SPI_GETWORKAREA
+        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
+        c = state_corner["corner"]
+        x = wa.l + MARGIN if c.endswith("left") else wa.r - w - MARGIN
+        y = wa.t + MARGIN if c.startswith("top") else wa.b - h - MARGIN
+        if (root.winfo_x(), root.winfo_y()) != (x, y):
+            root.geometry(f"+{x}+{y}")
+
+    def move_to(c):
+        state_corner["corner"] = c
+        try:
+            OVERLAY_PREFS.parent.mkdir(parents=True, exist_ok=True)
+            OVERLAY_PREFS.write_text(json.dumps({"corner": c}), encoding="utf-8")
+        except Exception:  # noqa: BLE001 - a lost preference is not worth a crash
+            pass
+        root.update_idletasks()
+        place()
+
+    menu = tk.Menu(root, tearoff=0)
+    for key, label in CORNERS.items():
+        menu.add_command(label=f"Move to {label.lower()}", command=lambda k=key: move_to(k))
+    menu.add_separator()
+    menu.add_command(label="Close overlay", command=root.destroy)
+
+    def on_right_click(e):
+        state["last_inside"] = time.time()
+        menu.tk_popup(e.x_root, e.y_root)
+
+    root.bind("<Button-3>", on_right_click)   # awake only (a ghost passes clicks through)
     root.update_idletasks()
     set_mode(False)                                     # start compact and ghosted
     refresh()
