@@ -205,7 +205,7 @@ class Crew:
         # every job says it is running and when it is likely done (crew/eta.py)
         from . import eta as _eta
         (jdir / "status.json").write_text(json.dumps({
-            "state": "running", "job": job_id, "member": job["assigned_to"],
+            "state": "running", "pid": os.getpid(), "job": job_id, "member": job["assigned_to"],
             "task_type": job["task_type"], "started": now_iso(),
             "eta": _eta.estimate(job["assigned_to"], f"crew:{job['task_type']}")},
             indent=1), encoding="utf-8")

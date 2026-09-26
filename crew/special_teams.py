@@ -186,7 +186,7 @@ def run_mission(mission: dict, chat=None, mcp=None, out_dir: Path = None) -> dic
     status_path = out_dir / "status.json"
 
     def status(state, **kw):
-        status_path.write_text(json.dumps({"mission": name, "state": state,
+        status_path.write_text(json.dumps({"mission": name, "state": state, "pid": os.getpid(),
                                            "at": dt.datetime.now().isoformat(timespec="seconds"),
                                            **kw}, indent=1), encoding="utf-8")
 

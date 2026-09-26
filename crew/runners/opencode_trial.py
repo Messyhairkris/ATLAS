@@ -20,6 +20,7 @@ telemetry ledger - OpenCode otherwise bypasses it (noted 2026-09-20).
 import argparse
 import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -138,7 +139,7 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
                                                  indent=1), encoding="utf-8")
     from crew import eta
     (home / "status.json").write_text(json.dumps({
-        "state": "running", "member": member,
+        "state": "running", "pid": os.getpid(), "member": member,
         "started": dt.datetime.now().isoformat(timespec="seconds"),
         "eta": eta.estimate(member, "crew:opencode_trial")}, indent=1), encoding="utf-8")
     deps = {Path(d).name: Path(d).read_text(encoding="utf-8")

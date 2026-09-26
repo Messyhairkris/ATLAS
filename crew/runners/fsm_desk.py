@@ -42,6 +42,26 @@ from aalpy.oracles import RandomWMethodEqOracle, WMethodEqOracle  # noqa: E402
 from crew.reviewdesk import review_rules  # noqa: E402
 from crew.runners import review_desk as rd  # noqa: E402
 
+import tkinter  # noqa: E402
+
+_RealTk = tkinter.Tk
+
+
+class _HiddenTk(_RealTk):
+    """A Tk root that is withdrawn, transparent and off-screen from its first
+    moment. (2026-09-26: withdrawing AFTER rd.Desk() let the window flash on
+    Kris's screen at every reset - hundreds of times. It is now hidden before
+    the Desk's own code runs, and every step checks it stayed hidden.)"""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.withdraw()
+        self.attributes("-alpha", 0.0)
+        self.geometry("+-32000+-32000")
+
+
+tkinter.Tk = _HiddenTk
+
 TIME = re.compile(r"\d{1,2}:\d{2}(:\d{2})?")
 
 
@@ -72,8 +92,7 @@ class DeskSUL(SUL):
             items.append({"item_id": f"item{i}", "title": f"item {i}", "path": str(f),
                           "origin": "fsm", "state": "pending", "decision": "", "note": ""})
         rd.save_queue(items)
-        self.desk = rd.Desk(rd.load_queue())
-        self.desk.root.withdraw()                # never drawn
+        self.desk = rd.Desk(rd.load_queue())     # its Tk root is _HiddenTk: never drawn
         self.offers = []
         desk = self.desk
         desk.modal = lambda batch, complete: self.offers.append(
@@ -91,6 +110,9 @@ class DeskSUL(SUL):
     def step(self, letter):
         self.steps += 1
         d = self.desk
+        if d.root.winfo_viewable() or d.root.state() != "withdrawn":
+            raise SystemExit("the desk window became visible - stopping so nothing "
+                             "appears on the user's screen")
         before = len(self.offers)
         if letter.startswith("select"):
             d.select(int(letter[-1]) - 1)
@@ -132,7 +154,11 @@ def main(n_items: int = 1):
                          f"not the sandbox {SANDBOX}")
     out = REPO / "runs" / "crew" / "fsm" / f"review-desk-{n_items}-item"
     out.mkdir(parents=True, exist_ok=True)
-    (out / "status.json").write_text(json.dumps({"state": "running",
+    (out / "status.json").write_text(json.dumps({"state": "running", "pid": os.getpid(),
+                                                 "you_might_see": "nothing - hidden Review Desk "
+                                                 "windows are created and destroyed off-screen; "
+                                                 "if one ever flashes, this run is why (it stops "
+                                                 "itself if a window becomes visible)",
                                                  "started": time.strftime("%H:%M:%S")}))
     sul = DeskSUL(n_items)
     alphabet = ["note_empty", "note_short", "note_ok", "approve", "reject", "question",

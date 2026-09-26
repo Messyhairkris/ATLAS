@@ -84,7 +84,7 @@ def learn(spec: dict) -> dict:
     out = REPO / "runs" / "crew" / "fsm" / spec["name"]
     out.mkdir(parents=True, exist_ok=True)
     status = out / "status.json"
-    status.write_text(json.dumps({"state": "running", "started": time.strftime("%H:%M:%S")}))
+    status.write_text(json.dumps({"state": "running", "pid": __import__("os").getpid(), "started": time.strftime("%H:%M:%S")}))
     server = subprocess.Popen([sys.executable, "-m", "http.server", str(spec["port"]), "--bind",
                                "127.0.0.1", "--directory", spec["serve_dir"]],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
