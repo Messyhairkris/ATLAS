@@ -75,9 +75,11 @@ def _p75(values: List[int]) -> int:
 def working_context_tokens(data: dict, name: str, ceiling: Optional[float] = None) -> int:
     pol = data.get("context_policy") or {}
     frac = ceiling if ceiling is not None else float(pol.get("context_ceiling", 0.5))
-    frac = min(frac, float(pol.get("context_ceiling_max", 0.75)))
+    frac = min(frac, float(pol.get("context_ceiling_max", 1.0)))
     window = int(member(data, name).get("context_window") or 131072)
-    window = min(window, int(pol.get("practical_cap_tokens", 200000)))
+    cap = pol.get("practical_cap_tokens")          # None = the whole window (2026-09-26)
+    if cap:
+        window = min(window, int(cap))
     return int(window * frac)
 
 
@@ -110,7 +112,11 @@ def budget_for(data: dict, name: str, task_type: str,
         p90 = used[min(len(used) - 1, math.ceil(0.9 * len(used)) - 1)]
         max_tokens = min(upper, max(60000, int(2 * p90 * factor)))
     else:
-        max_tokens = min(upper, max(60000, int(requests * ctx * 0.15 * factor)))
+        # per request: 15% of the working context, but never more than 30k - with
+        # full context (2026-09-26) a history-less 1M-window member would
+        # otherwise get millions of tokens before its first measured job
+        per_request = min(ctx * 0.15, 30000)
+        max_tokens = min(upper, max(60000, int(requests * per_request * factor)))
     pol = data.get("context_policy") or {}
     obs_chars = int(min(24000, max(6000, ctx * float(pol.get("chars_per_token", 3.5)) / 12)))
     return {"max_requests": requests, "max_tokens": max_tokens,

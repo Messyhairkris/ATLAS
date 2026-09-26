@@ -1,0 +1,36 @@
+{
+  "name": "outline",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "max_requests": 40,
+  "workspace_subdir": "outline",
+  "goal": "Ship outline.py, per crew/contracts/outline.md: a structural outline of Python and Markdown source text as Entry records, plus render() to print it - without ast and without reading files. Designed by Kimi (special teams, 2026-09-26); unified by Claude: team set from PERSONNEL.md posts (Kimi could not read the roster).",
+  "teams": {
+    "Outline": {
+      "author": "Barry",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "outline",
+      "team": "Outline",
+      "module": "outline.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/outline.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_outline.py"
+      ],
+      "api": [
+        "Entry",
+        "outline",
+        "render"
+      ],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "Read crew/contracts/outline.md end to end, including the Python rules, Markdown rules and render format, then HOUSE_STYLE.md. Implement outline.py exactly as specified: the frozen Entry dataclass, outline(text, kind) and render(entries). Do not use ast, open, or any import beyond dataclasses, re and __future__.annotations. The traps are spelled out in the numbered rules: keyword-first matching with an indent stack for depth, tab = next multiple of 8, triple-quote state so docstring bodies are invisible, fence toggling for Markdown, closing-hash stripping, and ValueError for any unknown kind (case-sensitive). Follow them literally and trace the contract's Examples section by hand before staging.",
+      "test_instructions": "Write pytest tests in test_outline.py, one contract rule per test, named test_rule_*. Use exact expected Entry lists and exact render strings - never 'is not None'. Use pytest.raises for the unknown-kind rules. Cover every numbered rule of crew/contracts/outline.md, including the edge cases (decorators, comments, docstrings, tabs, setext, closing hashes, unclosed fences, 4-space indent, 7 hashes). At least 20 test functions."
+    }
+  ]
+}

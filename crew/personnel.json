@@ -2,10 +2,10 @@
   "comment": "The building: one personnel file per crew member, and the posts (roles) they hold. Started 2026-09-25 from public reviews (sources per member) and our own job history (190 jobs with results). 'measured' lines are ours and outrank 'public' ones. Budgets come from crew/personnel.py: a job's request budget is what that member's PASSING jobs of that type have needed (p75 + headroom) once there are enough of them, else the task type's baseline; its context is capped at context_ceiling of the member's window. quirks.addenda are appended to the member's system prompt; quirks.leash overrides the agent loop's stop rules. The Inspector (crew/inspector.py) proposes changes to budgets, leash and addenda from failure signatures and runs them as trials; it never edits gates, hidden tests, contracts or deny globs.",
 
   "context_policy": {
-    "comment": "Every model tested (Chroma 'Context Rot', 18 models) got worse as input grew, at every length, well before the window was full - so this is a CEILING, never a target to fill. What the crew suffered from until now was the opposite: 3 full tool results of 6,000 chars for every member, whatever its window. Kris 2026-09-25: allow 1/2 to 3/4 of the window; start at 1/2 and let trials raise it.",
-    "context_ceiling": 0.5,
-    "context_ceiling_max": 0.75,
-    "practical_cap_tokens": 200000,
+    "comment": "Kris 2026-09-26: full context. The ceiling (1/2 of the window, capped at 200k) was a second guard against hallucination, but the gates already catch wrong information, and the token budget does the cost control - so every member may use its whole window when the assignment warrants it. To reinstate a cap: set context_ceiling (e.g. 0.5) and practical_cap_tokens (e.g. 200000). The Inspector flags any FAILED job that ran above 60% of the member's window (signature high_fill_failure) - that is the evidence for bringing the cap back. Background: Chroma 'Context Rot' found every model degrades as input grows.",
+    "context_ceiling": 1.0,
+    "context_ceiling_max": 1.0,
+    "practical_cap_tokens": null,
     "chars_per_token": 3.5
   },
 

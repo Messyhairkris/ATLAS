@@ -37,9 +37,12 @@ Sources are in each member's `public.sources` in `personnel.json`.
 - **Requests**: p75 of what this member's *passing* jobs of this type needed, + 2,
   once there are 3 or more; the task type's baseline before that. Hoss gets 3 for a
   Python module (he needs 1.4), Qwen 19 for research, a log clerk 5.
-- **Working context**: `context_ceiling` x the member's window (default 1/2, max 3/4,
-  capped at 200k). Old tool results are trimmed only once the prompt passes it;
-  until 2026-09-25 every member kept 3 results of 6,000 characters whatever its window.
+- **Working context: the member's whole window** (Kris, 2026-09-26). Old tool results
+  are trimmed only once the prompt passes it. The earlier ceiling (1/2 of the window,
+  capped at 200k) was a second guard against hallucination on top of the gates, and
+  the token budget already controls cost, so it was removed. The Inspector flags any
+  failed job that ran above 60% of the window (`high_fill_failure`); if those recur,
+  reinstate `context_ceiling` / `practical_cap_tokens` in `personnel.json`.
 - **Tokens**: twice the member's 90th-percentile passing job (x `token_factor` for
   verbose thinkers - Qwen 2.0); a runaway stop, not a diet.
 

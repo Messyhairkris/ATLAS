@@ -245,6 +245,7 @@ def _run(mission, chat, mcp, out_dir, shots, transcript, log, status, st_schema,
     cap = float(mission.get("credit_cap_usd", 1.0))
     observed = []                         # every text a tool returned: the evidence
     steps_log, final, stop, turns, tokens = [], None, None, 0, 0
+    tools = []
     try:
         offered = [t for t in mcp.tools()
                    if t["name"] in mission["allowed_tools"] and t["name"] not in NEVER]
@@ -270,7 +271,10 @@ def _run(mission, chat, mcp, out_dir, shots, transcript, log, status, st_schema,
             "middle dots) with the character U+FFFD; that is a transport artifact, not "
             "a defect of the page - do not report it.\n"
             f"BUDGET: {mission['max_steps']} tool calls, of which at most "
-            f"{mission['max_actions']} clicks/typing. Plan before you act.")
+            f"{mission['max_actions']} clicks/typing. Plan before you act."
+            + ("\nYOU MAY READ (use these full paths; relative paths resolve against the "
+               "first):\n" + "\n".join(f"- {r}" for r in mission.get("read_roots", []))
+               if mission.get("provider") == "local" else ""))
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": mission["goal"]}]
         status("running", steps=0)
@@ -391,7 +395,15 @@ def _run(mission, chat, mcp, out_dir, shots, transcript, log, status, st_schema,
         transcript.close()
 
     # -- grading: what the member claims must be what the tools returned --------------
-    corpus = re.sub(r"\s+", " ", "\n".join(observed))
+    # Evidence = what tools returned, plus (file missions) the member's own staged
+    # files and the tool names: quoting your own contract's API is not a
+    # hallucination (2026-09-26: Kimi's campaign design failed on `render(entries)`).
+    extra = [t["function"]["name"] for t in tools] if tools else []
+    staged_dir = out_dir / "staged"
+    if staged_dir.is_dir():
+        extra += [p.read_text(encoding="utf-8", errors="replace")
+                  for p in staged_dir.rglob("*") if p.is_file()]
+    corpus = re.sub(r"\s+", " ", "\n".join(observed + extra))
     unseen_quotes = [q for q in QUOTE.findall(final or "") if len(q.strip()) >= 12
                      and re.sub(r"\s+", " ", q).strip() not in corpus]
     missing = [e for e in mission.get("expect_observed", []) if e not in corpus]

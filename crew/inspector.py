@@ -72,7 +72,7 @@ def active_trial(cfg, member: str, task_type: str) -> Optional[dict]:
 
 # -- signatures -------------------------------------------------------------------------
 
-def signatures(job: dict, transcript: List[dict]) -> List[dict]:
+def signatures(job: dict, transcript: List[dict], window: int = 0) -> List[dict]:
     r = job.get("result") or {}
     budget = job.get("budget") or {}
     sig: List[dict] = []
@@ -98,12 +98,20 @@ def signatures(job: dict, transcript: List[dict]) -> List[dict]:
     repeats = sum(1 for e in transcript if e.get("event") == "repeat")
     if repeats >= 2 or stop == "loop_repeat":
         add("repeat_calls", f"{repeats} repeated identical tool calls")
-    reads = Counter(json.dumps([e.get("args", {}).get("path")])
+    reads = Counter(json.dumps([(e.get("args") or {}).get("path")])
                     for e in transcript if e.get("event") == "tool"
                     and e.get("tool") == "read_file")
     reread = [json.loads(k)[0] for k, n in reads.items() if n >= 3]
     if reread:
         add("rereading", f"read the same file 3+ times: {', '.join(map(str, reread[:3]))}")
+    # Full context (Kris, 2026-09-26): the ceiling is gone, so watch for the case
+    # it was meant to prevent - a FAILED job that ran with the window mostly full.
+    # Enough of these is the evidence for reinstating context_ceiling.
+    peak = max((int(e.get("tokens") or 0) for e in transcript if e.get("event") == "reply"),
+               default=0)
+    if window and not r.get("passed") and peak > 0.6 * window:
+        add("high_fill_failure", f"failed with a request of {peak:,} tokens - "
+            f"{peak / window:.0%} of the {window:,}-token window")
     subs = [e for e in transcript if e.get("event") == "submission"]
     failed_by_sub = [{s["rung"] for s in e.get("steps", []) if not s["ok"]} for e in subs]
     if len(subs) >= 2 and not r.get("passed"):
@@ -121,8 +129,11 @@ def signatures(job: dict, transcript: List[dict]) -> List[dict]:
 # -- refinements ------------------------------------------------------------------------
 
 TRIAL_FOR = {"budget_exhausted": ("extra_requests",), "last_request_pass": ("extra_requests",),
-             "token_ceiling": ("token_factor",), "rereading": ("context_ceiling",)}
+             "token_ceiling": ("token_factor",)}
 PROPOSAL_FOR = {
+    # with full context, re-reading is a habit, not starvation (2026-09-26)
+    "rereading": ("house_note", "the member re-read the same file 3+ times with its whole window available: add a 'search first, read only the hits; you still have what you read' note, or preload an outline"),
+    "high_fill_failure": ("context_policy", "a failed job ran with the window more than 60% full: if this recurs for this member, reinstate context_ceiling / practical_cap_tokens in personnel.json"),
     "reply_ceiling": ("config", "raise max_tokens_by_member for this member (its thinking is cut off before it answers)"),
     "empty_replies": ("house_note", "add a 'think briefly; the answer channel must hold the tool call or SUBMIT' note"),
     "protocol_misfit": ("post", "this member does not follow the text tool protocol for this task: move it off this post, or give it native tool calling (special teams)"),
@@ -208,7 +219,9 @@ def inspect_job(cfg, job: dict, transcript_path: Path) -> dict:
             if len(t["jobs"]) >= TRIAL_WINDOW:
                 _score(t)
     # 2. signatures -> trials (bounded, automatic) and proposals (PA)
-    sigs = signatures(job, transcript)
+    from .personnel import load as load_personnel, member as personnel_member
+    window = int(personnel_member(load_personnel(), member).get("context_window") or 0)
+    sigs = signatures(job, transcript, window)
     started, proposed = [], []
     for s in sigs:
         if s.get("info"):
