@@ -1759,6 +1759,68 @@ class RescueAndHeavyQueueTests(CrewTestCase):
         self.assertAlmostEqual((worst - now).total_seconds() / 60, 80, delta=1)
 
 
+class WatchdogTests(unittest.TestCase):
+    """2026-09-26: a hung run and a 3-hour silent learner were found only by chance.
+    The watchdog marks lost runs, flags stalled/overdue ones, and stops only runs the
+    crew started."""
+
+    def setUp(self):
+        from crew.runners import watchdog
+        self.wd = watchdog
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.p = self.tmp / "status.json"
+        self.p.write_text("{}", encoding="utf-8")
+
+    def test_verdicts(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        a = self.wd.assess
+        self.assertEqual(a({}, self.p, now, alive=False)["verdict"], "lost")
+        fresh = {"heartbeat": (now - dt.timedelta(seconds=20)).isoformat()}
+        self.assertEqual(a(fresh, self.p, now, True)["verdict"], "ok")
+        stale = {"heartbeat": (now - dt.timedelta(minutes=5)).isoformat()}
+        self.assertEqual(a(stale, self.p, now, True), {"verdict": "stalled", "kill": False,
+                                                       "why": "no heartbeat for 5 min"})
+        dead = {"heartbeat": (now - dt.timedelta(minutes=20)).isoformat()}
+        self.assertTrue(a(dead, self.p, now, True)["kill"])
+        started = now - dt.timedelta(hours=2)
+        late = {"started": started.isoformat(timespec="seconds"),
+                "eta": {"worst_by": (started + dt.timedelta(minutes=10)).strftime("%H:%M"),
+                        "worst_minutes": 10}}
+        v = a(late, self.p, now, True)
+        self.assertEqual(v["verdict"], "overdue")
+        self.assertTrue(v["kill"])                        # 110 min late > 30 min grace
+
+    def test_scan_marks_a_dead_run_lost_and_never_kills_a_stranger(self):
+        import datetime as dt
+        runs = self.tmp / "runs"
+        (runs / "fsm" / "a").mkdir(parents=True)
+        (runs / "fsm" / "b").mkdir(parents=True)
+        dead_pid = 999999
+        (runs / "fsm" / "a" / "status.json").write_text(json.dumps(
+            {"state": "running", "pid": dead_pid}), encoding="utf-8")
+        old = (dt.datetime.now() - dt.timedelta(minutes=30)).isoformat()
+        (runs / "fsm" / "b" / "status.json").write_text(json.dumps(
+            {"state": "running", "pid": os.getpid(), "heartbeat": old}), encoding="utf-8")
+        saved = (self.wd.RUNS, self.wd.HOME, self.wd.ours, self.wd.kill_tree)
+        killed = []
+        self.wd.RUNS, self.wd.HOME = runs, runs / "watchdog"
+        self.wd.ours = lambda proc: False                   # this test process is a stranger
+        self.wd.kill_tree = lambda pid: killed.append(pid) or True
+        try:
+            report = self.wd.scan(act=True)
+        finally:
+            self.wd.RUNS, self.wd.HOME, self.wd.ours, self.wd.kill_tree = saved
+        by_run = {f["run"].replace("\\", "/"): f for f in report["flagged"]}
+        self.assertEqual(by_run["fsm/a"]["action"], "marked lost")
+        self.assertEqual(json.loads((runs / "fsm" / "a" / "status.json").read_text())["state"],
+                         "lost")
+        self.assertEqual(by_run["fsm/b"]["verdict"], "stalled")
+        self.assertIn("not a crew-started process", by_run["fsm/b"]["action"])
+        self.assertEqual(killed, [])
+
+
 class McpSurfaceTests(unittest.TestCase):
     def test_tools_registered_and_no_promotion_tool(self):
         from crew import server

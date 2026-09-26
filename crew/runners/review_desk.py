@@ -56,9 +56,17 @@ WARN = "#FFC857"
 DECISION_COLOUR = {"approve": OK, "reject": BAD, "question": WARN, "defer": DIM}
 
 
+_HOME_CACHE = {}
+
+
 def home() -> Path:
-    from crew.config import load_config
-    return Path(load_config().state_home) / "review"
+    """Parsing the crew config on every call made each decision cost ~60 ms of
+    path resolving (75 calls per 5 decisions, 2026-09-26). Cached per CREW_HOME."""
+    key = os.environ.get("CREW_HOME", "")
+    if key not in _HOME_CACHE:
+        from crew.config import load_config
+        _HOME_CACHE[key] = Path(load_config().state_home) / "review"
+    return _HOME_CACHE[key]
 
 
 def queue_file() -> Path:
@@ -534,8 +542,9 @@ class Desk:
         self.scale = max(-3, min(14, self.scale + step))
         for key, base in (("code", 10), ("body", 10), ("list", 9)):
             self.fonts[key].configure(size=base + self.scale)
-        self.settings["font_scale"] = self.scale
-        save_settings(self.settings)
+        if self.settings.get("font_scale") != self.scale:   # not on every launch
+            self.settings["font_scale"] = self.scale
+            save_settings(self.settings)
         if step:
             self.say(f"font {10 + self.scale} point "
                      f"({self.scale:+d}) - Ctrl + wheel, or A- / A+", DIM)

@@ -145,7 +145,18 @@ def gather():
             if not s or s.get("state") != "running" or not _fresh(p, s):
                 continue
             likely, worst = _eta_times(s.get("eta"))
-            steps.append({"what": f"{s.get('member') or s.get('mission') or p.parent.name}",
+            what = f"{s.get('member') or s.get('mission') or p.parent.name}"
+            if s.get("heartbeat"):                 # runs that report progress (fsm_desk)
+                try:
+                    age = (dt.datetime.now() - dt.datetime.fromisoformat(s["heartbeat"])).seconds
+                except ValueError:
+                    age = -1
+                what += (f" - {s.get('stage', '?')}, {s.get('steps', 0)} steps, "
+                         f"{s.get('steps_per_s', 0)}/s, heartbeat {age}s ago")
+                if s.get("time_limit_min") and not worst:
+                    t0 = _at_today(str(s.get("started", ""))[:5])
+                    worst = t0 + dt.timedelta(minutes=s["time_limit_min"]) if t0 else None
+            steps.append({"what": what,
                           "group": f"{kind}: {p.parent.name}"[:48], "likely": likely,
                           "worst": worst, "queued_minutes": 0, "desktop": False, "note": s.get("you_might_see", ""),
                           "started": (s.get("started") or "")[-8:-3]})
@@ -300,7 +311,25 @@ def main():
                 set_mode(False)
         root.after(100, poll)
 
+    wd = {"report": {}, "last": 0.0}
+
+    def watchdog_tick():
+        """Every minute, in the background: the watchdog marks lost runs, flags stalled
+        or overdue ones, and stops crew-started runs far past their limits."""
+        import threading
+
+        def run():
+            try:
+                from crew.runners import watchdog
+                wd["report"] = watchdog.scan(act=True)
+            except Exception:  # noqa: BLE001 - the overlay must never crash
+                pass
+        if time.time() - wd["last"] >= 60:
+            wd["last"] = time.time()
+            threading.Thread(target=run, daemon=True).start()
+
     def refresh(schedule=True):
+        watchdog_tick()
         try:
             steps = gather()
         except Exception:  # noqa: BLE001 - the overlay must never crash
@@ -334,12 +363,19 @@ def main():
                 note = f"\n   you might see: {s['note']}" if s.get("note") else ""
                 lines.append(f"{s['what'][:34]:<34} {eta}{q}\n   {s['group']}{note}")
             body.config(text="\n".join(lines) if lines else "nothing running")
+            flagged = (wd["report"] or {}).get("flagged") or []
             review.config(text=(f"NEEDS YOU: {waiting} item(s) in the Review Desk\n"
                                 + "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(titles))
-                                if waiting else "Nothing waiting for your review."))
+                                if waiting else "Nothing waiting for your review.")
+                          + "".join(f"\nWATCHDOG: {f['run']} {f['verdict']} - {f['why']}"
+                                    + (f" ({f['action']})" if f.get("action") else "")
+                                    for f in flagged[:4]))
         else:
             body.config(text="hover here + middle-click to expand")
-            review.config(text=f"NEEDS YOU: {waiting} to review" if waiting else "")
+            nflag = len((wd["report"] or {}).get("flagged") or [])
+            review.config(text=(f"NEEDS YOU: {waiting} to review" if waiting else "")
+                          + (("\n" if waiting else "") + f"WATCHDOG: {nflag} run(s) flagged"
+                             if nflag else ""))
         try:
             load = load_sample()
         except Exception:  # noqa: BLE001

@@ -18,9 +18,17 @@ long enough - the three classes review_rules.validate treats differently.
 One review item = one component; the paper's answer to state explosion is to
 learn components separately.
 
-  python C:/Users/user/ATLAS-api-harness/crew/runners/fsm_desk.py [items=1]
+  python C:/Users/user/ATLAS-api-harness/crew/runners/fsm_desk.py [items=1] [--max-minutes 90]
+
+Trackable from outside (Kris 2026-09-26: "If this is going to be a process we rely
+on it needs to be dependable, and trackable"): status.json is rewritten every few
+seconds with a heartbeat, stage, counts and speed; progress.log keeps one line per
+update; a crash writes state "failed" with the reason and error.log with the
+traceback; --max-minutes stops it cleanly and keeps the best map found so far.
 """
 
+import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -28,6 +36,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -62,13 +71,75 @@ class _HiddenTk(_RealTk):
 
 tkinter.Tk = _HiddenTk
 
+# for_agent.json is the agent's summary, rewritten on every save. The learner only
+# observes what the window shows, never this file, and each rewrite cost ~200 ms
+# waiting on the virus scanner (2026-09-26: 0.8 steps/s). Skipped in the sandbox only.
+rd.write_digest = lambda items: {}
+
 TIME = re.compile(r"\d{1,2}:\d{2}(:\d{2})?")
+HEARTBEAT_S = 5
+
+
+class TimeLimit(Exception):
+    pass
+
+
+class Tracker:
+    """Everything an outside observer needs: status.json (overwritten, with a
+    heartbeat) and progress.log (appended)."""
+
+    def __init__(self, out: Path, n_items: int, max_minutes: float):
+        self.out, self.n, self.max_s = out, n_items, max_minutes * 60
+        self.t0 = time.time()
+        self.last = 0.0
+        self.stage = "starting"
+        self.states = None
+        self.sul = None
+        (out / "progress.log").write_text("", encoding="utf-8")
+
+    def base(self) -> dict:
+        el = time.time() - self.t0
+        sul = self.sul
+        steps = sul.steps if sul else 0
+        return {"pid": os.getpid(), "component": f"review desk, {self.n} item(s)",
+                "started": time.strftime("%H:%M:%S", time.localtime(self.t0)),
+                "heartbeat": dt.datetime.now().isoformat(timespec="seconds"),
+                "stage": self.stage, "elapsed_min": round(el / 60, 1),
+                "steps": steps, "resets": sul.resets if sul else 0,
+                "steps_per_s": round(steps / el, 1) if el > 1 else 0,
+                "states_found": self.states, "time_limit_min": round(self.max_s / 60),
+                "you_might_see": "nothing - hidden Review Desk windows are created and "
+                                 "destroyed off-screen; if one ever flashes, this run is why "
+                                 "(it stops itself if a window becomes visible)"}
+
+    def beat(self, force: bool = False) -> None:
+        now = time.time()
+        if self.max_s and now - self.t0 > self.max_s:
+            raise TimeLimit()
+        if not force and now - self.last < HEARTBEAT_S:
+            return
+        self.last = now
+        s = {"state": "running", **self.base()}
+        _atomic(self.out / "status.json", s)
+        with open(self.out / "progress.log", "a", encoding="utf-8") as fh:
+            fh.write(f"{s['heartbeat']} {self.stage:10} steps={s['steps']} "
+                     f"resets={s['resets']} {s['steps_per_s']}/s states={self.states}\n")
+
+    def finish(self, state: str, **extra) -> None:
+        _atomic(self.out / "status.json", {"state": state, **self.base(), **extra})
+
+
+def _atomic(path: Path, data: dict) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 class DeskSUL(SUL):
-    def __init__(self, n_items: int):
+    def __init__(self, n_items: int, tracker: "Tracker" = None):
         super().__init__()
         self.n = n_items
+        self.tracker = tracker
         self.desk = None
         self.offers = []
         self.steps = self.resets = 0
@@ -110,6 +181,8 @@ class DeskSUL(SUL):
 
     def step(self, letter):
         self.steps += 1
+        if self.tracker:
+            self.tracker.beat()
         d = self.desk
         if d.root.winfo_viewable() or d.root.state() != "withdrawn":
             raise SystemExit("the desk window became visible - stopping so nothing "
@@ -148,46 +221,73 @@ class DeskSUL(SUL):
                           + ([f"offer:{self.offers[-1]}"] if offered else []))
 
 
-def main(n_items: int = 1):
+def main(n_items: int = 1, max_minutes: float = 90):
     # hard stop: the desk must be writing into the throwaway home, never the real queue
     if SANDBOX.resolve() not in rd.home().resolve().parents:   # resolve both: 8.3 vs long names
         raise SystemExit(f"refusing to run: the desk would write to {rd.home()}, "
                          f"not the sandbox {SANDBOX}")
     out = REPO / "runs" / "crew" / "fsm" / f"review-desk-{n_items}-item"
     out.mkdir(parents=True, exist_ok=True)
-    (out / "status.json").write_text(json.dumps({"state": "running", "pid": os.getpid(),
-                                                 "you_might_see": "nothing - hidden Review Desk "
-                                                 "windows are created and destroyed off-screen; "
-                                                 "if one ever flashes, this run is why (it stops "
-                                                 "itself if a window becomes visible)",
-                                                 "started": time.strftime("%H:%M:%S")}))
-    sul = DeskSUL(n_items)
+    for stale in ("model.dot", "result.json", "error.log"):
+        (out / stale).unlink(missing_ok=True)
+    tracker = Tracker(out, n_items, max_minutes)
+    sul = DeskSUL(n_items, tracker)
+    tracker.sul = sul
+    tracker.beat(force=True)
     alphabet = ["note_empty", "note_short", "note_ok", "approve", "reject", "question",
                 "defer", "undecide", "send"] + [f"select{i}" for i in range(1, n_items + 1)
                                                  if n_items > 1]
-    t0 = time.time()
-    # explore with random W-method walks, then certify: W-method is complete for any
-    # desk with at most (found + 1) states
-    explore = RandomWMethodEqOracle(alphabet, sul, walks_per_state=30, walk_len=10)
-    model = run_Lstar(alphabet, sul, explore, automaton_type="mealy", print_level=0)
-    found = len(model.states)
-    certify = WMethodEqOracle(alphabet, sul, max_number_of_states=found + 1)
-    model = run_Lstar(alphabet, sul, certify, automaton_type="mealy", print_level=0)
-    (out / "model.dot").write_text(str(model), encoding="utf-8")
-    result = {"component": f"review desk, {n_items} item(s)", "states": len(model.states),
-              "states_after_exploring": found, "certified_up_to": found + 1,
+    model, certified = None, False
+    try:
+        # explore with random W-method walks, then certify: W-method is complete for
+        # any desk with at most (found + 1) states
+        tracker.stage = "exploring"
+        explore = RandomWMethodEqOracle(alphabet, sul, walks_per_state=30, walk_len=10)
+        model = run_Lstar(alphabet, sul, explore, automaton_type="mealy", print_level=0)
+        tracker.states = len(model.states)
+        (out / "model.dot").write_text(str(model), encoding="utf-8")  # kept if certify stops
+        tracker.stage = "certifying"
+        tracker.beat(force=True)
+        certify = WMethodEqOracle(alphabet, sul, max_number_of_states=tracker.states + 1)
+        model = run_Lstar(alphabet, sul, certify, automaton_type="mealy", print_level=0)
+        certified = True
+        state = "finished"
+    except TimeLimit:
+        state = "stopped: time limit"
+    except BaseException as exc:                     # noqa: BLE001 - recorded, then re-raised
+        (out / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        tracker.finish("failed", error=f"{type(exc).__name__}: {exc}"[:500],
+                       error_log=str(out / "error.log"))
+        _cleanup(sul)
+        raise
+    if model is not None:
+        (out / "model.dot").write_text(str(model), encoding="utf-8")
+    result = {"component": f"review desk, {n_items} item(s)",
+              "states": len(model.states) if model else None,
+              "states_after_exploring": tracker.states, "certified": certified,
+              "certified_up_to": (tracker.states + 1) if certified else None,
               "alphabet": alphabet, "steps": sul.steps, "resets": sul.resets,
-              "seconds": round(time.time() - t0, 1),
+              "seconds": round(time.time() - tracker.t0, 1),
               "note_classes": {"short": len(sul.short), "long": len(sul.long),
-                               "MIN_NOTE_CHARS": review_rules.MIN_NOTE_CHARS},
-              "sandbox": str(SANDBOX)}
+                               "MIN_NOTE_CHARS": review_rules.MIN_NOTE_CHARS}}
     (out / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
-    (out / "status.json").write_text(json.dumps({"state": "finished", **result}))
-    if sul.desk is not None:
-        sul.desk.root.destroy()
-    shutil.rmtree(SANDBOX, ignore_errors=True)
+    tracker.finish(state, result=str(out / "result.json"))
+    _cleanup(sul)
     return result
 
 
+def _cleanup(sul) -> None:
+    try:
+        if sul.desk is not None:
+            sul.desk.root.destroy()
+    except Exception:  # noqa: BLE001
+        pass
+    shutil.rmtree(SANDBOX, ignore_errors=True)
+
+
 if __name__ == "__main__":
-    print(json.dumps(main(int(sys.argv[1]) if len(sys.argv) > 1 else 1), indent=1))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("items", nargs="?", type=int, default=1)
+    ap.add_argument("--max-minutes", type=float, default=90)
+    a = ap.parse_args()
+    print(json.dumps(main(a.items, a.max_minutes), indent=1))
