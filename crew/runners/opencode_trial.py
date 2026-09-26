@@ -96,6 +96,13 @@ def _grade(ws: Path, task: dict, deps: dict) -> list:
     mod = ws / task["module"]
     if not mod.is_file():
         return [{"rung": "output", "ok": False, "detail": f"{task['module']} was not written"}]
+    # the same mechanical fixes the crew route applies before gating (em dashes,
+    # curly quotes...) - Kris's rule: mechanical fixes never go back to a model.
+    # Nemotron's OpenCode module failed only on one em dash before this.
+    from crew import autofix
+    fixed, notes = autofix.apply({mod.name: mod.read_text(encoding="utf-8")}, "", None)
+    if notes:
+        mod.write_text(fixed[mod.name], encoding="utf-8")
     src = mod.read_text(encoding="utf-8")
     dep_names = sorted(n[:-3] for n in deps)
     steps = [gates.ascii_only(src, mod.name), gates.module_is_safe(src, mod.name, dep_names),
@@ -150,6 +157,10 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     import os
     from providers.registry import _get_provider, _resolve_secret
     env = dict(os.environ)
+    # OpenCode caps output at 32,000 tokens internally whatever the model config
+    # says (Barry hit "length" at exactly 32000 with limit.output 65536); this
+    # variable lifts it to the member's real ceiling.
+    env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(reply)
     if not env.get("SYNTHETIC_API_KEY"):
         key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
         if key:

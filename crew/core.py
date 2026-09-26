@@ -65,11 +65,26 @@ def _default_chat(model: str, job_id: str, task_type: str, persona: str,
     def chat(messages: List[dict], n: int) -> dict:
         renew()
         os.environ["ATLAS_CHAT_MODEL"] = model
-        with telemetry_context(run_id=job_id, duty=f"crew:{task_type}",
-                               task_id=job_id, role="junior",
-                               persona=persona, attempt=n):
-            return chat_completion("", messages=messages, temperature=0.2,
-                                   max_tokens=reply_tokens, timeout=900.0)
+        # A provider 5xx or a dropped connection is the provider's hiccup, not the
+        # member's failure: retry with back-off before giving up. (2026-09-26:
+        # one 500 from Synthetic killed Larry's whole job.) Each try is a real,
+        # logged request; 4xx errors are ours and are not retried.
+        for attempt, wait in enumerate((0, 15, 45)):
+            if wait:
+                time.sleep(wait)
+            try:
+                with telemetry_context(run_id=job_id, duty=f"crew:{task_type}",
+                                       task_id=job_id, role="junior",
+                                       persona=persona, attempt=n):
+                    return chat_completion("", messages=messages, temperature=0.2,
+                                           max_tokens=reply_tokens, timeout=900.0)
+            except Exception as e:  # noqa: BLE001 - classified below
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                transient = (status is not None and status >= 500) or type(e).__name__ in (
+                    "ConnectError", "ReadTimeout", "RemoteProtocolError", "ConnectTimeout",
+                    "ReadError", "TimeoutError", "URLError")
+                if not transient or attempt == 2:
+                    raise
     return chat
 
 
