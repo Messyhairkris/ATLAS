@@ -149,6 +149,25 @@ def gather():
                           "group": f"{kind}: {p.parent.name}"[:48], "likely": likely,
                           "worst": worst, "queued_minutes": 0, "desktop": False, "note": s.get("you_might_see", ""),
                           "started": (s.get("started") or "")[-8:-3]})
+    # the heavy queue: items waiting their turn, #1 runs next
+    try:
+        from crew.runners import heavy_queue
+        disp = _read(heavy_queue.DISPATCHER) or {}
+        live = heavy_queue.running()
+        reason = (f"runs after {live[0]['label']}" if live
+                  else disp.get("waiting_on") or "")
+        for item in heavy_queue.waiting():
+            mins = float(eta_mod.estimate(item.get("member", ""), item.get("duty", ""))
+                         .get("likely_minutes") or 0) if item.get("member") else 0
+            n = item["position"]
+            steps.append({"what": f"QUEUED #{n}{' (next)' if n == 1 else ''}: {item['label']}",
+                          "group": "heavy queue" + (f" - {reason}" if reason
+                                                    and n == 1 else ""),
+                          "likely": None, "worst": None, "queued_minutes": 0, "desktop": False,
+                          "note": item.get("note", ""), "started": "", "queue_minutes": mins,
+                          "eta_text": f"~{mins:.0f}m once started" if mins else "no estimate yet"})
+    except Exception:  # noqa: BLE001 - the overlay must never crash
+        pass
     return steps
 
 
@@ -157,10 +176,15 @@ def totals(steps):
     An OVERDUE step (past its worst case) has no honest estimate left, so it is
     counted as unknown rather than pulling the total into the past."""
     now = dt.datetime.now()
+    queue = [s for s in steps if "queue_minutes" in s]    # heavy queue: one after another
+    steps = [s for s in steps if "queue_minutes" not in s]
+    after = dt.timedelta(minutes=sum(s["queue_minutes"] for s in queue))
     live = [s for s in steps if s["likely"] and s["worst"] and s["worst"] >= now]
     likely = [max(s["likely"], now) + dt.timedelta(minutes=s["queued_minutes"]) for s in live]
     worst = [s["worst"] + dt.timedelta(minutes=s["queued_minutes"]) for s in live]
-    unknown = len(steps) - len(live)
+    unknown = len(steps) - len(live) + sum(1 for s in queue if not s["queue_minutes"])
+    if queue:
+        likely, worst = [max(likely or [now]) + after], [max(worst or [now]) + 2 * after]
     return (max(likely) if likely else None, max(worst) if worst else None, unknown, now)
 
 
@@ -287,15 +311,20 @@ def main():
         if not steps:
             head.config(text="Crew: idle", fg=DIM)
         else:
-            head.config(text=(f"Crew: {len(steps)} active  -  "
+            nq = sum(1 for s in steps if "queue_minutes" in s)
+            head.config(text=(f"Crew: {len(steps) - nq} active"
+                              + (f", {nq} queued" if nq else "") + "  -  "
                               + (f"all done ~{_hm(likely)} (worst {_hm(worst)})" if likely
                                  else "no total estimate yet")
                               + (f", {unknown} without a live estimate" if unknown else "")),
                         fg=ACCENT)
         if state["awake"]:
             lines = []
-            for s in sorted(steps, key=lambda s: s["likely"] or now + dt.timedelta(days=1)):
-                if not s["likely"]:
+            for s in sorted(steps, key=lambda s: (s["likely"] or now + dt.timedelta(days=1),
+                                                  s.get("what", ""))):
+                if s.get("eta_text"):
+                    eta = s["eta_text"]
+                elif not s["likely"]:
                     eta = "no estimate yet"
                 elif s["worst"] and s["worst"] < now:
                     eta = f"OVERDUE (estimate was ~{_hm(s['likely'])})"

@@ -193,13 +193,18 @@ def run_tests(modules: Dict[str, str], test_files: Dict[str, str],
         return False, "REFUSED to execute:\n" + "\n".join(blocked), {"blocked": blocked}
 
     with tempfile.TemporaryDirectory(prefix="crew-code-", ignore_cleanup_errors=True) as tmp:
-        work = Path(tmp)
+        work = Path(tmp) / "work"
+        work.mkdir()
         for name, src in {**modules, **test_files}.items():
             dest = work / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(src, encoding="utf-8")
         argv = [python or sys.executable, "-m", "pytest", "-q", "--no-header",
-                "-p", "no:cacheprovider", *sorted(test_files)]
+                "-p", "no:cacheprovider",
+                # pytest's own temp folder, private to this run: the shared
+                # %TEMP%/pytest-of-unknown held a stale link it could not delete,
+                # and every run then failed on cleanup (2026-09-26)
+                "--basetemp", str(Path(tmp) / "pytest-tmp"), *sorted(test_files)]
         env = {k: v for k, v in os.environ.items()
                if k in ("PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP",
                         "PATHEXT", "WINDIR", "NUMBER_OF_PROCESSORS")}

@@ -86,6 +86,20 @@ stop. Hidden tests you never see decide the outcome, so test the contract's rule
 examples, not your own reading of them."""
 
 
+RESCUE_PROMPT = """A crew member's attempt at {module} FAILED the grader. You are the
+rescue session: {module} in this folder is that failed attempt. CONTRACT.md is the
+specification. The grader's machine output is below - it is not an opinion.
+
+Fix the cause in {module}; do not start over unless the file is unusable. Its
+"Allowed imports" line is enforced by a scanner; open(), eval, exec, file, network and
+registry access are refused. Write tests in test_mine.py for the failing rules, run
+them with `python -m pytest -q test_mine.py` (the only shell command you may run), fix
+what fails, and stop when they pass. Hidden tests you never see decide the outcome.
+
+GRADER OUTPUT FOR THE FAILED ATTEMPT:
+{failures}"""
+
+
 def _usage(events: list) -> dict:
     """Sum token counts from OpenCode's JSON events, whatever the nesting."""
     tot = {"input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "steps": 0}
@@ -163,7 +177,10 @@ def _writes_outside(events: list, ws: Path) -> list:
     return sorted(set(bad))
 
 
-def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
+def run(member: str, task: dict, label: str, timeout_s: int, seed: dict = None,
+        duty: str = "crew:opencode_trial") -> dict:
+    """seed (a rescue): {"files": {name: source}, "failures": grader text} - the
+    failed attempt goes into the folder and the prompt asks for a fix, not a rewrite."""
     from providers.registry import resolve_alias
     cfg = load_config()
     model_id = resolve_alias("synthetic", member)
@@ -190,12 +207,15 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     (home / "status.json").write_text(json.dumps({
         "state": "running", "pid": os.getpid(), "member": member,
         "started": dt.datetime.now().isoformat(timespec="seconds"),
-        "eta": eta.estimate(member, "crew:opencode_trial")}, indent=1), encoding="utf-8")
+        "eta": eta.estimate(member, duty)}, indent=1), encoding="utf-8")
     deps = {Path(d).name: Path(d).read_text(encoding="utf-8")
             for d in (task.get("depends_modules") or [])}
     for name, src in deps.items():                  # already-accepted modules it builds on
         (ws / name).write_text(src, encoding="utf-8")
-    prompt = PROMPT.format(module=task["module"])
+    for name, src in ((seed or {}).get("files") or {}).items():   # the failed attempt
+        (ws / Path(name).name).write_text(src, encoding="utf-8")
+    prompt = (RESCUE_PROMPT.format(module=task["module"], failures=seed.get("failures", ""))
+              if seed else PROMPT.format(module=task["module"]))
     if deps:
         prompt += ("\n\nALREADY ACCEPTED MODULES in this folder, which you may import by name "
                    "and must not rewrite: " + ", ".join(sorted(deps)))
@@ -280,13 +300,14 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     with open(LEDGER, "a", encoding="utf-8") as fh:        # close the ledger blind spot
         fh.write(json.dumps({"source": "opencode", "provider": "synthetic", "model": model_id,
                              "persona": member, "run_id": f"opencode:{label}",
-                             "duty": "crew:opencode_trial", "requests": usage["steps"],
+                             "duty": duty, "requests": usage["steps"],
                              "prompt_tokens": usage["input"], "completion_tokens": usage["output"],
                              "total_tokens": usage["input"] + usage["output"],
                              "latency_ms": round(seconds * 1000),   # for crew/eta.py
                              "ts": dt.datetime.now().isoformat(timespec="seconds")}) + "\n")
     passed = bool(steps) and all(s["ok"] for s in steps)
-    result = {"member": member, "model": model_id, "route": "opencode", "task": task["id"],
+    result = {"member": member, "model": model_id,
+              "route": "opencode-rescue" if seed else "opencode", "task": task["id"],
               "passed": passed, "rounds": rounds, "seconds": seconds, "exit": code,
               "usage": usage,
               # any test_*.py counts: Barry named his test_outline.py, not test_mine.py

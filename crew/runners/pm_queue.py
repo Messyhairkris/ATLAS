@@ -61,6 +61,18 @@ def commit_request(message: str) -> dict:
     return add(str(out), f"APPROVE COMMIT: {message}", item_id=f"commit:{stamp}")
 
 
+def withdraw(item_id: str) -> bool:
+    """Take back a PA item Kris has not decided yet (e.g. a commit request whose
+    diff changed). A decided item is never removed."""
+    items = rd.load_queue()
+    keep = [i for i in items if not (i.get("item_id") == item_id and not i.get("decision")
+                                     and str(i.get("origin", "")).startswith("PA:"))]
+    if len(keep) == len(items):
+        return False
+    rd.save_queue(keep)
+    return True
+
+
 def status() -> list:
     return [{k: i.get(k) for k in ("item_id", "title", "decision", "note", "state")}
             for i in rd.load_queue() if str(i.get("origin", "")).startswith("PA:")]
@@ -75,10 +87,14 @@ if __name__ == "__main__":
     c = sub.add_parser("commit")
     c.add_argument("message")
     sub.add_parser("status")
+    w = sub.add_parser("withdraw")
+    w.add_argument("item_id")
     args = ap.parse_args()
     if args.cmd == "add":
         print(json.dumps(add(args.path, args.title), indent=1))
     elif args.cmd == "commit":
         print(json.dumps(commit_request(args.message), indent=1))
+    elif args.cmd == "withdraw":
+        print("withdrawn" if withdraw(args.item_id) else "not withdrawn (decided, or not a PA item)")
     else:
         print(json.dumps(status(), indent=1))

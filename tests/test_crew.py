@@ -1615,6 +1615,76 @@ class SpecialTeamsTests(CrewTestCase):
         self.assertIn("refused", steps)
 
 
+class RescueAndHeavyQueueTests(CrewTestCase):
+    """2026-09-26: a failed crew code job gets an OpenCode rescue, queued behind any
+    heavy process; the overlay shows each queued item's place in line."""
+
+    def _failed_job(self, jobs, steps, module_written=True, task_type="code_task"):
+        jid = "job-x"
+        (jobs / jid / "output").mkdir(parents=True)
+        if module_written:
+            (jobs / jid / "output" / "m.py").write_text("x = 1\n", encoding="utf-8")
+        return {"task_id": jid, "task_type": task_type, "assigned_to": "Nemotron",
+                "spec": {"module": "m.py"}, "result": {"passed": False, "steps": steps}}
+
+    def test_only_checkable_failures_with_an_attempt_are_rescued(self):
+        from crew.runners import rescue
+        jobs = self.tmp / "jobs"
+        hidden = [{"rung": "api", "ok": True}, {"rung": "hidden tests", "ok": False}]
+        self.assertTrue(rescue.rescuable(self._failed_job(jobs, hidden), jobs)[0])
+        shutil.rmtree(jobs)
+        ok, why = rescue.rescuable(self._failed_job(jobs, hidden, module_written=False), jobs)
+        self.assertFalse(ok)
+        self.assertIn("no attempt", why)
+        shutil.rmtree(jobs)
+        budget = [{"rung": "budget", "ok": False}]
+        self.assertFalse(rescue.rescuable(self._failed_job(jobs, budget), jobs)[0])
+        shutil.rmtree(jobs)
+        self.assertFalse(rescue.rescuable(
+            self._failed_job(jobs, hidden, task_type="scout"), jobs)[0])
+
+    def _queue_home(self):
+        from crew.runners import heavy_queue
+        saved = (heavy_queue.HOME, heavy_queue.QUEUE, heavy_queue.DISPATCHER,
+                 heavy_queue.ensure_dispatcher)
+        heavy_queue.HOME = self.tmp / "heavy"
+        heavy_queue.QUEUE = heavy_queue.HOME / "queue.json"
+        heavy_queue.DISPATCHER = heavy_queue.HOME / "dispatcher.json"
+        heavy_queue.ensure_dispatcher = lambda: None     # never start a real dispatcher
+
+        def restore():
+            (heavy_queue.HOME, heavy_queue.QUEUE, heavy_queue.DISPATCHER,
+             heavy_queue.ensure_dispatcher) = saved
+        self.addCleanup(restore)
+        return heavy_queue
+
+    def test_queue_numbers_items_in_run_order(self):
+        hq = self._queue_home()
+        hq.add("first", ["python", "-c", "0"])
+        hq.add("second", ["python", "-c", "0"])
+        self.assertEqual([(i["label"], i["position"]) for i in hq.waiting()],
+                         [("first", 1), ("second", 2)])
+        items = hq.load()
+        items[0]["state"] = "running"
+        items[0]["pid"] = os.getpid()                      # a live process
+        hq.save(items)
+        self.assertEqual([(i["label"], i["position"]) for i in hq.waiting()], [("second", 1)])
+        self.assertIn("first", hq.busy_reason(sample_cpu=False))
+
+    def test_overlay_marks_queued_items_and_adds_them_after_running_work(self):
+        import datetime as dt
+        from crew.runners import status_overlay as so
+        now = dt.datetime.now()
+        running = {"what": "a", "likely": now + dt.timedelta(minutes=10),
+                   "worst": now + dt.timedelta(minutes=20), "queued_minutes": 0}
+        queued = {"what": "QUEUED #1 (next): b", "likely": None, "worst": None,
+                  "queued_minutes": 0, "queue_minutes": 30}
+        likely, worst, unknown, _ = so.totals([running, queued])
+        self.assertEqual(unknown, 0)
+        self.assertAlmostEqual((likely - now).total_seconds() / 60, 40, delta=1)
+        self.assertAlmostEqual((worst - now).total_seconds() / 60, 80, delta=1)
+
+
 class McpSurfaceTests(unittest.TestCase):
     def test_tools_registered_and_no_promotion_tool(self):
         from crew import server

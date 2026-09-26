@@ -144,6 +144,7 @@
   },
   "defaults": {
     "budget_from_personnel": true,
+    "rescue_on_failure": true,
     "budget_from_personnel_comment": "2026-09-25: a job's requests, tokens, working context and observation size come from crew/personnel.json and the member's own passing history (crew/personnel.py) instead of one number for everyone; the Inspector (crew/inspector.py) runs after every job. An explicit spec budget still wins. Set false to return to the flat defaults below.",
     "assigned_to": "Hoss",
     "max_requests": 12,

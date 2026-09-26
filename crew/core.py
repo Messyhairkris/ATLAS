@@ -322,7 +322,25 @@ class Crew:
                 inspector.inspect_job(self.cfg, job, transcript)
             except Exception as e:  # noqa: BLE001 - the Inspector must never fail a job
                 log_event({"event": "inspector_error", "error": str(e)[:300]})
+        if not out["passed"] and self.cfg.defaults.get("rescue_on_failure"):
+            self._queue_rescue(job, log_event)
         return self._brief(job)
+
+    def _queue_rescue(self, job: dict, log_event) -> None:
+        """A checkable failure queues an OpenCode rescue (crew/runners/rescue.py) in
+        the heavy queue - same member first, then a capable one. Never fails a job."""
+        try:
+            from .runners import heavy_queue, rescue
+            ok, why = rescue.rescuable(job, Path(self.cfg.state_home) / "jobs")
+            log_event({"event": "rescue_considered", "job": job["task_id"], "queued": ok,
+                       "why": why})
+            if ok:
+                heavy_queue.add(f"rescue {job['spec']['module']} ({job['assigned_to']})",
+                                ["python", str(Path(rescue.__file__).resolve()), job["task_id"]],
+                                member=job["assigned_to"], duty="crew:rescue",
+                                note=f"crew job {job['task_id']} {why}")
+        except Exception as e:  # noqa: BLE001
+            log_event({"event": "rescue_error", "error": str(e)[:300]})
 
     def _apply(self, job: dict, actor: str, parent: Optional[str] = None) -> List[str]:
         jdir = self.store.job_dir(job["task_id"])
