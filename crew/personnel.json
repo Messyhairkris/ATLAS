@@ -122,7 +122,7 @@
         "weaknesses": ["wobbles in long reasoning chains", "less reliable when prompts are long and instructions strict"],
         "sources": ["https://llm-stats.com/blog/research/glm-4.7-flash-launch", "https://wavespeed.ai/blog/posts/glm-4-7-flash-vs-glm-4-7/"]
       },
-      "measured": "log_clerk 1/1 first try at 2 requests; completion_audit 1/1 (right answer, 12 requests); pure-reporter jobs pass first try (rd-022). research 3/12.",
+      "measured": "log_clerk 1/1 first try at 2 requests; completion_audit 1/1 (right answer, 12 requests); pure-reporter jobs pass first try (rd-022). research 3/12. code_task profiles.py 2026-09-26: failed on BOTH routes (crew: loop_repeat; OpenCode: missed a rule after 3 feedback rounds). Kris 2026-09-26: Larry sticks to clerk work - no code posts.",
       "posts": ["clerk", "auditor"],
       "quirks": {
         "addenda": ["Search a large file for the words you need before reading it; read only the matching part."],
