@@ -1,0 +1,40 @@
+{
+ "task_type": "code_task",
+ "title": "hard retest: profiles.py by Larry",
+ "assigned_to": "Larry",
+ "module": "profiles.py",
+ "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tts_profiles.md",
+ "hidden_tests": [
+  "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_profiles.py"
+ ],
+ "api": [
+  "LINKS",
+  "PURPOSES",
+  "BLUETOOTH_WORDS",
+  "WIRED_WORDS",
+  "RECONNECT_COOLDOWN_S",
+  "DEFAULT_SPEECH",
+  "DEFAULT_ALERT",
+  "classify_link",
+  "new_profile",
+  "volume_for",
+  "set_volume",
+  "set_lock",
+  "remember",
+  "known",
+  "find",
+  "present",
+  "missing",
+  "prefer",
+  "reconnect_plan",
+  "dump",
+  "load"
+ ],
+ "depends_modules": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace/devices.py"
+ ],
+ "output": {
+  "root": "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace/hard"
+ },
+ "instructions": "You MUST import devices.py (already accepted, in your workspace) and use its classify and clamp_volume rather than repeating the device names or the volume ceilings. Two rules matter more than the rest: a locked profile's volumes never change, no matter what is asked; and a profile is a plain dict that survives being written to a settings file and read back, so nothing clever - no classes, no tuples, no objects that JSON cannot hold. Every function that changes a profile returns a new dict and leaves the one it was given exactly as it was."
+}

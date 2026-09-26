@@ -1,0 +1,22 @@
+{
+ "task_type": "code_task",
+ "title": "hard retest: js_api.py by Barry",
+ "assigned_to": "Barry",
+ "module": "js_api.py",
+ "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/jsh_api.md",
+ "hidden_tests": [
+  "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_jsh_api.py"
+ ],
+ "api": [
+  "exported_names",
+  "missing_api",
+  "stub_functions"
+ ],
+ "depends_modules": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace/js_lex.py"
+ ],
+ "output": {
+  "root": "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace/hard"
+ },
+ "instructions": "You MUST import the accepted js_lex module (from js_lex import code_only). The hard part is stub_functions: default parameters contain braces and parentheses, so match the parameter list and the body by counting depth, never by searching for the first '}'. Do not write docstrings that explain reasons the contract does not give."
+}

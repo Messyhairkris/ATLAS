@@ -187,6 +187,13 @@ class Crew:
             with open(transcript, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"ts": now_iso(), **e}, ensure_ascii=False) + "\n")
 
+        # every job says it is running and when it is likely done (crew/eta.py)
+        from . import eta as _eta
+        (jdir / "status.json").write_text(json.dumps({
+            "state": "running", "job": job_id, "member": job["assigned_to"],
+            "task_type": job["task_type"], "started": now_iso(),
+            "eta": _eta.estimate(job["assigned_to"], f"crew:{job['task_type']}")},
+            indent=1), encoding="utf-8")
         lsp_pool = None
         if spec.get("lsp") and self.cfg.data.get("lsp"):
             from .lsp import LspPool
@@ -291,6 +298,10 @@ class Crew:
             job["status"] = REVIEW
         job["finished_at"] = now_iso()
         self.store.save(job)
+        (jdir / "status.json").write_text(json.dumps({
+            "state": "finished", "job": job_id, "status": job["status"],
+            "passed": out["passed"], "finished": job["finished_at"]}, indent=1),
+            encoding="utf-8")
         if self.cfg.defaults.get("budget_from_personnel"):
             try:
                 inspector.inspect_job(self.cfg, job, transcript)

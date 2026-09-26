@@ -220,9 +220,11 @@ class Campaign:
             "requests_budget": self.max_requests,
             "senior_calls": f"{self.escalations_used}/{self.max_escalations}",
             "minutes_to_deadline": left,
-            "tasks": {i: {k: t[k] for k in
-                          ("state", "kind", "team", "member", "attempts",
-                           "requests", "tokens", "seconds", "escalations")}
+            "tasks": {i: {**{k: t[k] for k in
+                             ("state", "kind", "team", "member", "attempts",
+                              "requests", "tokens", "seconds", "escalations")},
+                          # when a running task is likely done (crew/eta.py, 2026-09-26)
+                          **({"eta": self._eta(t)} if t["state"] == RUNNING else {})}
                       for i, t in self.tasks.items()},
             "counts": {s: sum(1 for t in self.tasks.values() if t["state"] == s)
                        for s in (ACCEPTED, RUNNING, WAITING, ESCALATED, DEAD)},
@@ -230,6 +232,16 @@ class Campaign:
         }
         (self.home / "status.json").write_text(
             json.dumps(status, indent=2), encoding="utf-8")
+
+    def _eta(self, task: dict) -> dict:
+        from . import eta
+        duty = "crew:code_task" if task["kind"] == "module" else "crew:code_tests"
+        started = task.get("started_at")
+        try:
+            started = datetime.datetime.fromisoformat(started) if started else None
+        except ValueError:
+            started = None
+        return eta.estimate(task["member"], duty, started)
 
     # -- the loop ------------------------------------------------------------------
     def stop_reason(self) -> Optional[str]:
@@ -268,6 +280,7 @@ class Campaign:
 
     def run_task(self, task: dict) -> None:
         task["state"] = RUNNING
+        task["started_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         self.write_status()
         while task["attempts"] < self.max_attempts + (1 if task["escalations"] else 0):
             stop = self.stop_reason()
@@ -442,6 +455,7 @@ class Campaign:
                  f"one more attempt")
         self.event("escalated", task=task["id"], directives=directives)
         task["state"] = RUNNING
+        task["started_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         return True
 
     def _ask_senior(self, senior: str, prompt: str):

@@ -91,6 +91,26 @@ def _usage(events: list) -> dict:
     return tot
 
 
+def _grade(ws: Path, task: dict, deps: dict) -> list:
+    """Exactly the gates a crew code_task gets."""
+    mod = ws / task["module"]
+    if not mod.is_file():
+        return [{"rung": "output", "ok": False, "detail": f"{task['module']} was not written"}]
+    src = mod.read_text(encoding="utf-8")
+    dep_names = sorted(n[:-3] for n in deps)
+    steps = [gates.ascii_only(src, mod.name), gates.module_is_safe(src, mod.name, dep_names),
+             gates.defines_api(src, task["api"], mod.name),
+             gates.not_stubbed(src, task["api"], mod.name)]
+    if all(s["ok"] for s in steps):
+        hidden = {Path(h).name: Path(h).read_text(encoding="utf-8")
+                  for h in task.get("hidden_tests", [])}
+        # the grader uses the ORIGINAL accepted dependencies, never the workspace
+        # copies the member could have edited
+        steps.append(gates.hidden_tests_pass({mod.name: src, **deps}, hidden, 180,
+                                             mod.name, dep_names))
+    return steps
+
+
 def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     from providers.registry import resolve_alias
     cfg = load_config()
@@ -109,10 +129,19 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     window = int(personnel.member(personnel.load(), member).get("context_window") or 131072)
     (ws / "opencode.json").write_text(json.dumps(opencode_config(model_id, reply, window),
                                                  indent=1), encoding="utf-8")
-    (home / "status.json").write_text(json.dumps({"state": "running", "member": member,
-                                                  "started": dt.datetime.now().isoformat(
-                                                      timespec="seconds")}), encoding="utf-8")
+    from crew import eta
+    (home / "status.json").write_text(json.dumps({
+        "state": "running", "member": member,
+        "started": dt.datetime.now().isoformat(timespec="seconds"),
+        "eta": eta.estimate(member, "crew:opencode_trial")}, indent=1), encoding="utf-8")
+    deps = {Path(d).name: Path(d).read_text(encoding="utf-8")
+            for d in (task.get("depends_modules") or [])}
+    for name, src in deps.items():                  # already-accepted modules it builds on
+        (ws / name).write_text(src, encoding="utf-8")
     prompt = PROMPT.format(module=task["module"])
+    if deps:
+        prompt += ("\n\nALREADY ACCEPTED MODULES in this folder, which you may import by name "
+                   "and must not rewrite: " + ", ".join(sorted(deps)))
     if task.get("instructions"):
         prompt += "\n\nEMPHASIS FOR THIS TASK: " + task["instructions"]
     # The key comes from the same place the crew's own calls get it (environment
@@ -125,21 +154,41 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
         key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
         if key:
             env["SYNTHETIC_API_KEY"] = key
+    def opencode(message: str, first: bool):
+        # Round 1 ATTACHES the contract (-f), the way the crew preloads it: Nemotron,
+        # left to find it, never opened it and invented an API (2026-09-26). Later
+        # rounds continue the same session with the grader's failures - the same
+        # feedback a crew member gets on a retry.
+        argv = [OPENCODE, "run", "-m", f"synthetic/{model_id}", "--format", "json",
+                "--dir", str(ws)] + (["-f", str(ws / "CONTRACT.md")] if first else ["--continue"])
+        try:
+            p = subprocess.run(argv + [message], cwd=str(ws), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=timeout_s, env=env)
+            return p.stdout, p.stderr, p.returncode
+        except subprocess.TimeoutExpired as e:
+            out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            return out, "timeout", -1
+
     t0 = time.time()
-    try:
-        p = subprocess.run([OPENCODE, "run", "-m", f"synthetic/{model_id}", "--format", "json",
-                            "--dir", str(ws), prompt], cwd=str(ws), capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=timeout_s,
-                           env=env)
-        raw, err, code = p.stdout, p.stderr, p.returncode
-    except subprocess.TimeoutExpired as e:
-        raw, err, code = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) \
-            else (e.stdout or ""), "timeout", -1
+    raw_all, err_all, rounds, steps, code = "", "", 0, [], 0
+    message, first = prompt, True
+    while rounds < 1 + int(task.get("feedback_rounds", 2)):
+        rounds += 1
+        raw, err, code = opencode(message, first)
+        raw_all += raw
+        err_all += err or ""
+        steps = _grade(ws, task, deps)
+        if all(s["ok"] for s in steps):
+            break
+        failed = "\n".join(f"- [{s['rung']}] {s['detail'][:1500]}" for s in steps if not s["ok"])
+        message = ("THE GRADER FAILED YOUR MODULE. This is machine output, not an opinion - "
+                   f"fix the cause in {task['module']}, run your tests again, then stop:\n{failed}")
+        first = False
     seconds = round(time.time() - t0, 1)
-    (home / "opencode.jsonl").write_text(raw, encoding="utf-8")
-    (home / "opencode.stderr.txt").write_text(err or "", encoding="utf-8")
+    (home / "opencode.jsonl").write_text(raw_all, encoding="utf-8")
+    (home / "opencode.stderr.txt").write_text(err_all, encoding="utf-8")
     events = []
-    for line in raw.splitlines():
+    for line in raw_all.splitlines():
         try:
             events.append(json.loads(line))
         except json.JSONDecodeError:
@@ -151,24 +200,12 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
                              "duty": "crew:opencode_trial", "requests": usage["steps"],
                              "prompt_tokens": usage["input"], "completion_tokens": usage["output"],
                              "total_tokens": usage["input"] + usage["output"],
+                             "latency_ms": round(seconds * 1000),   # for crew/eta.py
                              "ts": dt.datetime.now().isoformat(timespec="seconds")}) + "\n")
-    # -- grade exactly like a crew code_task ------------------------------------------
-    mod = ws / task["module"]
-    steps = []
-    if not mod.is_file():
-        steps.append({"rung": "output", "ok": False, "detail": f"{task['module']} was not written"})
-    else:
-        src = mod.read_text(encoding="utf-8")
-        steps = [gates.ascii_only(src, mod.name), gates.module_is_safe(src, mod.name),
-                 gates.defines_api(src, task["api"], mod.name),
-                 gates.not_stubbed(src, task["api"], mod.name)]
-        if all(s["ok"] for s in steps):
-            hidden = {Path(h).name: Path(h).read_text(encoding="utf-8")
-                      for h in task.get("hidden_tests", [])}
-            steps.append(gates.hidden_tests_pass({mod.name: src}, hidden, 180, mod.name, []))
     passed = bool(steps) and all(s["ok"] for s in steps)
     result = {"member": member, "model": model_id, "route": "opencode", "task": task["id"],
-              "passed": passed, "seconds": seconds, "exit": code, "usage": usage,
+              "passed": passed, "rounds": rounds, "seconds": seconds, "exit": code,
+              "usage": usage,
               # any test_*.py counts: Barry named his test_outline.py, not test_mine.py
               "own_tests_written": sorted(p.name for p in ws.glob("test_*.py")),
               "steps": steps}
@@ -181,14 +218,19 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--member", required=True)
-    ap.add_argument("--campaign", required=True)
-    ap.add_argument("--task", required=True)
+    ap.add_argument("--campaign", help="campaign json (with --task)")
+    ap.add_argument("--task")
+    ap.add_argument("--spec", help="or: one code_task job spec json")
     ap.add_argument("--label")
     ap.add_argument("--timeout", type=int, default=1800)
     a = ap.parse_args()
-    spec = json.loads(Path(a.campaign).read_text(encoding="utf-8"))
-    task = next(t for t in spec["tasks"] if t["id"] == a.task)
-    r = run(a.member, task, a.label or f"{a.task}-{a.member}", a.timeout)
+    if a.spec:
+        task = json.loads(Path(a.spec).read_text(encoding="utf-8"))
+        task.setdefault("id", Path(task["module"]).stem)
+    else:
+        spec = json.loads(Path(a.campaign).read_text(encoding="utf-8"))
+        task = next(t for t in spec["tasks"] if t["id"] == a.task)
+    r = run(a.member, task, a.label or f"{task['id']}-{a.member}", a.timeout)
     print(json.dumps({k: r[k] for k in ("member", "passed", "seconds", "usage")}))
     print("\n".join(f"[{'ok' if s['ok'] else 'FAIL'}] {s['rung']}: {s['detail'][:200]}"
                     for s in r["steps"]))

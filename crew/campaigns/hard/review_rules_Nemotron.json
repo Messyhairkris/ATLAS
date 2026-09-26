@@ -1,0 +1,25 @@
+{
+ "task_type": "code_task",
+ "title": "hard retest: review_rules.py by Nemotron",
+ "assigned_to": "Nemotron",
+ "module": "review_rules.py",
+ "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/review_rules.md",
+ "hidden_tests": [
+  "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_review_rules.py"
+ ],
+ "api": [
+  "DECISIONS",
+  "NEEDS_NOTE",
+  "MIN_NOTE_CHARS",
+  "validate",
+  "is_complete",
+  "next_action",
+  "summarize",
+  "agent_digest"
+ ],
+ "depends_modules": [],
+ "output": {
+  "root": "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/workspace/hard"
+ },
+ "instructions": ""
+}
