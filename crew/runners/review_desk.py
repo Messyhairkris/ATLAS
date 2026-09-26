@@ -324,6 +324,26 @@ def seed(extra_paths=()) -> list:
     return merged
 
 
+def reconcile(disk: list, mine: list, touched: set) -> list:
+    """The queue as it should be saved by an open Desk: the file's current items,
+    with the Desk's own version only of items it changed this session.
+
+    2026-09-26: the Desk loaded the queue once and saved its whole copy on every
+    decision or SEND, so an item the PA queued (or withdrew) while it was open was
+    silently undone. Items the Desk never touched now always come from the file; an
+    item that left the file stays gone unless Kris decided it here."""
+    own = {i["item_id"]: i for i in mine if i["item_id"] in touched}
+    merged = [own.pop(i["item_id"], i) for i in disk]
+    return merged + list(own.values())
+
+
+def queue_mtime() -> float:
+    try:
+        return queue_file().stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 # -- the window ------------------------------------------------------------------
 
 class Desk:
@@ -340,6 +360,8 @@ class Desk:
         self.settings = load_settings()
         self.scale = int(self.settings.get("font_scale", 0))
         self.offered = None                # the batch the modal has already offered
+        self.touched = set()               # item ids this Desk changed (see reconcile)
+        self.seen_mtime = queue_mtime()
         self.root = tk.Tk()
         self.root.title("Review Desk")
         self.root.configure(bg=BG)
@@ -352,6 +374,40 @@ class Desk:
         self.refresh_list()
         if self.items:
             self.select(0)
+        self.root.after(4000, self.poll_disk)
+
+    # -- keeping in step with the queue file ----------------------------------------
+    def sync(self, *changed) -> None:
+        """Merge with the file before writing; changed = item ids just edited here."""
+        self.touched.update(changed)
+        current_id = (self.items[self.current]["item_id"]
+                      if self.current is not None and self.current < len(self.items) else None)
+        before = [i["item_id"] for i in self.items]
+        self.items[:] = reconcile(load_queue(), self.items, self.touched)
+        ids = [i["item_id"] for i in self.items]
+        self.current = ids.index(current_id) if current_id in ids else None
+        if ids != before:
+            self.refresh_list()
+            self.reselect()
+
+    def save(self, *changed) -> None:
+        self.sync(*changed)
+        save_queue(self.items)
+        self.seen_mtime = queue_mtime()
+
+    def poll_disk(self) -> None:
+        """New items the PA queues while the Desk is open appear without a restart."""
+        try:
+            if queue_mtime() != self.seen_mtime:
+                n = len(self.items)
+                self.sync()
+                self.seen_mtime = queue_mtime()
+                self.refresh_list()
+                self.reselect()
+                if len(self.items) > n:
+                    self.say(f"{len(self.items) - n} new item(s) arrived", ACCENT)
+        finally:
+            self.root.after(4000, self.poll_disk)
 
     # -- widgets -----------------------------------------------------------------
     def _label(self, parent, text, **kw):
@@ -616,7 +672,7 @@ class Desk:
             return
         item = self.items[self.current]
         item["anchor"] = review_anchors.format_anchor(anchor)
-        save_queue(self.items)
+        self.save(item["item_id"])
         self.show_anchor(item)
         excerpt = review_anchors.excerpt(self.file_text, anchor)
         self.say(f"note anchored to lines {span[0]}-{span[1]}: "
@@ -626,7 +682,7 @@ class Desk:
         if self.current is None:
             return
         self.items[self.current]["anchor"] = ""
-        save_queue(self.items)
+        self.save(self.items[self.current]["item_id"])
         self.show_anchor(self.items[self.current])
         self.say("anchor cleared", DIM)
 
@@ -648,7 +704,7 @@ class Desk:
             return
         item.update(decision=decision, note=note, state="decided",
                     decided_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        save_queue(self.items)
+        self.save(item["item_id"])
         stamp_decision(item)
         self.sent = load_sent()
         self.refresh_list()
@@ -720,7 +776,10 @@ class Desk:
         row.pack(fill="x", padx=16, pady=14)
 
         def do_send():
+            self.sync()                        # never send over a newer queue file
+            self.touched.update(i["item_id"] for i in ready_to_send(self.items))
             handoff = send_to_agent(self.items)
+            self.seen_mtime = queue_mtime()
             self.sent = load_sent()
             self.refresh_list()
             self.reselect()
@@ -745,9 +804,13 @@ class Desk:
         tk.Button(row, text="copy the message", command=copy_line, relief="flat",
                   bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
                   pady=4).pack(side="left", padx=8)
-        tk.Button(row, text="close", command=win.destroy, relief="flat",
-                  bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
+        # Kris 2026-09-26: the pop-up should also close the whole Desk
+        tk.Button(row, text="close the Review Desk", command=self.root.destroy,
+                  relief="flat", bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
                   pady=4).pack(side="right")
+        tk.Button(row, text="close this", command=win.destroy, relief="flat",
+                  bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
+                  pady=4).pack(side="right", padx=8)
         self.modal_window = win
 
     @staticmethod
@@ -770,14 +833,14 @@ class Desk:
         item = self.items[self.current]
         item.update(decision="", note=self.note.get("1.0", "end").strip(),
                     state="pending", decided_at="")
-        save_queue(self.items)
+        self.save(item["item_id"])
         self.refresh_list()
         self.reselect()
         self.offered = None
         self.say("decision cleared; it is waiting for you again", DIM)
 
     def do_seed(self) -> None:
-        self.items = seed()
+        self.items[:] = reconcile(seed(), self.items, self.touched)
         self.sent = load_sent()
         self.refresh_list()
         self.say(f"{len(self.items)} item(s) in the queue", OK)

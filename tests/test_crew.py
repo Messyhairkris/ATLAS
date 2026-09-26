@@ -1065,6 +1065,48 @@ class ReviewHandoffTests(unittest.TestCase):
         self.rd.save_queue(items)
         return items
 
+    def test_reconcile_keeps_file_changes_and_only_the_desks_own_edits(self):
+        from crew.reviewdesk import review_index
+        new = lambda i, d="": {**review_index.new_item(item_id=i, title=i, path="p",
+                                                       origin="t"), "decision": d}
+        disk = [new("a"), new("c")]                      # b withdrawn, c added meanwhile
+        mine = [new("a", "approve"), new("b"), new("x", "reject")]
+        merged = self.rd.reconcile(disk, mine, touched={"a", "x"})
+        self.assertEqual([(i["item_id"], i["decision"]) for i in merged],
+                         [("a", "approve"), ("c", ""), ("x", "reject")])
+
+    def test_an_open_desk_does_not_undo_items_queued_while_it_was_open(self):
+        """2026-09-26: the PA queued a commit request while the Desk was open; the
+        Desk's next save wrote its stale copy over the file and the item vanished."""
+        import tkinter
+        from crew.reviewdesk import review_index
+        self.queue(("alpha.py", "", ""), ("beta.py", "", ""))
+        real_tk = tkinter.Tk
+
+        class Hidden(real_tk):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.withdraw()
+                self.attributes("-alpha", 0.0)
+        tkinter.Tk = Hidden
+        try:
+            desk = self.rd.Desk(self.rd.load_queue())
+        except tkinter.TclError as exc:
+            self.skipTest(f"no Tk here: {exc}")
+        finally:
+            tkinter.Tk = real_tk
+        self.addCleanup(desk.root.destroy)
+        disk = self.rd.load_queue()                       # the PA, meanwhile
+        disk = [i for i in disk if i["item_id"] != "file:beta.py"]
+        disk.append(review_index.new_item(item_id="commit:new", title="APPROVE COMMIT: x",
+                                          path=str(self.paths["gamma.py"]), origin="PA:Claude"))
+        self.rd.save_queue(disk)
+        desk.select(0)
+        desk.decide("approve")                            # alpha
+        ids = [i["item_id"] for i in self.rd.load_queue()]
+        self.assertEqual(ids, ["file:alpha.py", "commit:new"])
+        self.assertEqual(self.rd.load_queue()[0]["decision"], "approve")
+
     def test_only_complete_decisions_are_ready_and_defer_never_is(self):
         items = self.queue(("alpha.py", "approve", ""),
                            ("beta.py", "reject", "this name says nothing at all"),
