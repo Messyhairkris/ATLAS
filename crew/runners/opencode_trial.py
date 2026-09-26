@@ -39,14 +39,19 @@ HOUSE_STYLE = REPO / "crew" / "contracts" / "HOUSE_STYLE.md"
 OPENCODE = shutil.which("opencode") or "opencode"
 
 
-def opencode_config(model_id: str) -> dict:
+def opencode_config(model_id: str, output_tokens: int, context_tokens: int) -> dict:
+    # OpenCode's default output limit for a custom model is 32,000 tokens: Barry
+    # thought until it and was cut off before writing a file (2026-09-26, the same
+    # wall the crew hit - his measured need is 65,536). Give each member its real limits.
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {"synthetic": {
             "npm": "@ai-sdk/openai-compatible", "name": "Synthetic",
             "options": {"baseURL": "https://api.synthetic.new/v1",
                         "apiKey": "{env:SYNTHETIC_API_KEY}"},
-            "models": {model_id: {"name": model_id}}}},
+            "models": {model_id: {"name": model_id,
+                                  "limit": {"output": output_tokens,
+                                            "context": context_tokens}}}}},
         "permission": {"edit": "allow", "webfetch": "deny", "external_directory": "deny",
                        "bash": {"*": "deny", "python -m pytest*": "allow"}},
         "autoupdate": False, "share": "disabled"}
@@ -99,8 +104,11 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     if HOUSE_STYLE.is_file():
         contract += "\n\n---\n\n" + HOUSE_STYLE.read_text(encoding="utf-8")
     (ws / "CONTRACT.md").write_text(contract, encoding="utf-8")
-    (ws / "opencode.json").write_text(json.dumps(opencode_config(model_id), indent=1),
-                                      encoding="utf-8")
+    from crew import personnel
+    reply = int((cfg.defaults.get("max_tokens_by_member") or {}).get(member, 32768))
+    window = int(personnel.member(personnel.load(), member).get("context_window") or 131072)
+    (ws / "opencode.json").write_text(json.dumps(opencode_config(model_id, reply, window),
+                                                 indent=1), encoding="utf-8")
     (home / "status.json").write_text(json.dumps({"state": "running", "member": member,
                                                   "started": dt.datetime.now().isoformat(
                                                       timespec="seconds")}), encoding="utf-8")
@@ -161,7 +169,8 @@ def run(member: str, task: dict, label: str, timeout_s: int) -> dict:
     passed = bool(steps) and all(s["ok"] for s in steps)
     result = {"member": member, "model": model_id, "route": "opencode", "task": task["id"],
               "passed": passed, "seconds": seconds, "exit": code, "usage": usage,
-              "own_tests_written": (ws / "test_mine.py").is_file(),
+              # any test_*.py counts: Barry named his test_outline.py, not test_mine.py
+              "own_tests_written": sorted(p.name for p in ws.glob("test_*.py")),
               "steps": steps}
     (home / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     (home / "status.json").write_text(json.dumps({"state": "finished", "passed": passed}),
