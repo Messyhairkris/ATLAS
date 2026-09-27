@@ -1,0 +1,28 @@
+{
+ "name": "kimi-ahk-design-csv",
+ "member": "Kimi",
+ "quote_check": "note",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/special_teams/kimi-ahk-plan/staged/PLAN.md",
+  "C:/Users/user/ATLAS-api-harness/crew/contracts",
+  "C:/Users/user/ATLAS-api-harness/crew/campaigns/ahk_regex.json",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_task.md",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_tests.md",
+  "C:/Users/user/ATLAS-api-harness/crew/ahk/tap.ahk",
+  "C:/Users/user/ATLAS-api-harness/crew/PERSONNEL.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/csv_library_quirks_analysis.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_quirks_analysis.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_v1_comprehensive_prompt.md"
+ ],
+ "goal": "You are the campaign ARCHITECT for module 3 of your plan (PLAN.md): csv.ahk - parse a CSV/DSV STRING into a 1-based array of 1-based row arrays, and serialize fields and rows back with correct quoting. Modules 1 and 2 are DONE and approved by the PM: str.ahk (your contract ahk_str.md, Hoss + Qwen, first try) and regex.ahk (your contract ahk_regex.md, Nemotron on attempt 3, Hoss's tests first try). Use those two contracts as the structural model.\n\nWHAT THE SANDBOX TAUGHT US - read this twice. Both your earlier designs were right about the code and wrong on AutoHotkey facts you REASONED instead of OBSERVED: title case breaks words only at spaces (not hyphens or apostrophes); multiline regex (m)) treats only CRLF as a line break by default, not a bare `n. Both are now in the playbooks, which you should read. For csv.ahk the risky facts are: how StrSplit, InStr, SubStr and Loop, Parse behave on empty fields, a trailing delimiter, a trailing line break, `r`n vs `n, and a quote inside an unquoted field; and what == says when comparing \"\" with a field. Every expected value in your tests that you have not seen real AutoHotkey produce goes on your final list - the PA runs your reference against your tests in Windows Sandbox and fixes what AutoHotkey disagrees with before any crew member sees the contract.\n\nTHE PA'S DECISIONS: API as in your plan - CsvParse(text, delim := \",\", encap := \"\"\"\"), CsvEscape(cell, delim := \",\", encap := \"\"\"\"), CsvRow(fields, delim := \",\", encap := \"\"\"\") - unless you find a reason to change it, which you state. Lenient parsing, like the stock library (PA answer to your question 4): a stray quote inside an unquoted field is literal text; state exactly what an unterminated quoted field at the end of the text does. CRLF and LF both end a row; a line break INSIDE a quoted field is data and is kept as it was written. Say exactly what a trailing line break, a blank line in the middle and a completely empty text return. csv.ahk is SELF-CONTAINED (depends on nothing) - the parser is a character loop, it does not need regex.ahk. Team: author Hoss, tester Qwen (your plan).\n\nFIXED RULES OF THE JUDGE: crew/contracts/ahk_scan.md (no '%', no loose code, no banned words, no hotkeys or labels) and ahk_api.md. Tests start with exactly `#Include tap.ahk` then `#Include csv.ahk`, use only Is(got, want, name) and Ok(cond, name), end with Done(). Arrays compare by reference: check Length() and each element. A literal quote inside an AutoHotkey string is written \"\" and a line break is `n (backtick) - never backslash.\n\nSTAGE EXACTLY THESE FILES with stage_file:\n1. csv.md - the contract (structure of ahk_regex.md: purpose, Public API, numbered rules with examples, edge cases stated outright, 'A careless implementation cannot pass').\n2. csv.ahk - your reference implementation.\n3. test_csv.ahk - hidden tests: at least 35 Is/Ok checks, each naming its rule; include round-trip checks (parse what CsvRow produced).\n4. campaign.json - EXACTLY the shape of crew/campaigns/ahk_regex.json (read it: top-level name, senior, senior_fallback, max_attempts, max_escalations, max_requests, workspace_subdir, goal, teams {TeamName: {author, tester}}, tasks [ {id, team, module, contract, hidden_tests, api, depends, min_tests, instructions, test_instructions} ]). Last time your campaign.json used a different shape and the PA had to rebuild it. Use name \"ahk-csv\", team \"Tables\" {author Hoss, tester Qwen}, task id \"csv\", module \"csv.ahk\", contract \"C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_csv.md\", hidden_tests [\"C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_csv.ahk\"], depends [], min_tests 16, workspace_subdir \"ahk_lib\".\n\nFinal answer: the API in one paragraph, then EVERY check in test_csv.ahk whose expected value you have not seen real AutoHotkey produce, as a list.",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file"],
+ "acting_tools": ["stage_file"],
+ "max_steps": 36,
+ "max_actions": 12,
+ "max_turns": 42,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.5,
+ "reply_tokens": 32768,
+ "expect_staged": ["csv.md", "csv.ahk", "test_csv.ahk", "campaign.json"]
+}

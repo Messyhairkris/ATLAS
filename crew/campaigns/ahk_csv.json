@@ -1,0 +1,36 @@
+{
+  "name": "ahk-csv",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "max_requests": 40,
+  "workspace_subdir": "ahk_lib",
+  "goal": "Ship csv.ahk, the crew's third AutoHotkey v1.1 module: parse a CSV/DSV string into a 1-based array of 1-based row arrays and serialize fields and rows back with correct quoting, exactly per crew/contracts/ahk_csv.md. The module passes the ahk_scan and ahk_api gates (pure functions only: no %, no loose code, no banned words, no hotkeys or labels, no includes) and the hidden TAP tests running AutoHotkey v1.1 inside a disposable Windows Sandbox.",
+  "teams": {
+    "Tables": {
+      "author": "Hoss",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "csv",
+      "team": "Tables",
+      "module": "csv.ahk",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_csv.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_csv.ahk"
+      ],
+      "api": [
+        "CsvParse",
+        "CsvEscape",
+        "CsvRow"
+      ],
+      "depends": [],
+      "min_tests": 16,
+      "instructions": "Write the whole csv.ahk from scratch against crew/contracts/ahk_csv.md, following the playbook crew/playbooks/ahk_code_task.md. The parser is a character loop over SubStr(text, i, 1) with an inQuotes/afterQuote state machine - NOT Loop, Parse (it strips bare `r data and ignores quoting) and NOT a regex lookahead (the stock library's version needs the banned % idiom). Rules 6-11 state the lenient edge semantics outright: blank lines skipped, trailing line break adds nothing, trailing delimiter is a real empty field, stray mid-field quote is literal, unterminated quoted field swallows the rest of the text as data, bare `r is data, empty text is an empty array. CsvEscape doubles encapsulators BEFORE wrapping and wraps only on delimiter, `r, `n or encapsulator. Read every worked example as a test and walk your code through it (playbook ah-011). No %, no loose code, all three public functions with exactly the contract's spellings and defaults (encap := \"\"\"\").",
+      "test_instructions": "Write test_csv.ahk against crew/contracts/ahk_csv.md only, following the playbook crew/playbooks/ahk_code_tests.md. Start with exactly #Include tap.ahk then #Include csv.ahk, end with Done(). Only Is(got, want, name) and Ok(cond, name); every check names its contract rule. Arrays compare by reference: check Length() and then Is() each element (at-004, at-005). Quote literals are doubled (\"\"), line breaks are `n / `r`n, never backslash (at-012). Cover all 16 rules including the stated edge cases: empty text is [] not [\"\"], trailing line break ignored, blank middle line skipped, trailing delimiter keeps an empty field, bare `r is data, quoted CRLF kept exactly, unterminated quote is lenient, stray quote is literal, custom delim/encap, and the round trips Is(CsvParse(CsvRow(fields))[1][k], fields[k], ...). Write at least 16 checks; the reference hidden suite has over 80."
+    }
+  ]
+}
