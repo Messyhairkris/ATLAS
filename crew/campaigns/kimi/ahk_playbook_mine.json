@@ -1,0 +1,22 @@
+{
+ "name": "kimi-ahk-playbook-mine",
+ "member": "Kimi",
+ "quote_check": "note",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/Desktop/AHK V1 Agentic Project",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_task.md",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_tests.md",
+  "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_scan.md"
+ ],
+ "goal": "The crew's two AutoHotkey playbooks (crew/playbooks/ahk_code_task.md and ahk_code_tests.md) are the lessons every crew member reads before writing or testing an AHK v1.1 module. They were seeded in one afternoon. Kris (the PM) points out that the AHK V1 Agentic Project folder holds the project's own AutoHotkey v1 guides and should feed them: start with ahk_v1_master_prompt.md, ahk_v1_comprehensive_prompt.md, ahk_v1_prompt.md and ahk_skills_inventory.md, then the quirk analyses of PURE code (ahk_quirks_analysis.md, utility_functions_quirks_analysis.md, Maths_Quirks.md, csv_library_quirks_analysis.md, libcrypt_quirks_analysis.md). Skip GUI, window, UIA, clipboard and hotkey material - crew modules are pure functions only (ahk_scan.md says what is refused).\n\nPROPOSE NEW PLAYBOOK ENTRIES: at most 12 for ahk_code_task (the author) and at most 8 for ahk_code_tests (the tester). Each entry: one or two sentences a small model can act on while writing a pure function or a tap.ahk test (a concrete rule, a trap and its fix, a correct idiom) - not general advice. Each must cite its source file and quote the line it rests on verbatim in backticks. Do NOT repeat what the existing entries already say (read both playbooks first), and do not propose anything the scanner refuses (no '%', no commands that touch the outside world). Where a guide contradicts the playbooks or another guide, report that instead of choosing.\n\nSTAGE EXACTLY ONE FILE with stage_file: playbook_proposals.md with two sections, '## ahk_code_task' and '## ahk_code_tests', each a numbered list: the entry text, then 'Source: <file> - `<verbatim quote>`'. Then a section '## Contradictions found' (or 'none').\n\nFinal answer: the three proposals you think would have prevented the most failures, in one sentence each.",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file"],
+ "acting_tools": ["stage_file"],
+ "max_steps": 30,
+ "max_actions": 6,
+ "max_turns": 34,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.0,
+ "reply_tokens": 32768,
+ "expect_staged": ["playbook_proposals.md"]
+}

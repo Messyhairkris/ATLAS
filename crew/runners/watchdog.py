@@ -73,6 +73,7 @@ def recent_failures(now_ts: float = None) -> list:
     """Runs that ended badly in the last hour: shown on the overlay so a dead run is
     never silent (2026-09-26: a learner crashed at 16:04 and nothing said so)."""
     now_ts = now_ts or time.time()
+    seen = _seen()
     out = []
     for pattern in PATTERNS:
         for p in RUNS.glob(pattern):
@@ -83,10 +84,67 @@ def recent_failures(now_ts: float = None) -> list:
                 continue
             s = _read(p) or {}
             if s.get("state") in FAILED_STATES:
-                out.append({"run": str(p.parent.relative_to(RUNS)), "state": s["state"],
-                            "why": str(s.get("error") or s.get("watchdog") or "")[:160],
-                            "at": dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%H:%M")})
+                run = str(p.parent.relative_to(RUNS))
+                at = dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%H:%M")
+                if f"{run}@{at}" in seen:
+                    continue
+                job_error = ((_read(p.parent / "job.json") or {}).get("result") or {}).get("error")
+                out.append({"run": run, "state": s["state"], "at": at,
+                            "why": str(s.get("error") or job_error or s.get("watchdog")
+                                       or "")[:300],
+                            "folder": str(p.parent)})
     return out
+
+
+SEEN = HOME / "seen.json"
+READABLE = HOME / "NEEDS_A_LOOK.md"
+MEANING = {
+    "lost": "The process ended without writing a result - almost always a crash. The "
+            "job's own files (job.json 'result', transcript.jsonl) usually say why.",
+    "failed": "The run caught its own error and recorded it (the reason is above).",
+    "killed by watchdog": "The watchdog stopped it: it was far past its limit or had "
+                          "stopped reporting progress.",
+    "stalled": "Still running, but it has not reported progress for several minutes.",
+    "overdue": "Still running, past its worst-case finish time.",
+}
+
+
+def _seen() -> dict:
+    return _read(SEEN) or {}
+
+
+def mark_seen(report: dict) -> int:
+    """Kris has looked: these stop counting on the overlay (kept in seen.json)."""
+    seen = _seen()
+    for f in report.get("recent_failures") or []:
+        seen[f"{f['run']}@{f['at']}"] = _now().isoformat(timespec="seconds")
+    HOME.mkdir(parents=True, exist_ok=True)
+    _write(SEEN, seen)
+    return len(report.get("recent_failures") or [])
+
+
+def write_readable(report: dict) -> Path:
+    """The page the overlay's 'See what needs a look' button opens."""
+    lines = [f"# What needs a look  (checked {report['checked'][11:16]})", ""]
+    items = ([(f["verdict"], f) for f in report.get("flagged") or []]
+             + [(f["state"], f) for f in report.get("recent_failures") or []])
+    if not items:
+        lines.append("Nothing. Every run is either healthy or finished cleanly.")
+    for n, (kind, f) in enumerate(items, 1):
+        lines += [f"## {n}. {f['run']} - {kind}" + (f" at {f['at']}" if f.get("at") else ""),
+                  "", f"- **What happened:** {f.get('why') or 'no reason recorded'}",
+                  f"- **What it means:** {MEANING.get(kind, '')}"]
+        if f.get("action"):
+            lines.append(f"- **What the watchdog did:** {f['action']}")
+        folder = f.get("folder") or str(RUNS / f["run"])
+        lines += [f"- **Files:** {folder}",
+                  "- **What to do:** nothing if the PA has already reported it; otherwise "
+                  "tell the PA the run name above. 'Mark as seen' on the overlay clears it.",
+                  ""]
+    lines += ["---", f"Log of every watchdog decision: {HOME / 'watchdog.log'}"]
+    HOME.mkdir(parents=True, exist_ok=True)
+    READABLE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return READABLE
 
 
 def _proc(pid):
@@ -200,6 +258,7 @@ def scan(act: bool = True) -> dict:
     if act:
         HOME.mkdir(parents=True, exist_ok=True)
         _write(HOME / "report.json", report)
+        write_readable(report)
         if log:
             with open(HOME / "watchdog.log", "a", encoding="utf-8") as fh:
                 fh.write("\n".join(log) + "\n")

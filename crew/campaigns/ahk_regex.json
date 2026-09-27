@@ -1,0 +1,36 @@
+{
+  "name": "ahk-regex",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "max_requests": 40,
+  "workspace_subdir": "ahk_lib",
+  "goal": "Build regex.ahk, module 2 of the AHK library: RegExMatch captures as real 1-based arrays (MatchAll, MatchFirst, Count), pure and self-contained. Author and tester work from crew/contracts/ahk_regex.md alone; acceptance is the hidden TAP tests (run in Windows Sandbox) plus the ahk scanner and API gates.",
+  "teams": {
+    "Parsers": {
+      "author": "Nemotron",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "regex",
+      "team": "Parsers",
+      "module": "regex.ahk",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_regex.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_regex.ahk"
+      ],
+      "api": [
+        "MatchAll",
+        "MatchFirst",
+        "Count"
+      ],
+      "depends": [],
+      "min_tests": 14,
+      "instructions": "Write regex.ahk per the contract ahk_regex.md: MatchAll, MatchFirst, Count, all pure, self-contained, no percent signs, no code outside functions. Quirks most likely to trip you: (1) the caller's needle has no O) - your module must add object mode itself, and option letters belong ONLY at the very start of the needle; if the caller wrote i) or m) there, merge your O into that group (Oi)...) instead of moving or dropping it; (2) RegExMatch returns 0 on no match, never -1 - a -1 test hides every failure; (3) zero-length matches (a*) must advance the start position by 1 or MatchAll and Count never end, and you must never start a search beyond StrLen(text)+1 (a search AT StrLen(text)+1 is legal and can match an empty pattern there); (4) with the O) match object, the whole match is m.Value(0)/m.Len(0), group count is m.Count(), and an unmatched optional group reads \"\" from m.Value(n) - it still occupies its numbered slot; (5) a literal quote inside a pattern string is doubled (\"\") in source, never backslash-escaped; (6) arrays are 1-based: [1] is the whole match, [2] the first group. (7) In multiline mode (m)) AutoHotkey's default line break is CRLF; a bare `n is not a line break.",
+      "test_instructions": "Write the TAP tests from ahk_regex.md only, per ahk_code_tests.md: first line exactly #Include tap.ahk, then #Include regex.ahk, end with Done(). Quirks most likely to trip you: (1) Is(got, want, name) compares with == (case-sensitive) - copy every expected capture from the contract's tables character for character, including \"$99.50\" and \"\"hi\"\"; (2) arrays compare by reference - never Is() two arrays; use Ok(IsObject(...)) plus Is on .Length() and one Is per element; (3) the zero-length-match values are STATED in the contract, do not re-derive them: a* on \"bc\" is exactly 3 empty matches (positions 1, 2 and one past the end), on \"banana\" 7, on \"\" 1; (4) an unmatched optional group is the empty string AT its numbered slot, not a missing slot - the array length still counts it; (5) RegExMatch returns 0 on no match, and MatchFirst on no match returns the empty string \"\", not an empty array; (6) no percent signs, labels, hotkeys or outside-world commands in the test file either - the same scanner reads it. (7) The contract states that m) on text with bare `n line breaks matches differently from CRLF text - copy its values, do not reason them out."
+    }
+  ]
+}

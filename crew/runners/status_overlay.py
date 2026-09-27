@@ -25,6 +25,7 @@ for when a tool underneath is hidden even by the ghost.
 
 import datetime as dt
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -263,6 +264,27 @@ def main():
 
     tk.Button(buttons, text="Open Review Desk", command=open_desk, relief="flat",
               bg=ACCENT, fg="#101318", font=("Segoe UI", 9, "bold"), padx=10).pack(side="left")
+    def open_watchdog():
+        try:
+            from crew.runners import watchdog
+            os.startfile(str(watchdog.write_readable(wd["report"] or watchdog.scan(act=False))))
+        except Exception:  # noqa: BLE001 - the overlay must never crash
+            pass
+
+    def seen_watchdog():
+        try:
+            from crew.runners import watchdog
+            watchdog.mark_seen(wd["report"] or {})
+            wd["report"] = watchdog.scan(act=True)
+            refresh(schedule=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+    wd_buttons = tk.Frame(frame, bg=BG)
+    tk.Button(wd_buttons, text="See what needs a look", command=open_watchdog, relief="flat",
+              bg=BAD, fg="#101318", font=("Segoe UI", 9, "bold"), padx=10).pack(side="left")
+    tk.Button(wd_buttons, text="Mark as seen", command=seen_watchdog, relief="flat",
+              bg="#22303C", fg=FG, font=("Segoe UI", 8), padx=8).pack(side="left", padx=8)
     tk.Button(buttons, text="Close overlay", command=lambda: root.destroy(), relief="flat",
               bg="#22303C", fg=FG, font=("Segoe UI", 8), padx=8).pack(side="left", padx=8)
     foot = tk.Label(frame, bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w", justify="left")
@@ -289,6 +311,7 @@ def main():
             state["last_inside"] = time.time()
         else:
             buttons.pack_forget()
+            wd_buttons.pack_forget()
         refresh(schedule=False)
 
     class POINT(ctypes.Structure):
@@ -364,6 +387,10 @@ def main():
                 lines.append(f"{s['what'][:34]:<34} {eta}{q}\n   {s['group']}{note}")
             body.config(text="\n".join(lines) if lines else "nothing running")
             flagged = (wd["report"] or {}).get("flagged") or []
+            if flagged or (wd["report"] or {}).get("recent_failures"):
+                wd_buttons.pack(anchor="w", pady=(4, 0), before=buttons)
+            else:
+                wd_buttons.pack_forget()
             review.config(text=(f"NEEDS YOU: {waiting} item(s) in the Review Desk\n"
                                 + "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(titles))
                                 if waiting else "Nothing waiting for your review.")

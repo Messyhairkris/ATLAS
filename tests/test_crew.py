@@ -1821,6 +1821,29 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(killed, [])
 
 
+class AhkTimeoutFeedbackTests(unittest.TestCase):
+    """2026-09-26: Nemotron was told only "timed out after 30s" twice and made no
+    progress. A timeout now says how far the tests got and which check hung."""
+
+    def test_timeout_names_the_check_that_hung(self):
+        from crew import ahkrun
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        src = ('#Include tap.ahk\nIs(F(1), 1, "rule 1: one")\n'
+               'Ok(F(2) = 2, "rule 2: say ""two""")\nIs(F(3), 3, "rule 3: three")\nDone()\n')
+        (tmp / "test_f.ahk.tap").write_text("ok 1 - rule 1: one\nok 2 - rule 2\n",
+                                            encoding="utf-8")
+        self.assertEqual(ahkrun.check_names(src),
+                         ["rule 1: one", 'rule 2: say "two"', "rule 3: three"])
+        msg = ahkrun.explain_timeouts("FAIL test_f.ahk: timed out after 30s", tmp,
+                                      {"test_f.ahk": src})
+        self.assertIn("2 check(s) finished", msg)
+        self.assertIn("check 3 ('rule 3: three')", msg)
+        self.assertEqual(ahkrun.explain_timeouts("FAIL test_f.ahk: 1 failed", tmp,
+                                                 {"test_f.ahk": src}),
+                         "FAIL test_f.ahk: 1 failed")
+
+
 class QuoteGradingTests(unittest.TestCase):
     """2026-09-26: Kimi's design missions were marked NOT PASSED for backticking its
     own proposed code, shortened with '...'. Invented quotes must still fail."""
@@ -1867,6 +1890,32 @@ class LockedStatusFileTests(unittest.TestCase):
             watchdog.RUNS = saved
         self.assertEqual([(g["state"], g["why"]) for g in got],
                          [("failed", "PermissionError: locked")])
+
+    def test_a_lost_job_shows_the_reason_from_its_record_and_can_be_marked_seen(self):
+        from crew.runners import watchdog
+        runs = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, runs, True)
+        job = runs / "jobs" / "job-x"
+        job.mkdir(parents=True)
+        (job / "status.json").write_text(json.dumps({"state": "lost",
+                                                     "watchdog": "18:26 process was gone"}))
+        (job / "job.json").write_text(json.dumps(
+            {"result": {"error": "CrewError: no playbook for task type 'ahk_code_task'"}}))
+        saved = (watchdog.RUNS, watchdog.HOME, watchdog.SEEN, watchdog.READABLE)
+        watchdog.RUNS, watchdog.HOME = runs, runs / "watchdog"
+        watchdog.SEEN = watchdog.HOME / "seen.json"
+        watchdog.READABLE = watchdog.HOME / "NEEDS_A_LOOK.md"
+        try:
+            got = watchdog.recent_failures()
+            self.assertIn("no playbook", got[0]["why"])
+            page = watchdog.write_readable({"checked": "2026-09-26T19:00:00", "flagged": [],
+                                            "recent_failures": got}).read_text(encoding="utf-8")
+            self.assertIn("no playbook", page)
+            self.assertIn(str(job), page)
+            watchdog.mark_seen({"recent_failures": got})
+            self.assertEqual(watchdog.recent_failures(), [])
+        finally:
+            watchdog.RUNS, watchdog.HOME, watchdog.SEEN, watchdog.READABLE = saved
 
 
 class McpSurfaceTests(unittest.TestCase):

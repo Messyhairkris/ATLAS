@@ -88,6 +88,43 @@ def _take_lock(wait_s: int) -> bool:
     return False
 
 
+_CHECK_NAME = re.compile(r'^\s*(?:Is|Ok)\(.*,\s*"((?:[^"]|"")*)"\s*\)\s*$')
+
+
+def check_names(test_source: str) -> list:
+    """The name of every Is/Ok check, in file order (its last string argument)."""
+    out = []
+    for line in test_source.splitlines():
+        m = _CHECK_NAME.match(line)
+        if m:
+            out.append(m.group(1).replace('""', '"'))
+    return out
+
+
+def explain_timeouts(verdict: str, run_dir: Path, tests: dict) -> str:
+    """A bare "timed out after 30s" told Nemotron nothing twice (2026-09-26). The
+    TAP file is written check by check, so it shows how far the tests got; the
+    next check's name says where the module hangs."""
+    notes = []
+    for name, source in tests.items():
+        if f"{name}: timed out" not in verdict:
+            continue
+        tap = run_dir / f"{name}.tap"
+        lines = tap.read_text(encoding="utf-8-sig", errors="replace").splitlines() \
+            if tap.exists() else []
+        done = sum(1 for ln in lines if re.match(r"(not )?ok \d+", ln))
+        names = check_names(source)
+        if done < len(names):
+            notes.append(f"{name}: {done} check(s) finished, then it hung during check "
+                         f"{done + 1} ('{names[done]}') - look for a loop that never ends "
+                         f"there")
+        else:
+            notes.append(f"{name}: all {done} checks finished, but the file never reached "
+                         f"Done() - something after the last check (or a check's value "
+                         f"being built) never returned")
+    return verdict + ("\n" + "\n".join(notes) if notes else "")
+
+
 def run_ahk_tests(modules: dict, tests: dict, title: str = "",
                   per_test_timeout_s: int = 30, boot_timeout_s: int = 600,
                   idle_timeout_s: int = 240, keep: bool = False, grants=()) -> dict:
@@ -136,11 +173,14 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
             deadline = time.time() + boot_timeout_s
             seen = None
             while time.time() < deadline and not done.exists():
-                if stage.exists():
-                    mark = (stage.stat().st_mtime, stage.read_bytes())
-                    if mark != seen:
-                        seen = mark
-                        deadline = time.time() + idle_timeout_s
+                try:                      # the runner may be writing it right now
+                    mark = (stage.stat().st_mtime, stage.read_bytes()) \
+                        if stage.exists() else None
+                except OSError:           # (2026-09-26: a locked stage.txt crashed a job)
+                    mark = seen
+                if mark is not None and mark != seen:
+                    seen = mark
+                    deadline = time.time() + idle_timeout_s
                 time.sleep(2)
             if done.exists():
                 finished = True
@@ -156,6 +196,8 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
         verdict = done.read_text(encoding="ascii", errors="replace").strip() \
             if finished else "FAIL sandbox runner never finished"
         ok = verdict.startswith("PASS")
+        if not ok:
+            verdict = explain_timeouts(verdict, run_dir, tests)
         if ok and not keep:
             shutil.rmtree(run_dir, ignore_errors=True)
         return {"ok": ok, "summary": verdict, "log": log, "problems": [],

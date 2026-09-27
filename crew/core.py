@@ -272,6 +272,12 @@ class Crew:
             self.store.save(job)
             self.store.log("task_failed", "system", job_id, parent=claim_node,
                            error=str(e)[:300])
+            # say so in status.json too: a crashed job otherwise reads "running" until
+            # the watchdog finds its process gone (2026-09-26, the AHK playbook gap)
+            (jdir / "status.json").write_text(json.dumps({
+                "state": "failed", "job": job_id, "status": FAILED, "passed": False,
+                "error": f"{type(e).__name__}: {e}"[:500], "finished": now_iso()},
+                indent=1), encoding="utf-8")
             return self._brief(job)
         finally:
             if lsp_pool:

@@ -1,0 +1,28 @@
+{
+ "name": "kimi-ahk-design-regex",
+ "member": "Kimi",
+ "quote_check": "note",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/special_teams/kimi-ahk-plan/staged/PLAN.md",
+  "C:/Users/user/ATLAS-api-harness/crew/contracts",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_task.md",
+  "C:/Users/user/ATLAS-api-harness/crew/playbooks/ahk_code_tests.md",
+  "C:/Users/user/ATLAS-api-harness/crew/ahk/tap.ahk",
+  "C:/Users/user/ATLAS-api-harness/crew/PERSONNEL.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_quirks_analysis.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_v1_master_prompt.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_v1_comprehensive_prompt.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/utility_functions_quirks_analysis.md"
+ ],
+ "goal": "You are the campaign ARCHITECT for module 2 of your plan (PLAN.md): regex.ahk, which turns AutoHotkey's matchN pseudo-variables into real arrays. Module 1, str.ahk, is DONE: your contract crew/contracts/ahk_str.md produced a module Hoss wrote and Qwen tested on the first try, and it passed all 41 of your hidden checks in real AutoHotkey. Use ahk_str.md as the structural model - the PM approved the result.\n\nWHAT THE SANDBOX TAUGHT US ON str.ahk (read the two AHK playbooks too): three of your 41 expected values were wrong because they were reasoned, not observed - title case breaks words only at spaces. For regex.ahk, the risky facts are RegExMatch's behaviour: the O) output-object mode and its methods (Value(n), Pos(n), Len(n), Count(), Name(n)), what an UNMATCHED optional group returns, how a zero-length match must advance, where option letters go, and RegExMatch returning 0 on no match. Where you are not certain what AutoHotkey v1.1 returns, say so - the PA runs your reference against your tests in Windows Sandbox before any crew member sees them, and fixes what real AutoHotkey disagrees with.\n\nTHE PA'S DECISIONS: API as in your plan - MatchAll(text, needle), MatchFirst(text, needle), Count(text, needle) - unless you find a reason to change it, which you state. Team: author Nemotron, tester Hoss (from your plan). regex.ahk is self-contained (depends on nothing). Needles are ordinary AutoHotkey regex strings WITHOUT an O) prefix from the caller; the module adds what it needs, and says in the contract what happens if the caller already wrote options like i) at the start.\n\nFIXED RULES OF THE JUDGE: crew/contracts/ahk_scan.md (the scanner: no '%', no loose code, banned words, no hotkeys or labels) and ahk_api.md. Tests begin with exactly `#Include tap.ahk` then `#Include regex.ahk`, use only Is(got, want, name) (== compare) and Ok(cond, name), end with Done(). Arrays compare by reference, so check element by element. Your guides: ahk_v1_master_prompt.md and ahk_v1_comprehensive_prompt.md are the project's own AutoHotkey v1 guides - use them for facts about RegExMatch.\n\nSTAGE EXACTLY THESE FILES with stage_file:\n1. regex.md - the contract (same structure as ahk_str.md: purpose, Public API, numbered rules with examples, edge cases stated outright, 'A careless implementation cannot pass').\n2. regex.ahk - your reference implementation (scanner rules above).\n3. test_regex.ahk - hidden tests: at least 30 Is/Ok checks, each naming its rule; exact expected values.\n4. campaign.json - same shape as crew/campaigns/ahk_str.json but name \"ahk-regex\", team \"Parsers\" {author Nemotron, tester Hoss}, task id \"regex\", module \"regex.ahk\", contract \"C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_regex.md\", hidden_tests [\"C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_regex.ahk\"], workspace_subdir \"ahk_lib\", with instructions and test_instructions naming the quirks most likely to trip each of them.\n\nFinal answer: the API in one paragraph, and the checks in test_regex.ahk you are LEAST sure real AutoHotkey agrees with (list every one - the PA looks at those first).",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file"],
+ "acting_tools": ["stage_file"],
+ "max_steps": 34,
+ "max_actions": 12,
+ "max_turns": 40,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.5,
+ "reply_tokens": 32768,
+ "expect_staged": ["regex.md", "regex.ahk", "test_regex.ahk", "campaign.json"]
+}
