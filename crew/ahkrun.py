@@ -41,6 +41,30 @@ AHK_DIR = Path(os.environ.get("ATLAS_AHK_DIR", r"C:\Program Files\AutoHotkey"))
 AHK_EXE = "AutoHotkeyU64.exe"
 TAP_LIB = Path(__file__).resolve().parent / "ahk" / "tap.ahk"
 LOCK = Path(os.environ.get("ATLAS_WSB_SHARE", r"C:\ATLAS-wsb")) / "sandbox.lock"
+# Warm sandbox (Kris, 2026-09-26): one sandbox serves many runs; a fresh boot only
+# when there is none, it went idle or dirty, served WARM_MAX_JOBS, or fresh=True.
+WARM = Path(os.environ.get("ATLAS_WSB_SHARE", r"C:\ATLAS-wsb")) / "warm"
+WARM_ENABLED = os.environ.get("ATLAS_WSB_WARM", "1") != "0"
+WARM_IDLE_S = int(os.environ.get("ATLAS_WSB_WARM_IDLE_S", "900"))
+WARM_MAX_JOBS = int(os.environ.get("ATLAS_WSB_WARM_MAX_JOBS", "25"))
+WARM_TEMPLATE = """<Configuration>
+  <VGpu>Disable</VGpu>
+  <Networking>Disable</Networking>
+  <AudioInput>Disable</AudioInput>
+  <VideoInput>Disable</VideoInput>
+  <PrinterRedirection>Disable</PrinterRedirection>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <MemoryInMB>{memory_mb}</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder><HostFolder>{warm}</HostFolder><ReadOnly>false</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>{ahk}</HostFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>{tools}</HostFolder><ReadOnly>true</ReadOnly></MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{desktop}\\{tools_name}\\warm_runner.ps1" -WarmDir "{desktop}\\{warm_name}" -ToolsDir "{desktop}\\{tools_name}"</Command>
+  </LogonCommand>
+</Configuration>
+"""
 
 
 # Words a task may be granted. Kris, 2026-09-21: "Clipboard is a tool that will be
@@ -125,20 +149,130 @@ def explain_timeouts(verdict: str, run_dir: Path, tests: dict) -> str:
     return verdict + ("\n" + "\n".join(notes) if notes else "")
 
 
+def _heartbeat_age() -> float:
+    try:
+        return time.time() - (WARM / "heartbeat.txt").stat().st_mtime
+    except OSError:
+        return 1e9
+
+
+def warm_alive() -> bool:
+    """A warm sandbox that is up, serving, clean, and saying so every second."""
+    return (WARM_ENABLED and (WARM / "ready_for_jobs.txt").exists()
+            and not (WARM / "stopped.txt").exists() and not (WARM / "dirty.txt").exists()
+            and _heartbeat_age() < 15)
+
+
+def _boot_warm(boot_timeout_s: int) -> bool:
+    import verify
+    verify._kill_sandbox()                        # Windows 10: one sandbox at a time
+    time.sleep(2)
+    shutil.rmtree(WARM, ignore_errors=True)
+    (WARM / "inbox").mkdir(parents=True, exist_ok=True)
+    (WARM / "warm.json").write_text(json.dumps({
+        "exe_dir": f"{verify.WSB_DESKTOP}\\{AHK_DIR.name}", "exe": AHK_EXE,
+        "idle_s": WARM_IDLE_S, "max_jobs": WARM_MAX_JOBS, "debloat": True}, indent=2),
+        encoding="utf-8")
+    wsb = WARM / "warm.wsb"
+    wsb.write_text(WARM_TEMPLATE.format(
+        memory_mb=verify.WSB_MEMORY_MB, warm=str(WARM), ahk=str(AHK_DIR),
+        tools=str(verify.SANDBOX_TOOLS), desktop=verify.WSB_DESKTOP,
+        tools_name=verify.SANDBOX_TOOLS.name, warm_name=WARM.name), encoding="utf-8")
+    for attempt in (1, 2):                        # one warm retry for a cold boot
+        subprocess.Popen(["cmd", "/c", "start", "", str(wsb)],
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        deadline = time.time() + boot_timeout_s
+        while time.time() < deadline:
+            if warm_alive():
+                return True
+            if (WARM / "heartbeat.txt").exists():
+                deadline = max(deadline, time.time() + 120)   # booted, still trimming
+            time.sleep(2)
+        verify._kill_sandbox()
+        if (WARM / "heartbeat.txt").exists():
+            break
+    return False
+
+
+def _run_warm(modules: dict, tests: dict, title: str, per_test_timeout_s: int,
+              boot_timeout_s: int, keep: bool):
+    """Run one batch in the warm sandbox; None means "use a fresh one instead"."""
+    booted = False
+    if not warm_alive():
+        if not _boot_warm(boot_timeout_s):
+            return None
+        booted = True
+    run_id = f"ahk-{int(time.time() * 1000)}"
+    job_dir = (WARM / "inbox" / run_id).resolve()
+    job_dir.mkdir(parents=True)
+    for name, source in {**modules, **tests}.items():
+        (job_dir / name).write_text(source, encoding="utf-8-sig")
+    shutil.copy(TAP_LIB, job_dir / "tap.ahk")
+    (job_dir / "job.json").write_text(json.dumps({
+        "run_id": run_id, "title": title or f"AutoHotkey tests: {', '.join(tests)}",
+        "tests": sorted(tests), "per_test_timeout_s": per_test_timeout_s}, indent=2),
+        encoding="utf-8")
+    (job_dir / "ready.txt").write_text("ready", encoding="ascii")    # written LAST
+    done = job_dir / "runner_done.txt"
+    deadline = time.time() + per_test_timeout_s * max(1, len(tests)) + 90
+    while time.time() < deadline and not done.exists():
+        if _heartbeat_age() > 30 or (WARM / "stopped.txt").exists():
+            break                                 # the box died or left mid-run
+        time.sleep(1)
+    if not done.exists():
+        import verify
+        verify._kill_sandbox()
+        return None
+    time.sleep(0.3)
+    verdict = done.read_text(encoding="ascii", errors="replace").strip()
+    log = (job_dir / "run.log").read_text(encoding="utf-8-sig", errors="replace") \
+        if (job_dir / "run.log").exists() else ""
+    ok = verdict.startswith("PASS")
+    if not ok:
+        verdict = explain_timeouts(verdict, job_dir, tests)
+    if ok and not keep:
+        shutil.rmtree(job_dir, ignore_errors=True)
+    return {"ok": ok, "summary": verdict, "log": log, "problems": [],
+            "run_dir": "" if ok and not keep else str(job_dir),
+            "sandbox": "warm (booted now)" if booted else "warm (reused)"}
+
+
 def run_ahk_tests(modules: dict, tests: dict, title: str = "",
                   per_test_timeout_s: int = 30, boot_timeout_s: int = 600,
-                  idle_timeout_s: int = 240, keep: bool = False, grants=()) -> dict:
-    """{"ok", "summary", "log", "problems", "run_dir"} for one batch of tests.
-    `grants` names permissions from GRANTABLE, e.g. ("clipboard",)."""
+                  idle_timeout_s: int = 240, keep: bool = False, grants=(),
+                  fresh: bool = False) -> dict:
+    """{"ok", "summary", "log", "problems", "run_dir", "sandbox"} for one batch.
+    `grants` names permissions from GRANTABLE, e.g. ("clipboard",). The warm
+    sandbox is used unless fresh=True (or ATLAS_WSB_WARM=0); if it cannot serve
+    the run, a fresh single-run sandbox does."""
     problems = static_problems(modules, tests, grants)
     if problems:
         return {"ok": False, "summary": "refused before running",
                 "log": "", "problems": problems, "run_dir": ""}
-
-    import verify
     if not _take_lock(boot_timeout_s):
         return {"ok": False, "summary": "another sandbox run held the lock",
                 "log": "", "problems": [], "run_dir": ""}
+    try:
+        if WARM_ENABLED and not fresh:
+            r = _run_warm(modules, tests, title, per_test_timeout_s, boot_timeout_s, keep)
+            if r is not None:
+                return r
+        elif warm_alive():                         # a fresh run needs the one sandbox slot
+            (WARM / "stop.txt").write_text("fresh run requested", encoding="ascii")
+            import verify
+            verify._kill_sandbox()
+        r = _run_cold(modules, tests, title, per_test_timeout_s, boot_timeout_s,
+                      idle_timeout_s, keep)
+        r["sandbox"] = "fresh"
+        return r
+    finally:
+        LOCK.unlink(missing_ok=True)
+
+
+def _run_cold(modules: dict, tests: dict, title: str, per_test_timeout_s: int,
+              boot_timeout_s: int, idle_timeout_s: int, keep: bool) -> dict:
+    """The original single-run sandbox: boot, run this batch, shut down."""
+    import verify
     run_id = f"ahk-{int(time.time())}"
     run_dir = (verify.WSB_SHARE_ROOT / run_id).resolve()
     try:
@@ -203,15 +337,17 @@ def run_ahk_tests(modules: dict, tests: dict, title: str = "",
         return {"ok": ok, "summary": verdict, "log": log, "problems": [],
                 "run_dir": "" if ok and not keep else str(run_dir)}
     finally:
-        LOCK.unlink(missing_ok=True)
+        pass
 
 
 def main(argv=None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
+    fresh = "--fresh" in args           # confirm on a clean boot (Kris, 2026-09-26)
+    args = [a for a in args if a != "--fresh"]
     files = {Path(a).name: Path(a).read_text(encoding="utf-8-sig") for a in args}
     tests = {n: s for n, s in files.items() if n.lower().startswith("test")}
     modules = {n: s for n, s in files.items() if n not in tests}
-    result = run_ahk_tests(modules, tests)
+    result = run_ahk_tests(modules, tests, fresh=fresh)
     print(json.dumps({k: v for k, v in result.items() if k != "log"}, indent=2))
     print(result["log"])
     return 0 if result["ok"] else 1

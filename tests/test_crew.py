@@ -1821,6 +1821,33 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(killed, [])
 
 
+class WarmSandboxTests(unittest.TestCase):
+    """2026-09-26 (Kris): reuse one sandbox unless conditions warrant a fresh one."""
+
+    def test_a_warm_box_is_used_only_while_alive_clean_and_serving(self):
+        from crew import ahkrun
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        saved = (ahkrun.WARM, ahkrun.WARM_ENABLED)
+        ahkrun.WARM, ahkrun.WARM_ENABLED = tmp, True
+        try:
+            self.assertFalse(ahkrun.warm_alive())                   # nothing booted
+            (tmp / "ready_for_jobs.txt").write_text("ready")
+            (tmp / "heartbeat.txt").write_text("now")
+            self.assertTrue(ahkrun.warm_alive())
+            (tmp / "dirty.txt").write_text("an AutoHotkey process survived")
+            self.assertFalse(ahkrun.warm_alive())                   # dirty: boot fresh
+            (tmp / "dirty.txt").unlink()
+            (tmp / "stopped.txt").write_text("idle")
+            self.assertFalse(ahkrun.warm_alive())                   # it shut itself down
+            (tmp / "stopped.txt").unlink()
+            old = time.time() - 60
+            os.utime(tmp / "heartbeat.txt", (old, old))
+            self.assertFalse(ahkrun.warm_alive())                   # silent: not alive
+        finally:
+            ahkrun.WARM, ahkrun.WARM_ENABLED = saved
+
+
 class AhkTimeoutFeedbackTests(unittest.TestCase):
     """2026-09-26: Nemotron was told only "timed out after 30s" twice and made no
     progress. A timeout now says how far the tests got and which check hung."""

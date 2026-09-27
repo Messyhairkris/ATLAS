@@ -161,6 +161,22 @@ def gather():
                           "group": f"{kind}: {p.parent.name}"[:48], "likely": likely,
                           "worst": worst, "queued_minutes": 0, "desktop": False, "note": s.get("you_might_see", ""),
                           "started": (s.get("started") or "")[-8:-3]})
+    # the warm AHK sandbox: open between test runs on purpose (2026-09-26)
+    try:
+        from crew import ahkrun
+        hb = ahkrun.WARM / "heartbeat.txt"
+        if ahkrun.warm_alive():
+            parts = hb.read_text(encoding="ascii", errors="replace").split()
+            info = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+            steps.append({"what": f"Warm sandbox - {info.get('state', '?')}, "
+                                  f"{info.get('jobs', '?')} run(s) served",
+                          "group": "AHK test sandbox", "likely": None, "worst": None,
+                          "queued_minutes": 0, "desktop": False, "started": "",
+                          "eta_text": f"closes itself after {ahkrun.WARM_IDLE_S // 60} min idle",
+                          "note": "the Windows Sandbox window stays open between tests - "
+                                  "that is the warm sandbox saving a 5-minute boot per run"})
+    except Exception:  # noqa: BLE001 - the overlay must never crash
+        pass
     # the heavy queue: items waiting their turn, #1 runs next
     try:
         from crew.runners import heavy_queue

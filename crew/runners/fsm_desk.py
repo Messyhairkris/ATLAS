@@ -181,6 +181,14 @@ class DeskSUL(SUL):
         desk = self.desk
         desk.modal = lambda batch, complete: self.offers.append(
             ("offer-complete" if complete else "offer", len(batch)))
+        # Only a message THIS step produced is output. The status bar keeps the last
+        # message until another replaces it, so observing the bar itself made every
+        # state remember it - 86 states for one item (2026-09-26).
+        self.said = []
+        real_say = desk.say
+        desk.say = lambda text, colour=None: (self.said.append(text),
+                                              real_say(text) if colour is None
+                                              else real_say(text, colour))
         self.resets += 1
 
     def post(self):
@@ -200,6 +208,7 @@ class DeskSUL(SUL):
             raise SystemExit("the desk window became visible - stopping so nothing "
                              "appears on the user's screen")
         before = len(self.offers)
+        self.said = []
         if letter.startswith("select"):
             d.select(int(letter[-1]) - 1)
         elif letter == "note_empty":
@@ -226,7 +235,7 @@ class DeskSUL(SUL):
     # -- what the window would show ------------------------------------------------
     def observe(self, offered: bool) -> str:
         d = self.desk
-        status = TIME.sub("T", d.status.cget("text"))
+        status = TIME.sub("T", self.said[-1]) if self.said else "-"
         send = d.send_button.cget("text")
         rows = [d.listbox.get(i) for i in range(d.listbox.size())]
         return " | ".join([send, "rows=" + ";".join(rows), status]
