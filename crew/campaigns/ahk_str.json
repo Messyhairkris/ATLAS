@@ -1,0 +1,27 @@
+{
+  "name": "ahk-str",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 0,
+  "max_requests": 40,
+  "workspace_subdir": "ahk_lib",
+  "goal": "Build str.ahk, the campaign's pure string-helper building block (Lower, Upper, Title, Default, Coalesce): expression-mode case helpers that return new strings instead of mutating in place, and default/coalesce helpers that treat the empty string as the only empty value. Author and tester work from crew/contracts/ahk_str.md alone; acceptance is the hidden TAP test file plus the ahk scanner and API gates.",
+  "teams": {
+    "Strings": {"author": "Hoss", "tester": "Qwen"}
+  },
+  "tasks": [
+    {
+      "id": "str",
+      "team": "Strings",
+      "module": "str.ahk",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_str.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_str.ahk"],
+      "api": ["Lower", "Upper", "Title", "Default", "Coalesce"],
+      "depends": [],
+      "min_tests": 12,
+      "instructions": "Two AutoHotkey v1.1 quirks will trip you. (1) StringLower and StringUpper are legacy COMMANDS with no return value: run them into a local variable, then return that variable; 'return StringLower(text)' silently yields the empty string, and title case is the command's third parameter T (StringLower, out, text, T), not a function call. (2) The string \"0\" is FALSY in v1.1: Default and Coalesce must test for the empty string explicitly (value == \"\"), never with 'if (value)' truthiness, or they will wrongly replace \"0\" and 0. Also: every line of code inside a function, no percent signs anywhere, no ByRef.",
+      "test_instructions": "Write TAP tests from the contract alone: first line #Include tap.ahk, then #Include str.ahk, using only Is(got, want, name) and Ok(condition, name), ending with Done(). Is compares with == (case-sensitive), so every expected string must be exactly cased as the contract's examples show - copy them verbatim. Cover every numbered rule with at least one check: rule 3 (Title resets mixed case, does NOT capitalize after a hyphen or apostrophe: \"Don't Stop\", \"The-end\"), rule 4 (\"0\" and 0 are kept, never replaced), rule 6 (zero-argument Coalesce is \"\"), rule 10 (caller's variable unchanged after Lower/Title/Default), rule 11 (nested calls). Never assert mere non-emptiness such as Ok(x != \"\") - every check pins an exact expected value. No labels, no hotkeys, no percent signs."
+    }
+  ]
+}

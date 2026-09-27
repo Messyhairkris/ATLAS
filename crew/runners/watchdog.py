@@ -56,7 +56,37 @@ def _read(p: Path):
 def _write(p: Path, data: dict) -> None:
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
-    os.replace(tmp, p)
+    for attempt in range(20):        # refused while a run or the overlay has it open
+        try:
+            os.replace(tmp, p)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (attempt + 1))
+    raise PermissionError(f"{p} stayed locked")
+
+
+FAILED_STATES = ("failed", "lost", "killed by watchdog")
+RECENT_FAILURE_S = 3600
+
+
+def recent_failures(now_ts: float = None) -> list:
+    """Runs that ended badly in the last hour: shown on the overlay so a dead run is
+    never silent (2026-09-26: a learner crashed at 16:04 and nothing said so)."""
+    now_ts = now_ts or time.time()
+    out = []
+    for pattern in PATTERNS:
+        for p in RUNS.glob(pattern):
+            try:
+                if now_ts - p.stat().st_mtime > RECENT_FAILURE_S:
+                    continue
+            except OSError:
+                continue
+            s = _read(p) or {}
+            if s.get("state") in FAILED_STATES:
+                out.append({"run": str(p.parent.relative_to(RUNS)), "state": s["state"],
+                            "why": str(s.get("error") or s.get("watchdog") or "")[:160],
+                            "at": dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%H:%M")})
+    return out
 
 
 def _proc(pid):
@@ -165,7 +195,8 @@ def scan(act: bool = True) -> dict:
             flagged.append(entry)
             log.append(f"{now:%Y-%m-%dT%H:%M:%S} {entry['verdict']:8} {entry['run']} pid={pid} "
                        f"{entry['why']} {entry.get('action', '')}".rstrip())
-    report = {"checked": now.isoformat(timespec="seconds"), "flagged": flagged}
+    report = {"checked": now.isoformat(timespec="seconds"), "flagged": flagged,
+              "recent_failures": recent_failures()}
     if act:
         HOME.mkdir(parents=True, exist_ok=True)
         _write(HOME / "report.json", report)

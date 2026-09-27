@@ -1,0 +1,24 @@
+{
+ "name": "kimi-ahk-design-str",
+ "member": "Kimi",
+ "quote_check": "note",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/special_teams/kimi-ahk-plan/staged/PLAN.md",
+  "C:/Users/user/ATLAS-api-harness/crew/contracts",
+  "C:/Users/user/ATLAS-api-harness/crew/ahk/tap.ahk",
+  "C:/Users/user/ATLAS-api-harness/crew/PERSONNEL.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_quirks_analysis.md",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project/ahk_v1_master_prompt.md"
+ ],
+ "goal": "You are the campaign ARCHITECT for module 1 of the plan you wrote (PLAN.md): str.ahk, the building block. A crew member (a cheap model) will write str.ahk from YOUR contract and be judged by YOUR hidden tests, which it never sees. A second member writes its own tests from the contract alone. Design it so a careful small model passes on the first try and a careless one cannot pass by accident.\n\nTHE PA'S ANSWERS TO YOUR OPEN QUESTIONS:\n1. A module_author_ahk post now exists (Hoss, Nemotron, Qwen - unproven on AHK). Your team for str.ahk stands: author Hoss, tester Qwen.\n2. A module MAY #Include another crew module it depends on (the campaign's depends list); keep str.ahk self-contained - it depends on nothing.\n3. Default/Coalesce: the empty string is the ONLY empty value; 0, \"0\" and false are values. Write that as a numbered rule with examples.\n4. (csv, later) lenient, like the stock library.\n5. StrSplit is AutoHotkey v1.1 (since 1.1.13) and may be used.\n6. Campaign 2 order: the pure repeated-press timer state comes next, then list helpers, then escaping.\n\nFIXED RULES OF THE JUDGE: read crew/contracts/ahk_scan.md (what the static scanner refuses: banned words, '%', hotkeys, labels, loose code, #Include outside the whitelist) and ahk_api.md (how the API/stub checks read functions). Tests are AutoHotkey v1.1 files that begin with exactly `#Include tap.ahk` then `#Include str.ahk`, use only Is(got, want, name) (compares with ==, so case-sensitive), Ok(condition, name) and end with Done(); read crew/ahk/tap.ahk. No labels, hotkeys, '%' or outside-world commands in tests either. They run inside a disposable Windows Sandbox; you cannot run them - the PA will, against your reference implementation, before any crew member sees the contract. So be exact: every expected value must be what real AutoHotkey v1.1 returns.\n\nCONTRACT STRUCTURE: copy the structure of the house contracts in crew/contracts (e.g. st_mission.md): purpose, a Public API block with every function signature and return value, numbered rules, worked examples, and the edge cases stated outright (empty input, non-ASCII letters in Lower/Upper/Title - say what StringLower/StringUpper do with them, numbers passed where text is expected, Title on already-mixed case and on words with apostrophes, Coalesce with zero arguments and with only empty strings, input variables left unchanged). Do not write an 'Allowed imports' line; write 'Allowed: AutoHotkey v1.1 built-in functions and commands that only compute a value (StringLower, StringUpper, StrLen, SubStr, InStr, StrSplit, RegExReplace...). Nothing that touches windows, keys, clipboard, files, registry or time.'\n\nSTAGE EXACTLY THESE FILES with stage_file:\n1. str.md - the contract.\n2. str.ahk - your reference implementation (it must pass the scanner rules above: every line inside a function, no '%').\n3. test_str.ahk - the hidden tests: at least 30 Is/Ok checks, each check's name naming the contract rule it covers (e.g. \"rule 4: Default keeps \\\"0\\\"\"); exact expected values, never just Ok(value != \"\").\n4. campaign.json - in this shape: {\"name\": \"ahk-str\", \"senior\": \"Claude\", \"senior_fallback\": \"Kimi\", \"max_attempts\": 3, \"max_escalations\": 0, \"max_requests\": 40, \"workspace_subdir\": \"ahk_lib\", \"goal\": \"...\", \"teams\": {\"Strings\": {\"author\": \"Hoss\", \"tester\": \"Qwen\"}}, \"tasks\": [{\"id\": \"str\", \"team\": \"Strings\", \"module\": \"str.ahk\", \"contract\": \"C:/Users/user/ATLAS-api-harness/crew/contracts/ahk_str.md\", \"hidden_tests\": [\"C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_str.ahk\"], \"api\": [every public function name], \"depends\": [], \"min_tests\": 12, \"instructions\": \"...the two quirks most likely to trip the author...\", \"test_instructions\": \"...\"}]}.\n\nFinal answer: the API in one paragraph, the three checks in test_str.ahk you are least sure real AutoHotkey agrees with (the PA will look at those first in the sandbox run), and anything in the contract you had to decide without a source.",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file"],
+ "acting_tools": ["stage_file"],
+ "max_steps": 34,
+ "max_actions": 12,
+ "max_turns": 40,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.5,
+ "reply_tokens": 32768,
+ "expect_staged": ["str.md", "str.ahk", "test_str.ahk", "campaign.json"]
+}

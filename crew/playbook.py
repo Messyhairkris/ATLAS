@@ -23,7 +23,8 @@ ENTRY = re.compile(r"^- \[(?P<id>[a-z]{2}-\d{3})\] \((?P<src>[^)]*)\) (?P<text>.
 PREFIX = {"vault_index": "vi", "research_digest": "rd", "organize_plan": "op",
           "test_triage": "tt", "ui_sweep": "us", "code_task": "ct",
           "code_tests": "cs", "js_code_task": "jt", "js_code_tests": "js",
-          "scout": "sc", "log_clerk": "lc", "completion_audit": "ca"}
+          "scout": "sc", "log_clerk": "lc", "completion_audit": "ca",
+          "ahk_code_task": "ah", "ahk_code_tests": "at"}
 NEAR_DUP = 0.88
 
 

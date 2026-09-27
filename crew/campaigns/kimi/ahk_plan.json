@@ -1,0 +1,23 @@
+{
+ "name": "kimi-ahk-plan",
+ "member": "Kimi",
+ "quote_check": "note",
+ "provider": "local",
+ "read_roots": [
+  "C:/Users/user/ATLAS-api-harness/runs/crew/outbox/research",
+  "C:/Users/user/Desktop/AHK V1 Agentic Project",
+  "C:/Users/user/ATLAS-api-harness/crew/PERSONNEL.md",
+  "C:/Users/user/ATLAS-api-harness/crew/contracts",
+  "C:/Users/user/ATLAS-api-harness/crew/ahk/tap.ahk"
+ ],
+ "goal": "You are the campaign PLANNER for the crew's first AutoHotkey v1 module library. Kris (the project manager) approved three research reports and left these notes on them: \"use the Crew to create these Modules and test them to see that they are how users will want to use the programs if for human use. Otherwise lets create the tools we remake all the time once, well, and make sure we can adapt it as needed. But better to start with a building block.\" and \"create Crew campaigns to work through these options.\"\n\nTHE RESEARCH (read all three first): ahk-use-gordon.md, ahk-use-hoss.md and ahk-use-r2-barry.md in runs/crew/outbox/research. They inventory the AHK project's libraries and list recurring hand-written idioms with no pure library function yet (RegEx captures to an array, composable case helpers, default/coalesce, CSV parsed from a string, a pure repeated-press timer state, list helpers, escaping). The primary sources they cite are in the AHK V1 Agentic Project folder (ahk_quirks_analysis.md, AHK_Reusable_Library_Catalog.md, Lib/README.md, csv_library_quirks_analysis.md and others) - check the claims you rely on against those files; the reports were written by cheap models and can be wrong.\n\nHOW CREW AHK MODULES ARE BUILT AND JUDGED (fixed; plan within it): one .ahk file of PURE functions per task - text and numbers in, a value out; no GUI, keystrokes, windows, clipboard, files, registry, DllCall, hotkeys, labels or code outside functions. A static scanner refuses anything else (crew/contracts/ahk_scan.md and ahk_api.md describe it). Hidden tests are AutoHotkey v1 files using tap.ahk (Is(got, want, name) compares with ==, Ok(cond, name), Done()), run only inside a disposable Windows Sandbox. AHK v1.1 quirks matter: 1-based arrays, case-insensitive = but case-sensitive ==, string/number duality, objects passed by reference.\n\nYOUR JOB: choose the building block - ONE first module that is small, pure, used across many scripts, and a foundation the later modules can build on - plus at most two follow-up modules in order. For each: file name (lowercase, .ahk), purpose in two sentences, the exact public functions with parameters and return values, which recurring need it replaces (cite the source file and quote the line), whether it is for human use or a tool the crew reuses, the AHK v1 quirks that will trip a small model, and author + tester chosen from the posts in PERSONNEL.md with a one-line reason.\n\nSTAGE EXACTLY ONE FILE with stage_file: PLAN.md, containing the above, ending with a section 'Open questions for the PA' (anything you could not settle from the sources). Keep it under 250 lines. Then give your final answer: the building block and why, in five sentences.",
+ "allowed_tools": ["list_dir", "read_file", "search", "stage_file"],
+ "acting_tools": ["stage_file"],
+ "max_steps": 30,
+ "max_actions": 6,
+ "max_turns": 34,
+ "max_repeats": 3,
+ "credit_cap_usd": 1.0,
+ "reply_tokens": 32768,
+ "expect_staged": ["PLAN.md"]
+}

@@ -120,19 +120,31 @@ class Tracker:
             return
         self.last = now
         s = {"state": "running", **self.base()}
-        _atomic(self.out / "status.json", s)
-        with open(self.out / "progress.log", "a", encoding="utf-8") as fh:
-            fh.write(f"{s['heartbeat']} {self.stage:10} steps={s['steps']} "
-                     f"resets={s['resets']} {s['steps_per_s']}/s states={self.states}\n")
+        try:                         # a missed heartbeat is harmless; a crash is not
+            _atomic(self.out / "status.json", s)
+            with open(self.out / "progress.log", "a", encoding="utf-8") as fh:
+                fh.write(f"{s['heartbeat']} {self.stage:10} steps={s['steps']} "
+                         f"resets={s['resets']} {s['steps_per_s']}/s states={self.states}\n")
+        except OSError:
+            self.missed = getattr(self, "missed", 0) + 1
 
     def finish(self, state: str, **extra) -> None:
         _atomic(self.out / "status.json", {"state": state, **self.base(), **extra})
 
 
 def _atomic(path: Path, data: dict) -> None:
+    """Replace the file whole. On Windows the replace is refused while another
+    process (the overlay, the watchdog) has the file open, so retry briefly
+    (2026-09-26: one refused replace killed a 48-minute learner run)."""
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (attempt + 1))
+    raise PermissionError(f"{path} stayed locked for ~10 s")
 
 
 class DeskSUL(SUL):

@@ -1821,6 +1821,54 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(killed, [])
 
 
+class QuoteGradingTests(unittest.TestCase):
+    """2026-09-26: Kimi's design missions were marked NOT PASSED for backticking its
+    own proposed code, shortened with '...'. Invented quotes must still fail."""
+
+    def test_shortened_and_signature_quotes_count_invented_ones_do_not(self):
+        from crew.special_teams import _quote_seen
+        corpus = ('Default(value, fallback := "") and '
+                  'Is(Title("don\'t stop"), "Don\'T Stop", "rule 3") StringLower')
+        self.assertTrue(_quote_seen("Default(value, fallback)", corpus))
+        self.assertTrue(_quote_seen('Is(Title("don\'t stop"), "Don\'T Stop", ...)', corpus))
+        self.assertFalse(_quote_seen("Invented(thing, other)", corpus))
+        self.assertFalse(_quote_seen("a claim nobody made here", corpus))
+        self.assertFalse(_quote_seen("Default(value) ... never said this", corpus))
+
+
+class LockedStatusFileTests(unittest.TestCase):
+    """2026-09-26: the learner's status replace was refused while the overlay had the
+    file open, and the run died. Writers now retry; the watchdog reports failures."""
+
+    def test_status_write_survives_a_reader_holding_the_file(self):
+        import threading
+        from crew.runners import fsm_desk
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        target = tmp / "status.json"
+        target.write_text("{}", encoding="utf-8")
+        held = open(target, encoding="utf-8")          # a reader, as the overlay would be
+        threading.Timer(0.3, held.close).start()
+        fsm_desk._atomic(target, {"state": "running"})
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["state"], "running")
+
+    def test_watchdog_lists_a_recent_failure(self):
+        from crew.runners import watchdog
+        runs = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, runs, True)
+        (runs / "fsm" / "x").mkdir(parents=True)
+        (runs / "fsm" / "x" / "status.json").write_text(json.dumps(
+            {"state": "failed", "error": "PermissionError: locked"}), encoding="utf-8")
+        saved = watchdog.RUNS
+        watchdog.RUNS = runs
+        try:
+            got = watchdog.recent_failures()
+        finally:
+            watchdog.RUNS = saved
+        self.assertEqual([(g["state"], g["why"]) for g in got],
+                         [("failed", "PermissionError: locked")])
+
+
 class McpSurfaceTests(unittest.TestCase):
     def test_tools_registered_and_no_promotion_tool(self):
         from crew import server

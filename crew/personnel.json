@@ -25,6 +25,8 @@
     "researcher": ["Qwen", "Gordon", "Hoss"],
     "module_author_py": ["Hoss", "Nemotron", "Qwen"],
     "module_author_js": ["Gordon", "Qwen"],
+    "module_author_ahk": ["Hoss", "Nemotron", "Qwen"],
+    "module_author_ahk_note": "2026-09-26: minted for the first AHK campaign (Kimi's plan); order copied from module_author_py - UNPROVEN on AHK until str.ahk passes its sandbox tests.",
     "tester": ["Hoss", "Qwen"],
     "byte_exact": ["Qwen", "Hoss"],
     "vision": ["Gordon", "Qwen"],

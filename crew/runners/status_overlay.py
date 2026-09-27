@@ -369,12 +369,16 @@ def main():
                                 if waiting else "Nothing waiting for your review.")
                           + "".join(f"\nWATCHDOG: {f['run']} {f['verdict']} - {f['why']}"
                                     + (f" ({f['action']})" if f.get("action") else "")
-                                    for f in flagged[:4]))
+                                    for f in flagged[:4])
+                          + "".join(f"\nFAILED {f['at']}: {f['run']} - {f['why'][:90]}"
+                                    for f in ((wd["report"] or {}).get("recent_failures")
+                                              or [])[:4]))
         else:
             body.config(text="hover here + middle-click to expand")
-            nflag = len((wd["report"] or {}).get("flagged") or [])
+            nflag = len((wd["report"] or {}).get("flagged") or []) + len(
+                (wd["report"] or {}).get("recent_failures") or [])
             review.config(text=(f"NEEDS YOU: {waiting} to review" if waiting else "")
-                          + (("\n" if waiting else "") + f"WATCHDOG: {nflag} run(s) flagged"
+                          + (("\n" if waiting else "") + f"WATCHDOG: {nflag} run(s) need a look"
                              if nflag else ""))
         try:
             load = load_sample()

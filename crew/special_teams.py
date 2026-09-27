@@ -54,6 +54,23 @@ OLD_CHARS = 700
 MAX_RESULT_CHARS = 30000
 # pair backticks first, filter by length after (the gates.py bug, 2026-09-25)
 QUOTE = re.compile(r"`([^`\n]+)`")
+_ELISION = re.compile(r"\s*(?:\.\.\.|…)\s*")
+_CALL = re.compile(r"^([A-Za-z_]\w*)\(")
+
+
+def _quote_seen(quote: str, corpus: str) -> bool:
+    """A quote is seen if it is in the evidence verbatim; a span shortened with
+    '...' if every piece is; a function signature if that function is called or
+    defined in the evidence (`Default(value, fallback)` for `Default(value, fallback := "")`)."""
+    q = re.sub(r"\s+", " ", quote).strip()
+    if q in corpus:
+        return True
+    pieces = [p.strip(" ,") for p in _ELISION.split(q) if p.strip(" ,")]
+    if len(pieces) > 1 and all(p in corpus for p in pieces):
+        return True
+    m = _CALL.match(q)
+    return bool(m and q.endswith(")") and (m.group(1) + "(") in corpus
+                and len(pieces) == 1)
 
 
 def _load_crew_module(name: str):
@@ -405,11 +422,17 @@ def _run(mission, chat, mcp, out_dir, shots, transcript, log, status, st_schema,
                   for p in staged_dir.rglob("*") if p.is_file()]
     corpus = re.sub(r"\s+", " ", "\n".join(observed + extra))
     unseen_quotes = [q for q in QUOTE.findall(final or "") if len(q.strip()) >= 12
-                     and re.sub(r"\s+", " ", q).strip() not in corpus]
+                     and not _quote_seen(q, corpus)]
     missing = [e for e in mission.get("expect_observed", []) if e not in corpus]
+    # Design missions put their OWN proposed code in backticks; there an unseen span
+    # is worth a note, not a failure (2026-09-26: two good Kimi designs marked NOT
+    # PASSED). Review/checker missions keep the strict default.
+    quotes_strict = mission.get("quote_check", "fail") != "note"
     checks = [{"check": "answered", "ok": str(stop).startswith("answered"), "detail": stop},
-              {"check": "quotes seen", "ok": not unseen_quotes,
-               "detail": "; ".join(unseen_quotes[:5]) or "every quote was returned by a tool"},
+              {"check": "quotes seen", "ok": not unseen_quotes or not quotes_strict,
+               "detail": ("; ".join(unseen_quotes[:5]) + ("" if quotes_strict else
+                          "  (note only: design mission)")) if unseen_quotes
+               else "every quote was returned by a tool"},
               {"check": "expected observations", "ok": not missing,
                "detail": "; ".join(missing) or "all seen"}]
     for term in mission.get("must_mention", []):
