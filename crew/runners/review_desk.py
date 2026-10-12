@@ -35,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -84,6 +85,24 @@ def digest_file() -> Path:
 # it comes back marked [new], which shows the whole loop working.
 GUIDE_ID = "desk:guide"
 GUIDE_FILE = Path(__file__).resolve().parents[1] / "reviewdesk" / "DESK_GUIDE.txt"
+
+
+# Kris 2026-10-12: items name files "you know the location, but I do not". Any file
+# path or web link in the reading pane opens with a click. A path in backticks may
+# hold spaces; a bare one ends at the first space. A path is a link only if it exists.
+LINK = re.compile(r"`([A-Za-z]:\\[^`\n]+|https?://[^`\s]+)`"
+                  r"|(https?://[^\s<>\"'`)\]]+|[A-Za-z]:\\[^\s`'\"<>|*?]+)")
+
+
+def links_in(line: str) -> list:
+    """-> [(start, end, target)] for each openable path or web link in `line`."""
+    out = []
+    for m in LINK.finditer(line):
+        g = 1 if m.group(1) else 2
+        target = m.group(g).rstrip(".,;:")
+        if target.startswith(("http://", "https://")) or Path(target).exists():
+            out.append((m.start(g), m.start(g) + len(target), target))
+    return out
 
 
 def ensure_guide(items: list) -> list:
@@ -655,9 +674,32 @@ class Desk:
             self.anchor_label.config(text="", fg=DIM)
             return
         width = len(str(len(self.file_text.splitlines()))) or 1
+        self.links = 0
         for number, line in enumerate(self.file_text.splitlines(), 1):
-            self.viewer.insert("end", f"{number:>{width}}: {line}\n")
+            prefix = f"{number:>{width}}: "
+            self.viewer.insert("end", f"{prefix}{line}\n")
+            for start, end, target in links_in(line):
+                at = len(prefix)
+                self.link(f"{number}.{at + start}", f"{number}.{at + end}", target)
         self.show_anchor(item)
+
+    def link(self, start: str, end: str, target: str) -> None:
+        """A clickable file path or web link in the pane (see LINK)."""
+        tag, view = f"link{self.links}", self.viewer
+        self.links += 1
+        view.tag_add(tag, start, end)
+        view.tag_config(tag, foreground=ACCENT, underline=True)
+        view.tag_bind(tag, "<Button-1>", lambda _e, t=target: self.open_target(t))
+        view.tag_bind(tag, "<Enter>", lambda _e: view.config(cursor="hand2"))
+        view.tag_bind(tag, "<Leave>", lambda _e: view.config(cursor="xterm"))
+
+    def open_target(self, target: str) -> None:
+        if target.startswith(("http://", "https://")):
+            import webbrowser
+            webbrowser.open(target)
+            self.say(f"opened {target[:60]}", DIM)
+        else:
+            self.open_path(Path(target))
 
     def show_anchor(self, item) -> None:
         label = item.get("anchor") or ""

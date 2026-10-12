@@ -1139,6 +1139,45 @@ class ReviewHandoffTests(unittest.TestCase):
         self.assertEqual(len(self.rd.ensure_guide(self.rd.load_queue())),
                          len(self.rd.load_queue()))                # never added twice
 
+    def test_paths_and_web_links_in_an_item_open_with_a_click(self):
+        """Kris 2026-10-12: items name files "you know the location, but I do not"."""
+        spaced = self.tmp / "a file with spaces.md"
+        spaced.write_text("x", encoding="utf-8")
+        alpha = str(self.paths["alpha.py"])
+        line = (f"see {alpha}, then `{spaced}` and https://example.com/x?a=1 "
+                f"but not C:\\no\\such\\file.txt")
+        found = [t for _s, _e, t in self.rd.links_in(line)]
+        self.assertEqual(found, [alpha, str(spaced), "https://example.com/x?a=1"])
+        start, end, _ = self.rd.links_in(line)[0]
+        self.assertEqual(line[start:end], alpha)                  # the comma is not part of it
+        card = self.tmp / "card.md"
+        card.write_text(f"# card\nopen {alpha} first\n", encoding="utf-8")
+        import tkinter
+        real_tk = tkinter.Tk
+
+        class Hidden(real_tk):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.withdraw()
+                self.attributes("-alpha", 0.0)
+        tkinter.Tk = Hidden
+        try:
+            from crew.reviewdesk import review_index
+            item = review_index.new_item(item_id="pa:card", title="card", path=str(card))
+            desk = self.rd.Desk([item])
+        except tkinter.TclError as exc:
+            self.skipTest(f"no Tk here: {exc}")
+        finally:
+            tkinter.Tk = real_tk
+        self.addCleanup(desk.root.destroy)
+        desk.load_file(item)
+        opened = []
+        desk.open_path = opened.append
+        ranges = desk.viewer.tag_ranges("link0")
+        self.assertEqual(desk.viewer.get(ranges[0], ranges[1]), alpha)
+        desk.open_target(alpha)
+        self.assertEqual(opened, [Path(alpha)])
+
     def test_only_complete_decisions_are_ready_and_defer_never_is(self):
         items = self.queue(("alpha.py", "approve", ""),
                            ("beta.py", "reject", "this name says nothing at all"),
