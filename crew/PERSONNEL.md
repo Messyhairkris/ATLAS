@@ -137,3 +137,28 @@ large files before reading (symbols), dependency modules in multi-module campaig
 - Enable Haiku and measure it (sub-agent work is its public strength).
 - Campaigns: take budgets from personnel instead of one `requests_per_attempt`.
 - Let a clerk draft the text of Inspector proposals (the lesson wording), PA approves.
+
+## Measured 2026-10-09: digests with a second member as tester (idea-animator)
+
+Work: about 60 single-source `research_digest` jobs (Moho course transcripts, the Moho 14 manual and avatar-tool docs). Each was checked by a different member in a `scout` job giving a verdict and a verbatim quote per bullet. Testers were first calibrated on a copy of one digest with 5 seeded errors. Details: `Desktop/idea_animator/crew-packet/DIGEST_REVIEW.md`.
+
+| Member | As author (research_digest) | As tester (scout, quote-checked) |
+|---|---|---|
+| Qwen | Best. Usually 1 request once told "SUBMIT the file at once, no word counting"; otherwise long visible reasoning and contract_abandoned. Revisions regenerate the whole file. | not tried |
+| Gordon | not tried | 5/5 seeded, 0 false flags, fast. In real runs, false CONTRADICTED on "location not stated" and on Not stated lines. |
+| Barry | 2/2 first try on manual digests after Qwen was paused: 1 request, about 49k tokens each, and both clean under Gordon's test. | 5/5 seeded, 0 false flags, the most reliable; ~7-10 min per reply. |
+| Hoss | Fast, but over the word cap 8/8 (428-708 of 400), copied runs, numbers away from their citation. Needs caps restated and checker feedback. A new addendum was added for this. | Failed the verbatim gate (quotes paraphrased with "..."). |
+| Nemotron | not tried | 5/5 seeded with 2 false flags, then real runs failed (truncated at 24576, out of requests). |
+| Larry | completion_audit: passes when one search opens every file. | Failed the verbatim gate. |
+
+Proposed changes to `posts` (Kris decides; applied ones are marked):
+- **Applied 2026-10-09 (Kris):** new post `digest_tester`: ["Gordon", "Barry"]. Gordon first for speed, Barry for accuracy where time allows. Use `"assigned_to": "@digest_tester"`.
+- **Applied 2026-10-12 (Kris, on the Review Desk):** `tester` stays ["Hoss", "Qwen"] for code tests, where Hoss is 6/6. Do not use Hoss for quote-checked testing.
+- **Applied 2026-10-12 (Kris):** `researcher` stays ["Qwen", "Gordon", "Hoss"]. For digests Hoss is a distant third and needs the checker loop.
+- **Applied 2026-10-12 (Kris):** Nemotron's reply ceiling raised from 24576 to 49152 in `config.json` (`max_tokens_by_member`), since scout reports were truncated at 24576. The provider's own maximum for Nemotron-3-Super isn't recorded, so the first run at the new ceiling confirms it.
+
+Cost (credits are the binding limit; `python -m crew budget`):
+- The session's crew tokens on 2026-10-09 were Qwen 6.0M (57%), Gordon 1.9M, Barry 1.2M, Nemotron 0.9M, Hoss 0.45M and Larry 0.1M, for 10.6M in total. Weekly credits went from $23.5 to $10.9. A normal crew day costs $1-2.
+- Qwen's output is mostly reasoning, about 26k tokens per reply. The provider ignores `reasoning_effort` and `chat_template_kwargs`, so it can't be turned down from the API. Spend comes down through fewer and smaller runs.
+- What drove the cost: an automatic revise-and-retest loop (up to 4 jobs per digest), multi-part preloads (against rd-015), and explicit spec budgets that override the fitted ones.
+- After Kris's call to back off Qwen, the rest was finished with cheap members (Barry authoring, Gordon testing). Flagged lines were harvested by Claude instead of paid revisions (rd-019).
