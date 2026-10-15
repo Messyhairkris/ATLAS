@@ -162,3 +162,22 @@ Cost (credits are the binding limit; `python -m crew budget`):
 - Qwen's output is mostly reasoning, about 26k tokens per reply. The provider ignores `reasoning_effort` and `chat_template_kwargs`, so it can't be turned down from the API. Spend comes down through fewer and smaller runs.
 - What drove the cost: an automatic revise-and-retest loop (up to 4 jobs per digest), multi-part preloads (against rd-015), and explicit spec budgets that override the fitted ones.
 - After Kris's call to back off Qwen, the rest was finished with cheap members (Barry authoring, Gordon testing). Flagged lines were harvested by Claude instead of paid revisions (rd-019).
+
+## Measured 2026-10-14/15: diff review and exact algorithms (idea-animator Actions stage)
+
+Kris asked for roles that use Kimi's and Qwen's larger capacity, well scoped so they don't waste tokens.
+
+| Member | Role | Result |
+|---|---|---|
+| Qwen | author, exact algorithm (`ia_morph`: point partners between two drawings) | 1 request, first try, hidden tests 15/15 |
+| Hoss | author, small exact module (`ia_loop`: seeded loop timing) | 1 request, first try, hidden tests 9/9 |
+| Gordon | tester for both (code_tests); label scout (do the test notes' bold controls exist in the UI code?) | tests accepted first try; scout passed its gates: 21 requests, 383k tokens, 3 unknowns, all expected (a user-made action name, a shortcut, an On/Off toggle), 0 false |
+| Kimi | long-context diff reviewer: one request per part, diff + test notes preloaded, no tools, at most 8 findings, each quote checked against the diff | 8 parts reviewed. Real defects 3 (a note pen that lost typed text; grouped controls not gathered, a joystick's second axis outside its group; a Morph tick that sent the playhead frame instead of the drawing's). False 4: one ours (a fixture left out of the diff), three from guessing a helper's behaviour (a return type, whether a failed edit rolls back, a reply field). 1 self-retracted. Quote gate dropped 0. |
+
+Kimi, what made it work and what didn't:
+- 4 of 12 requests ended in a 504 from the gateway after about 7-10 min. The cause was long visible thinking: one reply spent all 16384 tokens thinking aloud and never wrote the answer.
+- The fix was to start the prompt with "Your reply is read by a program. Think silently and briefly ... begin with ### F1 or NO FINDINGS", with a 24576 cap. After that, replies were 6-16k tokens in 166-408 s, with no 504s.
+- Retry a 504 once, since it is the gateway, not the model. Don't retry a reply that ran out of tokens without changing the prompt.
+- Next time, give it the signatures of the helpers the diff calls (`text_field`, `Session::edit`). Three of its four false findings were guesses about them.
+
+Interface tests ran in a cloud routine (Claude Code, Linux, `CARGO_PROFILE_DEV_DEBUG=0`) instead of on the 8 GB workstation, which had crashed twice from link memory.
