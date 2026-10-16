@@ -2052,3 +2052,47 @@ class McpSurfaceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeskKindsTest(unittest.TestCase):
+    """Kris 2026-10-15: DECIDE / TRY / READ, and crew output stays with the PA."""
+
+    def setUp(self):
+        from crew.runners import review_desk
+
+        self.rd = review_desk
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self._home = review_desk.home
+        review_desk.home = lambda: self.tmp / "review"
+        self.addCleanup(setattr, review_desk, "home", self._home)
+
+    def test_kinds_come_from_the_title_or_the_item(self):
+        kind = self.rd.item_kind
+        self.assertEqual(kind({"title": "[idea-animator] Decision - picks"}), "decide")
+        self.assertEqual(kind({"title": "[idea-animator] DECIDE - picks"}), "decide")
+        self.assertEqual(kind({"title": "[idea-animator] Test - the Actions stage"}), "try")
+        self.assertEqual(kind({"title": "TRY - the new build"}), "try")
+        self.assertEqual(kind({"title": "[idea-animator] READ - what's new"}), "read")
+        self.assertEqual(kind({"title": "[idea-animator] Where everything is"}), "read")
+        self.assertEqual(kind({"title": "APPROVE COMMIT: something"}), "decide")
+        self.assertEqual(kind({"title": "mystery item"}), "decide", "unknown counts as a decision")
+        self.assertEqual(kind({"title": "Decision - x", "kind": "read"}), "read")
+
+    def test_a_seen_read_item_is_never_sent(self):
+        read = {"item_id": "pa:r", "title": "READ - notes", "decision": "approve", "note": "",
+                "state": "decided"}
+        decide = {"item_id": "pa:d", "title": "DECIDE - picks", "decision": "approve", "note": "",
+                  "state": "decided"}
+        self.assertEqual([i["item_id"] for i in self.rd.ready_to_send([read, decide])], ["pa:d"])
+
+    def test_crew_output_stays_off_the_desk_unless_asked(self):
+        calls = []
+        orig = self.rd.crew_items
+        self.rd.crew_items = lambda: calls.append(1) or []
+        self.addCleanup(setattr, self.rd, "crew_items", orig)
+        self.rd.seed()
+        self.assertEqual(calls, [], "crew output is the PA's to close")
+        self.rd.save_settings({"crew_outputs_on_desk": True})
+        self.rd.seed()
+        self.assertEqual(calls, [1])

@@ -56,6 +56,30 @@ BAD = "#FF6B6B"
 WARN = "#FFC857"
 DECISION_COLOUR = {"approve": OK, "reject": BAD, "question": WARN, "defer": DIM}
 
+# Kris 2026-10-15: "the review desk is getting too loose with what needs approvals from me...
+# The PA should know what I want and be able to approve all but the most important decisions
+# without me. The PM is supposed to steer the overall direction, not be bogged down with every
+# detail." Every item is one of three kinds, listed in this order under its own heading:
+# DECIDE (his call), TRY (test it when he can), READ (nothing to decide; SEEN takes it off).
+KINDS = ("decide", "try", "read")
+KIND_HEAD = {"decide": "DECIDE - your call", "try": "TRY - when you can",
+             "read": "READ - nothing to decide"}
+
+
+def item_kind(item: dict) -> str:
+    """The item's `kind`, else read from its title's first word (a "[project] " prefix is
+    skipped). Anything unrecognised counts as a decision, so nothing important hides in READ."""
+    if item.get("kind") in KINDS:
+        return item["kind"]
+    if item.get("item_id") == GUIDE_ID:
+        return "read"
+    title = re.sub(r"^\[[^\]]*\]\s*", "", item.get("title", "")).lower()
+    if title.startswith(("try", "test", "task")):
+        return "try"
+    if title.startswith(("read", "fyi", "where everything")):
+        return "read"
+    return "decide"
+
 
 _HOME_CACHE = {}
 
@@ -191,7 +215,8 @@ def ready_to_send(items: list) -> list:
     return [item for item in items
             if item.get("decision") in ("approve", "reject", "question")
             and review_rules.is_complete(item)
-            and item.get("state") != "closed"]
+            and item.get("state") != "closed"
+            and item_kind(item) != "read"]               # seen is not a decision
 
 
 def stamp_decision(item: dict) -> dict:
@@ -393,7 +418,10 @@ def seed(extra_paths=()) -> list:
     """Merge fresh crew work, and anything named on the command line, into the
     queue. A decision already made is never disturbed."""
     items = load_queue()
-    incoming = crew_items()
+    # Kris 2026-10-15: the PA checks and closes crew output itself (`crew review <job> approve
+    # --by Claude`); it reaches the Desk only when the PA queues it as a card, or when the
+    # setting crew_outputs_on_desk is turned on.
+    incoming = crew_items() if load_settings().get("crew_outputs_on_desk") else []
     for raw in extra_paths:
         path = Path(raw).resolve()
         if path.is_file():
@@ -584,7 +612,8 @@ class Desk:
 
         buttons = self.tk.Frame(right, bg=BG)
         buttons.pack(fill="x", pady=8)
-        self._button(buttons, "APPROVE", lambda: self.decide("approve"), OK, True)
+        self.approve_button = self._button(buttons, "APPROVE", lambda: self.decide("approve"),
+                                           OK, True)
         self._button(buttons, "REJECT", lambda: self.decide("reject"), BAD, True)
         self._button(buttons, "QUESTION", lambda: self.decide("question"), WARN, True)
         self._button(buttons, "DEFER", lambda: self.decide("defer"), None, True)
@@ -631,6 +660,7 @@ class Desk:
         self.listbox.delete(0, "end")
         self.visible = []
         show_all = bool(getattr(self, "finished", None) and self.finished.get())
+        rows = {kind: [] for kind in KINDS}
         for index, item in enumerate(self.items):
             decision = item.get("decision") or ""
             done = item.get("state") == "closed"
@@ -645,15 +675,28 @@ class Desk:
                 mark = "[draft] "               # a note typed here and not yet sent
             if touched:
                 mark = "[new] "
-            self.visible.append(index)
-            self.listbox.insert("end", mark + item["title"])
             colour = ACCENT if touched else DECISION_COLOUR.get(decision, FG)
-            if decision or touched:
-                self.listbox.itemconfig("end", foreground=colour)
+            rows[item_kind(item)].append((index, mark + item["title"],
+                                          colour if (decision or touched) else None))
+        # A heading row per kind; headings map to no item, so they can't be picked.
+        for kind in KINDS:
+            if not rows[kind]:
+                continue
+            self.visible.append(None)
+            self.listbox.insert("end", f"--- {KIND_HEAD[kind]} ({len(rows[kind])}) ---")
+            self.listbox.itemconfig("end", foreground=DIM)
+            for index, text, colour in rows[kind]:
+                self.visible.append(index)
+                self.listbox.insert("end", text)
+                if colour:
+                    self.listbox.itemconfig("end", foreground=colour)
+        waiting = [i for i in self.items if not i.get("decision") and i.get("state") != "closed"]
+        by_kind = {kind: sum(1 for i in waiting if item_kind(i) == kind) for kind in KINDS}
         counts = review_rules.summarize(self.items)
         digest = review_rules.agent_digest(self.items)
         self.counts.config(
-            text=f"{counts['pending']} waiting on you - "
+            text=f"{by_kind['decide']} decisions for you, {by_kind['try']} to try, "
+                 f"{by_kind['read']} to read - "
                  f"{counts['approve']} approved, {counts['reject']} rejected, "
                  f"{counts['question']} questions, {counts['defer']} deferred"
                  + (f", {counts['incomplete']} need a reason"
@@ -705,6 +748,8 @@ class Desk:
                                   if self.items[index]["item_id"] == GUIDE_ID else ""))
         self.current = index
         item = self.items[index]
+        if hasattr(self, "approve_button"):
+            self.approve_button.config(text="SEEN" if item_kind(item) == "read" else "APPROVE")
         self.title_label.config(text=item["title"])
         self.origin_label.config(text=f"{item.get('origin', '')}   {item['path']}")
         self.note.delete("1.0", "end")
@@ -892,6 +937,8 @@ class Desk:
             return
         item.update(decision=decision, note=note, state="decided",
                     decided_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        if decision == "approve" and item_kind(item) == "read":
+            item["state"] = "closed"           # seen: nothing to hand the agent
         self.save(item["item_id"])
         self.forget_draft(item["item_id"])     # the note is in the decision now
         stamp_decision(item)
