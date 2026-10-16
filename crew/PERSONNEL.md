@@ -181,3 +181,5 @@ Kimi, what made it work and what didn't:
 - Next time, give it the signatures of the helpers the diff calls (`text_field`, `Session::edit`). Three of its four false findings were guesses about them.
 
 Interface tests ran in a cloud routine (Claude Code, Linux, `CARGO_PROFILE_DEV_DEBUG=0`) instead of on the 8 GB workstation, which had crashed twice from link memory.
+
+**Applied 2026-10-15 (Kris):** `researcher` is now ["Gordon", "Qwen", "Hoss"]: "Gordon is nice and cheap as well, this should be a role it is assigned first and often". The evidence: on the After Effects transcript digests, Gordon passed every gate in 1 request, in about a minute, while Qwen's long reasoning ended in 504 gateway timeouts twice. When Gordon writes a digest, Barry tests it.
