@@ -183,3 +183,8 @@ Kimi, what made it work and what didn't:
 Interface tests ran in a cloud routine (Claude Code, Linux, `CARGO_PROFILE_DEV_DEBUG=0`) instead of on the 8 GB workstation, which had crashed twice from link memory.
 
 **Applied 2026-10-15 (Kris):** `researcher` is now ["Gordon", "Qwen", "Hoss"]: "Gordon is nice and cheap as well, this should be a role it is assigned first and often". The evidence: on the After Effects transcript digests, Gordon passed every gate in 1 request, in about a minute, while Qwen's long reasoning ended in 504 gateway timeouts twice. When Gordon writes a digest, Barry tests it.
+
+**Measured 2026-10-15 evening (13 After Effects transcript digests and feature matches):**
+- **Gordon** wrote all 13 digests, each passing every gate in 1 request (about 1 minute; one retry after a 429). He also matched the features against a capability index in 7 quote-checked jobs. When his "missing" verdicts were checked against the code, 18 of 30 were in fact present: the index lacked UI panels and tools, not his judgement.
+- **Nemotron** as tester: 2 passes and 3 failed quote gates in the first 5. **Qwen** as tester: 1 pass, and 1 stalled. **Barry** stalled about 50 minutes on a provider hang.
+- Run at most 2 jobs per model at once: a third Gordon job got a 429.
