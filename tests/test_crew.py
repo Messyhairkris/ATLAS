@@ -1139,6 +1139,63 @@ class ReviewHandoffTests(unittest.TestCase):
         self.assertEqual(len(self.rd.ensure_guide(self.rd.load_queue())),
                          len(self.rd.load_queue()))                # never added twice
 
+    def test_drafts_are_kept_apart_from_the_queue_and_cleared_when_blank(self):
+        self.queue(("alpha.py", "", ""))
+        before = self.rd.digest_file().read_text(encoding="utf-8")
+        self.rd.save_draft("file:alpha.py", "half a note", saved_at="2026-10-13T10:00:00")
+        self.assertEqual(self.rd.load_drafts(),
+                         {"file:alpha.py": {"note": "half a note",
+                                            "saved_at": "2026-10-13T10:00:00"}})
+        self.assertEqual(self.rd.digest_file().read_text(encoding="utf-8"), before)
+        self.assertEqual(self.rd.load_queue()[0]["note"], "")
+        self.rd.save_draft("file:alpha.py", "   ")                  # blank removes it
+        self.assertEqual(self.rd.load_drafts(), {})
+        self.rd.drafts_file().write_text("{not json", encoding="utf-8")
+        self.assertEqual(self.rd.load_drafts(), {})                # a bad file is no draft
+
+    def test_a_note_is_kept_as_it_is_typed_and_survives_a_crash(self):
+        """Kris 2026-10-13: a long note on a test card was lost when the Desk crashed
+        before it was sent - "it should autosave but not auto commit my data"."""
+        import tkinter
+        self.queue(("alpha.py", "", ""), ("beta.py", "", ""))
+        real_tk = tkinter.Tk
+
+        class Hidden(real_tk):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.withdraw()
+                self.attributes("-alpha", 0.0)
+
+        def open_desk():
+            tkinter.Tk = Hidden
+            try:
+                return self.rd.Desk(self.rd.load_queue())
+            except tkinter.TclError as exc:
+                self.skipTest(f"no Tk here: {exc}")
+            finally:
+                tkinter.Tk = real_tk
+
+        desk = open_desk()
+        desk.select(0)
+        desk.note.insert("1.0", "a long test report, half typed")
+        desk.flush_draft()                          # what the timer does after typing
+        digest = json.loads(self.rd.digest_file().read_text(encoding="utf-8"))
+        self.assertNotIn("file:alpha.py", digest.get("notes", {}))   # saved, not sent
+        self.assertEqual(self.rd.load_queue()[0]["note"], "")
+        desk.root.destroy()                         # the crash: no close, no decision
+
+        desk = open_desk()
+        self.addCleanup(desk.root.destroy)
+        self.assertIn("[draft]", desk.listbox.get(desk.visible.index(0)))
+        desk.select(0)
+        self.assertEqual(desk.note_text(), "a long test report, half typed")
+        desk.select(1)                              # leaving and coming back keeps it
+        desk.select(0)
+        self.assertEqual(desk.note_text(), "a long test report, half typed")
+        desk.decide("question")
+        self.assertEqual(self.rd.load_drafts(), {})
+        self.assertEqual(self.rd.load_queue()[0]["note"], "a long test report, half typed")
+
     def test_paths_and_web_links_in_an_item_open_with_a_click(self):
         """Kris 2026-10-12: items name files "you know the location, but I do not"."""
         spaced = self.tmp / "a file with spaces.md"

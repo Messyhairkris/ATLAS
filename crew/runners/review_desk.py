@@ -327,6 +327,43 @@ def save_settings(values: dict) -> None:
     settings_file().write_text(json.dumps(values, indent=2), encoding="utf-8")
 
 
+# Kris 2026-10-13: a long note on a test card was lost when the Desk crashed before it
+# was sent - "it should autosave but not auto commit my data". A note is saved as it is
+# typed, to drafts.json and never to the queue, and comes back when its item is opened
+# again, even after a crash. Nothing reaches the agent until a decision is made and sent.
+def drafts_file() -> Path:
+    return home() / "drafts.json"
+
+
+def load_drafts() -> dict:
+    try:
+        data = json.loads(drafts_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_draft(item_id: str, text: str, saved_at: str | None = None) -> dict:
+    """Keep `text` as the unsent note for `item_id` (blank text removes it)."""
+    drafts = load_drafts()
+    if text.strip():
+        drafts[item_id] = {"note": text,
+                           "saved_at": saved_at or time.strftime("%Y-%m-%dT%H:%M:%S")}
+    else:
+        drafts.pop(item_id, None)
+    home().mkdir(parents=True, exist_ok=True)
+    tmp = drafts_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(drafts, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, drafts_file())
+    return drafts
+
+
+def clear_draft(item_id: str) -> dict:
+    """The note went into a decision, so its draft is done with."""
+    drafts = load_drafts()
+    return save_draft(item_id, "") if item_id in drafts else drafts
+
+
 def crew_items() -> list:
     """Everything the crew has staged for review, as queue records.
 
@@ -405,6 +442,8 @@ class Desk:
         self.scale = int(self.settings.get("font_scale", 0))
         self.offered = None                # the batch the modal has already offered
         self.touched = set()               # item ids this Desk changed (see reconcile)
+        self.drafts = load_drafts()        # unsent notes, saved as they are typed
+        self.draft_job = None
         self.seen_mtime = queue_mtime()
         self.root = tk.Tk()
         self.root.title("Review Desk")
@@ -417,6 +456,10 @@ class Desk:
         self.apply_scale(0)
         self.refresh_list()
         self.show_guide(add=False)         # never open on a finished item
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        if self.drafts:
+            self.say(f"{len(self.drafts)} unsent note(s) kept from last time - "
+                     f"marked [draft] in the list", ACCENT)
         self.root.after(4000, self.poll_disk)
 
     # -- keeping in step with the queue file ----------------------------------------
@@ -535,6 +578,9 @@ class Desk:
                                  font=self.fonts["body"], relief="flat", height=4,
                                  wrap="word")
         self.note.pack(fill="x")
+        self.note.bind("<<Modified>>", self.on_note_change)
+        self.draft_label = self._label(right, "", fg=DIM, font=("Segoe UI", 8))
+        self.draft_label.pack(anchor="w")
 
         buttons = self.tk.Frame(right, bg=BG)
         buttons.pack(fill="x", pady=8)
@@ -595,6 +641,8 @@ class Desk:
                     "question": "[?]  ", "defer": "[...] "}.get(decision, "     ")
             if decision and not review_rules.is_complete(item):
                 mark = "[!]  "
+            if item["item_id"] in self.drafts:
+                mark = "[draft] "               # a note typed here and not yet sent
             if touched:
                 mark = "[new] "
             self.visible.append(index)
@@ -651,6 +699,7 @@ class Desk:
     def select(self, index) -> None:
         if index is None or not (0 <= index < len(self.items)):
             return
+        self.flush_draft()                 # keep what was typed on the item being left
         self.note_label.config(text="your note - required for reject, question and defer"
                                + ("  (on this guide: your feedback about the Desk)"
                                   if self.items[index]["item_id"] == GUIDE_ID else ""))
@@ -659,9 +708,62 @@ class Desk:
         self.title_label.config(text=item["title"])
         self.origin_label.config(text=f"{item.get('origin', '')}   {item['path']}")
         self.note.delete("1.0", "end")
-        self.note.insert("1.0", item.get("note", ""))
+        draft = self.drafts.get(item["item_id"])
+        if draft and draft.get("note", "").strip() != item.get("note", "").strip():
+            self.note.insert("1.0", draft["note"])
+            self.draft_label.config(
+                text=f"your unsent note, kept from {draft.get('saved_at', '?').replace('T', ' ')}"
+                     f" - press a decision to send it", fg=ACCENT)
+        else:
+            self.note.insert("1.0", item.get("note", ""))
+            self.draft_label.config(text="", fg=DIM)
+        self.note.edit_modified(False)
         self.load_file(item)
         self.say(f"{review_rules.next_action(item)}", DIM)
+
+    # -- drafts: saved as typed, never sent until a decision ------------------------
+    def note_text(self) -> str:
+        return self.note.get("1.0", "end-1c")
+
+    def on_note_change(self, _event=None) -> None:
+        """Typing (or pasting) schedules a save a moment later."""
+        if not self.note.edit_modified():
+            return
+        self.note.edit_modified(False)
+        if self.draft_job is not None:
+            self.root.after_cancel(self.draft_job)
+        self.draft_job = self.root.after(700, self.flush_draft)
+
+    def flush_draft(self) -> None:
+        """Save the note box as the current item's draft, unless it says just what the
+        item already holds. Never touches the queue or what the agent reads."""
+        if self.draft_job is not None:
+            self.root.after_cancel(self.draft_job)
+            self.draft_job = None
+        if self.current is None or self.current >= len(self.items):
+            return
+        item_id = self.items[self.current]["item_id"]
+        text = self.note_text()
+        had = item_id in self.drafts
+        try:
+            if text.strip() == self.items[self.current].get("note", "").strip():
+                self.drafts = clear_draft(item_id)
+                self.draft_label.config(text="", fg=DIM)
+            else:
+                self.drafts = save_draft(item_id, text)
+                self.draft_label.config(
+                    text=f"draft saved {time.strftime('%H:%M:%S')} - not sent until "
+                         f"you press a decision", fg=DIM)
+        except OSError as exc:
+            self.draft_label.config(text=f"could not save the draft: {exc}", fg=BAD)
+            return
+        if had != (item_id in self.drafts):
+            self.refresh_list()
+            self.reselect()
+
+    def close(self) -> None:
+        self.flush_draft()
+        self.root.destroy()
 
     def load_file(self, item) -> None:
         self.viewer.delete("1.0", "end")
@@ -791,6 +893,7 @@ class Desk:
         item.update(decision=decision, note=note, state="decided",
                     decided_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
         self.save(item["item_id"])
+        self.forget_draft(item["item_id"])     # the note is in the decision now
         stamp_decision(item)
         self.sent = load_sent()
         self.refresh_list()
@@ -891,7 +994,7 @@ class Desk:
                   bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
                   pady=4).pack(side="left", padx=8)
         # Kris 2026-09-26: the pop-up should also close the whole Desk
-        tk.Button(row, text="close the Review Desk", command=self.root.destroy,
+        tk.Button(row, text="close the Review Desk", command=self.close,
                   relief="flat", bg="#22303C", fg=FG, font=("Segoe UI", 9), padx=10,
                   pady=4).pack(side="right")
         tk.Button(row, text="close this", command=win.destroy, relief="flat",
@@ -920,10 +1023,21 @@ class Desk:
         item.update(decision="", note=self.note.get("1.0", "end").strip(),
                     state="pending", decided_at="")
         self.save(item["item_id"])
+        self.forget_draft(item["item_id"])
         self.refresh_list()
         self.reselect()
         self.offered = None
         self.say("decision cleared; it is waiting for you again", DIM)
+
+    def forget_draft(self, item_id: str) -> None:
+        if self.draft_job is not None:
+            self.root.after_cancel(self.draft_job)
+            self.draft_job = None
+        try:
+            self.drafts = clear_draft(item_id)
+        except OSError:
+            pass                                # an orphan draft is harmless
+        self.draft_label.config(text="", fg=DIM)
 
     def do_seed(self) -> None:
         self.items[:] = reconcile(ensure_guide(seed()), self.items, self.touched)
