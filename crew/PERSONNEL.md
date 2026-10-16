@@ -189,3 +189,6 @@ Interface tests ran in a cloud routine (Claude Code, Linux, `CARGO_PROFILE_DEV_D
 - **Nemotron** as tester: 2 passes and 3 failed quote gates in the first 5. **Qwen** as tester: 1 pass, and 1 stalled. **Barry** stalled about 50 minutes on a provider hang.
 - Run at most 2 jobs per model at once: a third Gordon job got a 429.
 - **Nemotron, final (overnight 15-16 October):** 6 of 13 digest tests passed every gate and found no errors; 7 died on 504 gateway timeouts and were not retried. His "partly" flags were details he looked for in only one part of a multi-part transcript, so give a tester the part list and tell it to search every part before flagging.
+
+**Measured 2026-10-16 (code review of new Rust, scout jobs):**
+- **Gordon** as a code reviewer: five files (~1,000 lines) at once cut his reasoning off at about 52k tokens per reply, twice (about 7 minutes each). One file (288 lines) still failed (budget_requests): he re-read it, listed folders, opened a file the instructions only described, and was cut off again. Lesson: for review, preload one file, describe only that file, and give no tools; and try Qwen (the best tester) before Gordon. Not retried, to save credit.
