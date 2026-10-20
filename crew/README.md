@@ -46,6 +46,7 @@ Prices and limits: `SYNTHETIC_LIMITS.md`. Claude members live in `config.json`
 | `code_task` | one Python module against a contract | AST airlock (import allowlist, banned names), API present, no stubs, **hidden tests** | stages it in `outbox/workspace/` |
 | `code_tests` | pytest tests for another member's accepted module, from the contract alone | airlock, enough tests, they pass against the real module | stages them in `outbox/workspace/tests/` |
 | `js_code_task` / `js_code_tests` | a JavaScript ES module / `node:test` tests | the crew-built JS gate (`jsharness/`): lexer, import allowlist, forbidden globals, API, stubs, then hidden `*.test.mjs` under `node --permission` | stages them |
+| `rs_code_task` / `rs_code_tests` | one Rust module (`src/<m>.rs`) of a fixed profile crate / integration tests for it | the Rust gate (`rsharness/`, 2026-10-20): allowlist scan, API, stubs, cargo build, hidden `tests/*.rs` under a job object (memory, processes, time) | stages them |
 | `scout` | where information lives: path, line range and a `>` verbatim quote per finding, plus Unknowns | sections, every finding cited and quoted, quotes word for word, line numbers exist in the file, grounding, absence claims | writes the report |
 | `log_clerk` | what literally happened in a log: exit codes, failures quoted exactly, earliest first. No diagnosis | sections, citations, quotes word for word from the log, failures in log order, grounding | writes the report |
 | `completion_audit` | YES/NO/PARTIAL/UNKNOWN per expected artifact, and a conclusion | the harness checks existence itself: a missing path must be NO, an existing one must be opened before YES/PARTIAL; conclusion consistent with the states | writes the audit |
@@ -175,6 +176,8 @@ Checking what came back - run the evidence, do not read and nod:
 | `python crew/runners/check_accepted.py [--workspace DIR]` | every accepted module, together, against every hidden test (pairs by name: `test_<stem>.py` or `test_tts_<stem>.py`) |
 | `python crew/runners/mutants.py --module m.py [--hidden]` | whether a test file tests anything: seeds one defect at a time and lists the survivors by line |
 | `python crew/runners/member_stats.py` | each member's record across every campaign |
+| `python crew/runners/rs_mutants.py --profile P --module m.rs --tests t.rs [--deps ..]` | the Rust twin of mutants.py: one-token defects, built and tested in the profile crate |
+| `python crew/runners/rs_scoping.py [--prefix pt_]` | Rust campaigns by member, role and scope (S/M/L/C): which scope suits whom |
 | `python -m crew unify --workspace [--check]` | mechanical cleanup with ruff, each stage kept only if the tests still pass; lists what needs a reader |
 | `python -m crew vendor <workspace> <package> --author m.py=Name` | moves accepted modules into a real project with import rewrites, provenance headers and re-verification |
 

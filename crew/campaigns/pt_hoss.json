@@ -1,0 +1,60 @@
+{
+  "name": "pt-hoss",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Hoss authors dither.rs (S), svg.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Dither": {
+      "author": "Hoss",
+      "tester": "Qwen"
+    },
+    "Svg": {
+      "author": "Hoss",
+      "tester": "Barry"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_dither",
+      "team": "Dither",
+      "module": "dither.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_dither.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_dither.rs"
+      ],
+      "api": [
+        "floyd_steinberg"
+      ],
+      "depends": [],
+      "min_tests": 7,
+      "scope": "S",
+      "instructions": "i32 buffer, never clamped; each share is err * k / 16 with Rust's truncating division; every row left to right. Walk the 3x3 example step by step. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Include the truncation row [200, 152], the no-clamp row [100, 255, 115] and the row-order row [128, 128, 100, 100]."
+    },
+    {
+      "id": "pt_svg",
+      "team": "Svg",
+      "module": "svg.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_svg.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_svg.rs"
+      ],
+      "api": [
+        "fmt_num",
+        "hex",
+        "path_data",
+        "document"
+      ],
+      "depends": [],
+      "min_tests": 7,
+      "scope": "M",
+      "instructions": "Byte-exact. fmt_num works on the rounded integer r = (v * 100).round() as i64 - never format a float and trim. Copy the document template character for character, including every \\n. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Compare whole strings. Cover every fmt_num row, an empty loop in path_data, and a shape with an empty d in document."
+    }
+  ]
+}

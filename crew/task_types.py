@@ -520,6 +520,7 @@ CONTRACT_CHARS = 12000
 
 HOUSE_STYLE = Path(__file__).resolve().parent / "contracts" / "HOUSE_STYLE.md"
 JS_HOUSE_STYLE = HOUSE_STYLE.with_name("JS_HOUSE_STYLE.md")
+RUST_HOUSE_STYLE = HOUSE_STYLE.with_name("RUST_HOUSE_STYLE.md")
 
 
 def _contract_text(spec: dict, cfg: Config) -> str:
@@ -535,7 +536,9 @@ def _contract_text(spec: dict, cfg: Config) -> str:
         raise CrewError(f"spec.contract {spec['contract']} is not a readable file "
                         f"in the crew's read roots")
     text = path.read_text(encoding="utf-8")[:CONTRACT_CHARS]
-    style = JS_HOUSE_STYLE if spec.get("task_type", "").startswith("js_") else HOUSE_STYLE
+    kind = spec.get("task_type", "")
+    style = (JS_HOUSE_STYLE if kind.startswith("js_")
+             else RUST_HOUSE_STYLE if kind.startswith("rs_") else HOUSE_STYLE)
     if style.is_file():
         text += "\n\n---\n\n" + style.read_text(encoding="utf-8")
     return text
@@ -1026,7 +1029,224 @@ def ahk_code_tests_gates(files, spec, cfg, toolbox):
     return steps
 
 
+# -- Rust: crew/rsharness/ static gate, then cargo in a fixed profile crate ----------
+#
+# A profile (rsharness/profiles/<name>/) is the crate the member writes ONE file of:
+# its dependencies, its crate name and which of their items reach the outside world.
+# Native code has no runtime sandbox, so the allowlist scan decides what compiles;
+# rsrun.py caps memory, processes and time behind it.
+
+RS_JUDGED = ("HOW YOUR WORK IS JUDGED: your file is checked first and REFUSED if it "
+             "names anything outside the allowlist (std minus fs/io/net/process/env/"
+             "path/os/ffi/thread/ptr; the crates the contract lists minus their file "
+             "I/O; this crate's own modules), or uses unsafe, extern, include!, env!, "
+             "macro_rules!, #![...] or `mod name;`. Then the API block's names must be "
+             "`pub`, nothing may be a stub, and the crate is compiled with cargo and "
+             "run against tests you never see. Write the whole file every time; no "
+             "diffs, no placeholders, no todo!().")
+
+
+def _rs_profile(spec: dict) -> dict:
+    from . import rsrun
+    name = str(spec.get("rs_profile") or "").strip()
+    if not name:
+        raise CrewError("spec.rs_profile is required: the crate profile in "
+                        "crew/rsharness/profiles/ the file compiles in")
+    try:
+        return rsrun.load_profile(name)
+    except OSError as e:
+        raise CrewError(f"Rust profile {name!r} cannot be read: {e}")
+
+
+def _rs_reference(spec: dict, cfg: Config) -> List[str]:
+    """Extra preloaded reading (an API card for a crate, say): one scoping lever."""
+    parts = []
+    for raw in spec.get("reference") or []:
+        path = Path(raw).resolve()
+        if not path.is_file() or not cfg.readable(path):
+            raise CrewError(f"reference {raw} is not a readable file in the read roots")
+        parts += ["", f"REFERENCE ({path.name}) - checked against the real crate source; "
+                      f"trust it over memory:", "", path.read_text(encoding="utf-8")]
+    return parts
+
+
+def _rs_step(verdict: dict, file: str) -> dict:
+    if verdict["verdict"] == "accepted":
+        return gates.step("rust gate", True, "the hidden tests pass", file)
+    detail = f"{verdict['verdict']}: " + "\n".join(verdict["problems"][:8])
+    if verdict["verdict"] == "tests_failed":
+        detail += ("\nThe hidden tests fail. This is the evidence; fix the module, "
+                   "do not argue with it.")
+    elif verdict["verdict"] == "compile_failed":
+        detail += "\nThe compiler's words are exact: fix what each error names."
+    return gates.step("rust gate", False, detail[:6000], file)
+
+
+def rs_code_task_normalize(spec: dict, cfg: Config) -> dict:
+    module = (spec.get("module") or "").strip()
+    if (not module or "/" in module or "\\" in module or not module.endswith(".rs")
+            or module in ("lib.rs", "main.rs")):
+        raise CrewError("spec.module must be a single .rs file name (not lib.rs or "
+                        "main.rs), e.g. sobel.rs")
+    spec["task_type"] = "rs_code_task"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required: the file stating the API and behavior")
+    _contract_text(spec, cfg)
+    if not _hidden_tests(spec, cfg):
+        raise CrewError("rs_code_task needs hidden_tests (*.rs integration tests)")
+    _workspace_modules(spec, cfg)
+    _rs_profile(spec)
+    _rs_reference(spec, cfg)
+    spec["api"] = [str(a) for a in (spec.get("api") or [])]
+    if not spec["api"]:
+        raise CrewError("spec.api must list the pub items the module must define")
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    for raw in spec.get("depends_modules") or []:
+        spec["read_roots"].append(str(Path(raw).resolve().parent))
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace").resolve()
+    if not cfg.writable(root / module):
+        raise CrewError(f"{root / module} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [module]}
+    spec.setdefault("test_timeout_s", 180)
+    return spec
+
+
+def rs_code_task_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    crate = _rs_profile(spec)["crate_name"]
+    module = spec["output"]["files"][0]
+    deps = _workspace_modules(spec, cfg)
+    parts = [f"OUTPUT FILE: {module}", "",
+             f"This is src/{module} of the Rust crate `{crate}` (edition 2021). The "
+             f"harness writes src/lib.rs as one `pub mod` line per module, so your "
+             f"module is `crate::{Path(module).stem}` and the tests reach it as "
+             f"`{crate}::{Path(module).stem}`.", "",
+             "CONTRACT (this is the specification; satisfy it exactly. Cite it as "
+             "[src: contract] if you explain a decision):", "", contract]
+    parts += _rs_reference(spec, cfg)
+    if deps:
+        parts += ["", "ALREADY ACCEPTED MODULES of this crate - use them as "
+                      "`use crate::<name>::<item>;`, do not rewrite them:"]
+        for name, src in deps.items():
+            toolbox.evidence.add(f"module:{name}", src)
+            parts += ["", f"----- src/{name} -----", src[:6000]]
+    parts += ["", RS_JUDGED]
+    return "\n".join(parts)
+
+
+def rs_code_task_gates(files, spec, cfg, toolbox):
+    from . import rsrun
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        steps.append(gates.ascii_only(source, out_file))
+        if all(st["ok"] for st in steps):
+            verdict = rsrun.judge_module(source, spec["api"], _workspace_modules(spec, cfg),
+                                         _hidden_tests(spec, cfg), out_file,
+                                         spec["rs_profile"], int(spec["test_timeout_s"]))
+            steps.append(_rs_step(verdict, out_file))
+    return steps
+
+
+def rs_code_tests_normalize(spec: dict, cfg: Config) -> dict:
+    name = (spec.get("test_file") or "").strip()
+    if not (name.startswith("test_") and name.endswith(".rs")) or "/" in name or "\\" in name:
+        raise CrewError("spec.test_file must be a single file named test_*.rs")
+    spec["task_type"] = "rs_code_tests"
+    if not spec.get("contract"):
+        raise CrewError("spec.contract is required")
+    _contract_text(spec, cfg)
+    if not _workspace_modules(spec, cfg):
+        raise CrewError("spec.depends_modules must name the accepted module(s) "
+                        "these tests run against")
+    _rs_profile(spec)
+    _rs_reference(spec, cfg)
+    spec["read_roots"] = [str(Path(spec["contract"]).resolve().parent)]
+    spec.setdefault("min_tests", 6)
+    spec.setdefault("test_timeout_s", 180)
+    root = Path((spec.get("output") or {}).get("root")
+                or cfg.state_home / "outbox" / "workspace" / "tests").resolve()
+    if not cfg.writable(root / name):
+        raise CrewError(f"{root / name} is outside the crew's write roots")
+    spec["output"] = {"root": str(root), "files": [name]}
+    return spec
+
+
+def rs_code_tests_preload(spec: dict, cfg: Config, toolbox) -> str:
+    contract = _contract_text(spec, cfg)
+    toolbox.evidence.add("contract", contract)
+    crate = _rs_profile(spec)["crate_name"]
+    mods = sorted(Path(m).stem for m in _workspace_modules(spec, cfg))
+    parts = [f"OUTPUT FILE: {spec['output']['files'][0]}", "",
+             "You are the TESTER. Another crew member wrote the module; you write tests "
+             "for it from the CONTRACT, not from their code. You are not shown their "
+             "source on purpose: tests written by reading an implementation only prove "
+             "the implementation agrees with itself.", "",
+             f"Your file is an integration test, tests/{spec['output']['files'][0]}, of "
+             f"the crate `{crate}`. Import with `use {crate}::<module>::<item>;` - the "
+             f"modules are: {', '.join(mods)}. Each test is a `#[test] fn`.", "",
+             "CONTRACT:", "", contract]
+    parts += _rs_reference(spec, cfg)
+    parts += ["", f"RULES: at least {spec['min_tests']} #[test] functions; whole-value "
+                  f"assert_eq!; the same allowlist as modules (no files, network, "
+                  f"processes, env, threads, unsafe, include!, macro_rules!); never "
+                  f"#[ignore]; each test's name says which contract rule it checks. The "
+                  f"harness compiles your tests with the real module and runs them. If "
+                  f"they fail, either the module is wrong or your test is - both are "
+                  f"reported, and a senior decides."]
+    return "\n".join(parts)
+
+
+def rs_code_tests_gates(files, spec, cfg, toolbox):
+    from . import rsrun
+    out_file = spec["output"]["files"][0]
+    root = Path(spec["output"]["root"])
+    steps = [gates.output_paths(files, spec["output"]["files"], root, cfg.writable)]
+    source = files.get(out_file, "")
+    if source:
+        steps.append(gates.ascii_only(source, out_file))
+        if all(st["ok"] for st in steps):
+            verdict = rsrun.judge_tests(source, out_file, _workspace_modules(spec, cfg),
+                                        spec["rs_profile"], int(spec["min_tests"]),
+                                        int(spec["test_timeout_s"]))
+            steps.append(_rs_step(verdict, out_file))
+    return steps
+
+
 TASK_TYPES: Dict[str, Dict[str, object]] = {
+    "rs_code_task": {
+        "description": "Write one Rust module (src/<name>.rs) against a contract, compiled in a fixed profile crate. Judged by the Rust gate (allowlist scan, API, stubs), then cargo builds it and runs hidden integration tests under a job object (memory, process and time caps).",
+        "spec": {"module": "required: the .rs file to write",
+                 "contract": "required: path to the contract file",
+                 "api": "required: pub items the module must define (Name or Type::method)",
+                 "hidden_tests": "required: tests/*.rs integration tests the member never sees",
+                 "rs_profile": "required: profile name under crew/rsharness/profiles/",
+                 "depends_modules": "optional: accepted .rs modules of the same crate",
+                 "reference": "optional: files preloaded as reference (e.g. a crate API card)",
+                 "test_timeout_s": "optional, default 180",
+                 "instructions": "optional"},
+        "gates": "output path, ASCII only, rs_scan allowlist, rs_api (api, stubs), cargo build, hidden tests pass",
+        "apply": "writes the module into the crew workspace (never into a real project)",
+        "normalize": rs_code_task_normalize, "preload": rs_code_task_preload,
+        "gates_fn": rs_code_task_gates,
+    },
+    "rs_code_tests": {
+        "description": "Write Rust integration tests (tests/test_<name>.rs) for another member's accepted module, from the contract alone.",
+        "spec": {"test_file": "required: test_*.rs to write",
+                 "contract": "required: the same contract the author worked from",
+                 "depends_modules": "required: the accepted module(s) under test",
+                 "rs_profile": "required: the same profile the module compiled in",
+                 "reference": "optional: as for rs_code_task",
+                 "min_tests": "optional, default 6"},
+        "gates": "output path, ASCII only, rs_scan allowlist, enough #[test] functions, they compile and pass against the real module",
+        "apply": "writes the test file into the crew workspace",
+        "normalize": rs_code_tests_normalize, "preload": rs_code_tests_preload,
+        "gates_fn": rs_code_tests_gates,
+    },
     "ahk_code_task": {
         "description": "Write one AutoHotkey v1 file of pure functions against a contract. Judged by the crew-built static gate (safety, API, stubs, no loose code), then by hidden tests run only inside Windows Sandbox.",
         "spec": {"module": "required: the .ahk file to write",

@@ -95,7 +95,30 @@ members' own.
 - A denied folder silently empties a digest (`crew/campaigns/**` is denied). Put evidence
   in `crew/reports/`. If a preload is missing, the member should say so first (rd-013).
 
-## 7. For a third language (C#, GDScript, ...)
+## 7. Rust (2026-10-20): what was different
+
+Rust is the first gate for NATIVE code, so the recipe changed in three places (details:
+`rsharness/README.md`):
+
+- **The PA wrote the gate, not the crew.** Node has `--permission` as a second wall;
+  native code has none, so the allowlist scan is the wall and the PA must vouch for it.
+  Its tests are written as 39 bypass attempts (`rsharness/tests/test_rs_gate.py`), and
+  every crate added to a profile is read for I/O first (that found
+  `imageproc::utils::load_image_or_panic`, and `imageproc` re-exporting `image`).
+- **Profiles instead of an import allowlist per contract.** The member writes one file
+  into a fixed crate (`rsharness/profiles/<name>/`, locked, offline, no build.rs, doc
+  tests off); the profile lists the crates and their banned items.
+- **Resource walls are a job object**, tested with a real endless loop, a 16 GB
+  allocation loop and a child-process spawn before any member ran.
+
+Also new: `runners/rs_mutants.py` (one-token mutants, the Rust twin of mutants.py),
+which found a real gap in the first photo_tools hidden tests (6 CLI survivors) before
+any member was judged by them. Harness faults found by the first campaigns: a freshly
+linked test .exe can be locked by the virus scanner (WinError 32 - now retried), and
+parallel campaigns collided on the provider's per-model concurrency (now a cross-process
+slot per model in core.py, `rate_limit.concurrent_requests_per_model`).
+
+## 8. For the next language (C#, GDScript, ...)
 
 Copy unchanged: the campaign loop, provider-error handling, the gate step shape, the
 contract checklist, reference validation, the build discipline above.

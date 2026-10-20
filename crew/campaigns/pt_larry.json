@@ -1,0 +1,81 @@
+{
+  "name": "pt-larry",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Larry authors luma.rs (S), dodge.rs (S), hatch.rs (S). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Luma": {
+      "author": "Larry",
+      "tester": "Hoss"
+    },
+    "Dodge": {
+      "author": "Larry",
+      "tester": "Nemotron"
+    },
+    "Hatch": {
+      "author": "Larry",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_luma",
+      "team": "Luma",
+      "module": "luma.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_luma.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_luma.rs"
+      ],
+      "api": [
+        "luma",
+        "rgb_to_gray",
+        "invert"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Widen each byte to u32 BEFORE multiplying. Walk every table row, including the rounding rows (0,0,5) -> 1 and (0,0,4) -> 0. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Cover each rule and every table row; include a partial trailing triple."
+    },
+    {
+      "id": "pt_dodge",
+      "team": "Dodge",
+      "module": "dodge.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_dodge.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_dodge.rs"
+      ],
+      "api": [
+        "color_dodge",
+        "dodge_layers"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Rules 1-3 in order: base 0 first, then blend 255, then the formula in u32 with d / 2 added before dividing. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "One test per rule plus the table; include (0, 255) for the rule order and (1, 253) for the d / 2 rounding."
+    },
+    {
+      "id": "pt_hatch",
+      "team": "Hatch",
+      "module": "hatch.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_hatch.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_hatch.rs"
+      ],
+      "api": [
+        "hatch"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Four layers, strict < comparisons, spacing below 2 counts as 2. Check the 4x3 table row by row. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Test each layer threshold at its boundary (192/191, 128/127, 64/63, 32/31) and the spacing rule."
+    }
+  ]
+}

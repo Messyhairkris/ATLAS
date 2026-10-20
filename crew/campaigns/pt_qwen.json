@@ -1,0 +1,61 @@
+{
+  "name": "pt-qwen",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Qwen authors ascii.rs (M), contour.rs (L). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Ascii": {
+      "author": "Qwen",
+      "tester": "Hoss"
+    },
+    "Contour": {
+      "author": "Qwen",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_ascii",
+      "team": "Ascii",
+      "module": "ascii.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_ascii.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_ascii.rs"
+      ],
+      "api": [
+        "RAMP",
+        "grid",
+        "render"
+      ],
+      "depends": [],
+      "min_tests": 7,
+      "scope": "M",
+      "instructions": "Byte-exact. grid: clamp columns to 1..=width, then cell_h = 2 * cell_w unless the image is shorter. Means truncate. In ANSI mode the reset comes once per line, after the last character, before the newline. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Compare whole strings; include the truncating-mean case, ignored pixels past the last cell, and the ANSI layout."
+    },
+    {
+      "id": "pt_contour",
+      "team": "Contour",
+      "module": "contour.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_contour.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_contour.rs"
+      ],
+      "api": [
+        "Loop",
+        "is_junction",
+        "trace"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "L",
+      "instructions": "The hardest module: follow rules 1-7 literally. Edges keep the region on the right; at a saddle turn RIGHT; drop straight-through points unless they are junctions; rotate to the smallest (y, x) point; sort by label then first point. Check every worked example, especially the saddle and the T-junction. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the worked examples as tests, plus is_junction on its own. Compare whole Vec<Loop> values."
+    }
+  ]
+}

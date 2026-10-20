@@ -1,0 +1,72 @@
+{
+  "name": "pt-nemotron",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Nemotron authors sobel.rs (S), options.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Sobel": {
+      "author": "Nemotron",
+      "tester": "Larry"
+    },
+    "Options": {
+      "author": "Nemotron",
+      "tester": "Qwen"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_sobel",
+      "team": "Sobel",
+      "module": "sobel.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_sobel.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_sobel.rs"
+      ],
+      "api": [
+        "magnitude",
+        "edge_mask"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Clamp sample coordinates to the image; kernels indexed [row][column]; magnitude rounded with f64::round; the mask uses >=. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Include the clamped border (the vertical step), the single bright pixel and the threshold boundary 361/362."
+    },
+    {
+      "id": "pt_options",
+      "team": "Options",
+      "module": "options.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_options.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_options.rs"
+      ],
+      "api": [
+        "Error",
+        "EdgeFilter",
+        "LineArtOptions",
+        "VectorOptions",
+        "Style",
+        "EffectOptions",
+        "Job",
+        "parse_threshold",
+        "LineArtOptions::validate",
+        "VectorOptions::validate",
+        "EffectOptions::validate",
+        "LineArtOptions::default",
+        "VectorOptions::default",
+        "EffectOptions::default",
+        "Error::fmt"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "M",
+      "instructions": "Exact derives, field names and order; error reasons are copied verbatim from the contract. Checks run in the listed order and the first failure is returned. NaN and infinity fail the range checks. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Test defaults, every validation rule at its boundary, the Display text, and every parse_threshold row."
+    }
+  ]
+}

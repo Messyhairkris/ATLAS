@@ -59,8 +59,8 @@ def _now() -> str:
 
 
 def _language(module: str) -> str:
-    """Which harness judges a module: 'py', 'js' or 'ahk', by its extension."""
-    return {".js": "js", ".ahk": "ahk"}.get(Path(module).suffix.lower(), "py")
+    """Which harness judges a module: 'py', 'js', 'ahk' or 'rs', by its extension."""
+    return {".js": "js", ".ahk": "ahk", ".rs": "rs"}.get(Path(module).suffix.lower(), "py")
 
 
 class Campaign:
@@ -92,6 +92,37 @@ class Campaign:
         for t in self._expand(spec):
             self.tasks[t["id"]] = t
 
+    def resume(self) -> List[str]:
+        """Carry over a stopped run from its status.json: accepted tasks stay accepted
+        with their record (their files are already in the workspace); every other task
+        starts again, its earlier attempts kept as `prior` so nothing is hidden.
+
+        Added 2026-10-20 when the first Rust campaigns had to be stopped for a harness
+        fault: without it, a restart would have re-run accepted modules.
+        """
+        path = self.home / "status.json"
+        if not path.is_file():
+            return []
+        old = json.loads(path.read_text(encoding="utf-8"))
+        kept = []
+        for tid, before in (old.get("tasks") or {}).items():
+            task = self.tasks.get(tid)
+            if task is None:
+                continue
+            if before.get("state") == ACCEPTED:
+                task["state"] = ACCEPTED
+                for key in ("attempts", "requests", "tokens", "seconds", "escalations"):
+                    task[key] = before.get(key, task[key])
+                kept.append(tid)
+            elif before.get("attempts"):
+                task["prior"] = {k: before.get(k) for k in
+                                 ("state", "attempts", "requests", "tokens", "seconds")}
+        self.requests_used = int(old.get("requests_used") or 0)
+        self.escalations_used = int(str(old.get("senior_calls") or "0/0").split("/")[0])
+        self.events = list(old.get("events") or [])
+        self.event("campaign_resumed", kept=kept)
+        return kept
+
     # -- planning ------------------------------------------------------------------
     @staticmethod
     def _deadline(raw) -> Optional[float]:
@@ -117,6 +148,7 @@ class Campaign:
                         "depends": list(t.get("depends", [])),
                         "uses": list(t.get("uses", [])),
                         "grants": list(t.get("grants", [])),
+                        "reference": list(t.get("reference", [])),
                         "instructions": t.get("instructions", ""),
                         "state": WAITING, "attempts": 0, "job_ids": [],
                         "requests": 0, "tokens": 0, "seconds": 0.0,
@@ -127,6 +159,7 @@ class Campaign:
                             "test_file": {
                                 "js": f"{Path(t['module']).stem}.test.mjs",
                                 "ahk": f"test_{Path(t['module']).stem}.ahk",
+                                "rs": f"test_{Path(t['module']).stem}.rs",
                             }.get(_language(t["module"]),
                                   f"test_{Path(t['module']).stem}.py"),
                             "contract": t["contract"],
@@ -134,6 +167,7 @@ class Campaign:
                             "depends": [t["id"]],
                             "uses": list(t.get("uses", [])),
                             "grants": list(t.get("grants", [])),
+                            "reference": list(t.get("reference", [])),
                             "min_tests": int(t.get("min_tests", 6)),
                             "instructions": t.get("test_instructions", ""),
                             "state": WAITING, "attempts": 0, "job_ids": [],
@@ -224,7 +258,8 @@ class Campaign:
                              ("state", "kind", "team", "member", "attempts",
                               "requests", "tokens", "seconds", "escalations")},
                           # when a running task is likely done (crew/eta.py, 2026-09-26)
-                          **({"eta": self._eta(t)} if t["state"] == RUNNING else {})}
+                          **({"eta": self._eta(t)} if t["state"] == RUNNING else {}),
+                          **({"prior": t["prior"]} if t.get("prior") else {})}
                       for i, t in self.tasks.items()},
             "counts": {s: sum(1 for t in self.tasks.values() if t["state"] == s)
                        for s in (ACCEPTED, RUNNING, WAITING, ESCALATED, DEAD)},
@@ -369,7 +404,8 @@ class Campaign:
                         "follow these):\n- " + "\n- ".join(task["directives"]))
         if task["kind"] == "module":
             kind = _language(task["module"])
-            spec = {"task_type": {"js": "js_code_task", "ahk": "ahk_code_task"}
+            spec = {"task_type": {"js": "js_code_task", "ahk": "ahk_code_task",
+                                  "rs": "rs_code_task"}
                     .get(kind, "code_task"),
                     "title": f"{self.name}: write {task['module']}",
                     "module": task["module"], "contract": task["contract"],
@@ -382,7 +418,8 @@ class Campaign:
                     **({"grants": task["grants"]} if task.get("grants") else {})}
         else:
             kind = _language(task["module"])
-            spec = {"task_type": {"js": "js_code_tests", "ahk": "ahk_code_tests"}
+            spec = {"task_type": {"js": "js_code_tests", "ahk": "ahk_code_tests",
+                                  "rs": "rs_code_tests"}
                     .get(kind, "code_tests"),
                     "title": f"{self.name}: test {task['module']}",
                     "test_file": task["test_file"], "contract": task["contract"],
@@ -393,6 +430,10 @@ class Campaign:
                     "instructions": (task["instructions"] + history).strip(),
                     "budget": self._budget(),
                     **({"grants": task["grants"]} if task.get("grants") else {})}
+        if kind == "rs":
+            spec["rs_profile"] = self.spec.get("rs_profile", "")
+            if task.get("reference"):
+                spec["reference"] = task["reference"]
         if self.spec.get("lsp"):
             spec["lsp"] = True       # language-server tools + the lsp gate rung
         brief = self.crew.submit(spec, submitted_by=f"campaign:{self.name}",
@@ -425,7 +466,8 @@ class Campaign:
         last_source = ""
         if task["job_ids"]:
             jdir = self.crew.store.job_dir(task["job_ids"][-1])
-            for p in (jdir / "output").rglob("*.py"):
+            suffix = Path(task.get("module") or task.get("test_file") or "x.py").suffix
+            for p in (jdir / "output").rglob(f"*{suffix}"):
                 last_source = p.read_text(encoding="utf-8")[:6000]
                 break
         prompt = (

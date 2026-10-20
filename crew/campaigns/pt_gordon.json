@@ -1,0 +1,63 @@
+{
+  "name": "pt-gordon",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Gordon authors kmeans.rs (M), smooth.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Kmeans": {
+      "author": "Gordon",
+      "tester": "Qwen"
+    },
+    "Smooth": {
+      "author": "Gordon",
+      "tester": "Barry"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_kmeans",
+      "team": "Kmeans",
+      "module": "kmeans.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_kmeans.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_kmeans.rs"
+      ],
+      "api": [
+        "Palette",
+        "quantize"
+      ],
+      "depends": [],
+      "min_tests": 7,
+      "scope": "M",
+      "instructions": "No randomness. Bins in ascending key order; farthest-first initial centres with the stated tie-breaks; stop when an assignment repeats; f64 for positions and centres; labels from the ROUNDED palette in integers. Walk every table row. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the worked examples; include max_iter 0 (11.5 rounds to 12), k 0, k above the number of bins, and both tie rules."
+    },
+    {
+      "id": "pt_smooth",
+      "team": "Smooth",
+      "module": "smooth.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_smooth.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_smooth.rs"
+      ],
+      "api": [
+        "Pt",
+        "Cubic",
+        "simplify",
+        "simplify_canonical",
+        "split_chains",
+        "smooth_loop"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "M",
+      "instructions": "Write the arithmetic exactly as the contract shows - the two sides of a shared border must agree bit for bit. Distances strictly greater than epsilon are kept; ties go to the smallest index. Closed loops wrap the Catmull-Rom neighbours; chains between junctions clamp them. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Cover simplify's rules, both canonical directions, split_chains with 0, 1 and several junctions, epsilon 0 versus Catmull-Rom, and that walking a loop backwards gives the same segments reversed."
+    }
+  ]
+}

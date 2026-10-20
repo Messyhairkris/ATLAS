@@ -1,0 +1,57 @@
+{
+  "name": "pt-barry",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Barry authors halftone.rs (M), despeckle.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Halftone": {
+      "author": "Barry",
+      "tester": "Gordon"
+    },
+    "Despeckle": {
+      "author": "Barry",
+      "tester": "Larry"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_halftone",
+      "team": "Halftone",
+      "module": "halftone.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_halftone.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_halftone.rs"
+      ],
+      "api": [
+        "halftone"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "M",
+      "instructions": "Cells clipped at the edges still use the FULL cell's centre; the mean truncates; the comparison is strict (<). Check the 128-gray 4x4 and 3x3 rows. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Include white (no dots, odd cell), black, mid-gray corners, a clipped cell and the cell-below-2 rule."
+    },
+    {
+      "id": "pt_despeckle",
+      "team": "Despeckle",
+      "module": "despeckle.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_despeckle.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_despeckle.rs"
+      ],
+      "api": [
+        "despeckle"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "M",
+      "instructions": "Components are found once on the input (4-connected); one pass in raster order using CURRENT labels; ties to the smaller label; areas are never recomputed. Walk both walk-throughs in the contract. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the table rows; include the diagonal case and the one-pass row [0, 5, 2]."
+    }
+  ]
+}

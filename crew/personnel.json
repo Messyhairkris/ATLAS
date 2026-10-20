@@ -14,7 +14,7 @@
     "log_clerk": 5, "completion_audit": 12, "scout": 18, "research_digest": 16,
     "vault_index": 8, "organize_plan": 8, "test_triage": 8, "ui_sweep": 8,
     "code_task": 14, "code_tests": 12, "js_code_task": 14, "js_code_tests": 12,
-    "ahk_code_task": 14, "ahk_code_tests": 12
+    "ahk_code_task": 14, "ahk_code_tests": 12, "rs_code_task": 14, "rs_code_tests": 12
   },
 
   "posts": {
@@ -28,6 +28,8 @@
     "module_author_js": ["Gordon", "Qwen"],
     "module_author_ahk": ["Hoss", "Nemotron", "Qwen"],
     "module_author_ahk_note": "2026-09-26: minted for the first AHK campaign (Kimi's plan); order copied from module_author_py - UNPROVEN on AHK until str.ahk passes its sandbox tests.",
+    "module_author_rs": ["Qwen", "Gordon", "Hoss", "Nemotron", "Barry", "Larry"],
+    "module_author_rs_note": "2026-10-20: minted for the first Rust campaigns (photo_tools for image_convert). UNPROVEN on Rust: the order is a guess from the Python/JS record until those campaigns are measured. Kris: make every member a Rust hand and find the scope that suits each.",
     "tester": ["Hoss", "Qwen"],
     "digest_tester": ["Gordon", "Barry"],
     "digest_tester_note": "2026-10-09, applied by Kris: quote-checked testing of research digests (a scout job giving each bullet a verdict and a verbatim quote). Gordon first for speed (5/5 seeded errors, ~11k tokens per test on the fitted budget); Barry for accuracy (5/5, 0 false flags, ~7-10 min per reply). Not Hoss, Larry or Nemotron (verbatim gate or truncation). `tester` stays the code-test post.",

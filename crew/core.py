@@ -51,6 +51,56 @@ def _reply_tokens(cfg: Config, persona: str) -> int:
         return DEFAULT_REPLY_TOKENS
 
 
+class _ModelSlot:
+    """Hold one of the provider's concurrent-request slots for `model`, across processes.
+
+    Synthetic allows a fixed number of requests in flight per model (1 per pack) and
+    answers the next with a 429. Parallel campaigns share members (an author in one is
+    a tester in another), so without this they collided (Rust campaigns, 2026-10-20).
+    A waiting job keeps renewing its lease; the slot is held for one request only.
+    """
+
+    def __init__(self, model: str, renew: Callable[[], None]):
+        self.model, self.renew, self.fh = model, renew, None
+
+    @staticmethod
+    def _limit() -> int:
+        try:
+            return max(1, int((load_config().data.get("rate_limit") or {})
+                              .get("concurrent_requests_per_model", 1)))
+        except Exception:                                   # noqa: BLE001
+            return 1
+
+    def __enter__(self):
+        if os.name != "nt":
+            return self
+        import msvcrt
+        safe = "".join(c if c.isalnum() else "_" for c in self.model)
+        folder = REPO_ROOT / "runs" / "crew" / "model_slots" / safe
+        folder.mkdir(parents=True, exist_ok=True)
+        limit = self._limit()
+        while True:
+            for n in range(limit):
+                fh = open(folder / f"slot{n}.lock", "a+")
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    self.fh = fh
+                    return self
+                except OSError:
+                    fh.close()
+            self.renew()
+            time.sleep(2)
+
+    def __exit__(self, *exc):
+        if self.fh is not None:
+            import msvcrt
+            self.fh.seek(0)
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
 def _default_chat(model: str, job_id: str, task_type: str, persona: str,
                   renew: Callable[[], None], reply_tokens: int = DEFAULT_REPLY_TOKENS):
     from . import claude_chat
@@ -73,16 +123,18 @@ def _default_chat(model: str, job_id: str, task_type: str, persona: str,
             if wait:
                 time.sleep(wait)
             try:
-                with telemetry_context(run_id=job_id, duty=f"crew:{task_type}",
-                                       task_id=job_id, role="junior",
-                                       persona=persona, attempt=n):
+                with _ModelSlot(model, renew), telemetry_context(
+                        run_id=job_id, duty=f"crew:{task_type}", task_id=job_id,
+                        role="junior", persona=persona, attempt=n):
                     return chat_completion("", messages=messages, temperature=0.2,
                                            max_tokens=reply_tokens, timeout=900.0)
             except Exception as e:  # noqa: BLE001 - classified below
                 status = getattr(getattr(e, "response", None), "status_code", None)
-                transient = (status is not None and status >= 500) or type(e).__name__ in (
-                    "ConnectError", "ReadTimeout", "RemoteProtocolError", "ConnectTimeout",
-                    "ReadError", "TimeoutError", "URLError")
+                # 429 is the provider's concurrency/rate limit, not our request's fault.
+                transient = ((status is not None and (status >= 500 or status == 429))
+                             or type(e).__name__ in (
+                                 "ConnectError", "ReadTimeout", "RemoteProtocolError",
+                                 "ConnectTimeout", "ReadError", "TimeoutError", "URLError"))
                 if not transient or attempt == 2:
                     raise
     return chat

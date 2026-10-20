@@ -1,0 +1,18 @@
+{
+  "comment": "photo_tools (image_convert, 2026-10-20): the image crate minus its file I/O, imageproc without display/text, clap for the CLI module. banned_paths match a path prefix as written; banned_methods a name after . or ::; banned_idents a name anywhere.",
+  "crate_name": "photo_tools",
+  "crates": {
+    "image": {
+      "banned_paths": ["image::open", "image::save_buffer", "image::save_buffer_with_format",
+                       "image::image_dimensions", "image::ImageReader", "image::io",
+                       "image::codecs", "image::load"],
+      "banned_methods": ["save", "save_with_format", "write_to", "write_with_encoder"],
+      "banned_idents": ["ImageReader"]
+    },
+    "imageproc": {
+      "banned_paths": ["imageproc::window", "imageproc::utils"],
+      "banned_idents": ["load_image_or_panic"]
+    },
+    "clap": {}
+  }
+}

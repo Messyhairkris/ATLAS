@@ -74,6 +74,8 @@ def main(argv=None) -> int:
     s.add_argument("--deadline", default="",
                    help="ISO time to stop starting new work, e.g. 2026-09-20T10:00")
     s.add_argument("--max-requests", type=int, default=0)
+    s.add_argument("--resume", action="store_true",
+                   help="keep the tasks a stopped run already accepted; rerun the rest")
     s = sub.add_parser("loadlab")
     s.add_argument("file", help="load lab json")
     s = sub.add_parser("promote")
@@ -103,6 +105,9 @@ def main(argv=None) -> int:
         if args.max_requests:
             spec["max_requests"] = args.max_requests
         c = camp.Campaign(spec)
+        if args.action == "run" and args.resume:
+            kept = c.resume()
+            print(f"resuming {c.name}: kept {len(kept)} accepted task(s): {', '.join(kept)}")
         if args.action == "plan":
             _print({"name": c.name, "tasks": {i: {k: t[k] for k in
                     ("kind", "team", "member", "depends")}

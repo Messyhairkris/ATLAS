@@ -24,7 +24,8 @@ PREFIX = {"vault_index": "vi", "research_digest": "rd", "organize_plan": "op",
           "test_triage": "tt", "ui_sweep": "us", "code_task": "ct",
           "code_tests": "cs", "js_code_task": "jt", "js_code_tests": "js",
           "scout": "sc", "log_clerk": "lc", "completion_audit": "ca",
-          "ahk_code_task": "ah", "ahk_code_tests": "at"}
+          "ahk_code_task": "ah", "ahk_code_tests": "at",
+          "rs_code_task": "rc", "rs_code_tests": "rx"}
 NEAR_DUP = 0.88
 
 
