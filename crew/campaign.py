@@ -422,6 +422,7 @@ class Campaign:
                                   "rs": "rs_code_tests"}
                     .get(kind, "code_tests"),
                     "title": f"{self.name}: test {task['module']}",
+                    "module": task["module"],
                     "test_file": task["test_file"], "contract": task["contract"],
                     "depends_modules": self._module_paths(task),
                     "min_tests": task["min_tests"],

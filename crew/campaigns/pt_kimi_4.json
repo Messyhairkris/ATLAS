@@ -1,0 +1,60 @@
+{
+  "name": "pt-kimi-4",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 4: Kimi authors editor.rs (L). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Editor": {
+      "author": "Kimi",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_editor",
+      "team": "Editor",
+      "module": "editor.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_editor.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_editor.rs"
+      ],
+      "api": [
+        "Tool",
+        "Mods",
+        "Event",
+        "Item",
+        "Editor",
+        "Editor::new",
+        "Editor::tool",
+        "Editor::set_tool",
+        "Editor::radius",
+        "Editor::set_radius",
+        "Editor::close_radius",
+        "Editor::set_close_radius",
+        "Editor::selection",
+        "Editor::erased",
+        "Editor::can_undo",
+        "Editor::can_redo",
+        "Editor::pending",
+        "Editor::selection_mask",
+        "Editor::erase_mask",
+        "Editor::handle"
+      ],
+      "depends": [],
+      "min_tests": 10,
+      "scope": "L",
+      "instructions": "Rules 4-13 literally, in f32 with >= for far (rule 3). History is two stacks, DONE and UNDONE; a deselect remembers the list it cleared. Walk every table row. Write the module once, in one reply; do not restate the contract. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
+      "test_instructions": "Walk every row of the worked-example table; include undo with a shape in progress, deselect then undo, and the polyline close distance.",
+      "uses": [
+        "select.rs"
+      ]
+    }
+  ],
+  "requests_per_attempt": 6,
+  "tokens_per_attempt": 80000
+}

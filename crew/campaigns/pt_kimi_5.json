@@ -1,0 +1,46 @@
+{
+  "name": "pt-kimi-5",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 5: Kimi authors composite.rs (S). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Composite": {
+      "author": "Kimi",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_composite",
+      "team": "Composite",
+      "module": "composite.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_composite.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_composite.rs"
+      ],
+      "api": [
+        "opaque",
+        "keep",
+        "erase",
+        "flatten",
+        "blank_outside"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Size check first (length for blank_outside); LumaA([v, 255]) kept, LumaA([255, 0]) outside or erased; error texts are exact. Write the module once, in one reply; do not restate the contract. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
+      "test_instructions": "Use every table row, including both size errors and that nothing changes on an error.",
+      "uses": [
+        "select.rs",
+        "options.rs"
+      ]
+    }
+  ],
+  "requests_per_attempt": 6,
+  "tokens_per_attempt": 80000
+}

@@ -1070,11 +1070,20 @@ def _rs_reference(spec: dict, cfg: Config) -> List[str]:
     return parts
 
 
-def _rs_step(verdict: dict, file: str) -> dict:
+def _rs_step(verdict: dict, file: str, tests: bool = False) -> dict:
     if verdict["verdict"] == "accepted":
-        return gates.step("rust gate", True, "the hidden tests pass", file)
+        return gates.step("rust gate", True,
+                          "your tests pass against the module" if tests
+                          else "the hidden tests pass", file)
     detail = f"{verdict['verdict']}: " + "\n".join(verdict["problems"][:8])
-    if verdict["verdict"] == "tests_failed":
+    # 2026-10-20 (Nemotron, lineart tests): a tester was told "fix the module", which
+    # he cannot touch. The module already passed the PA's hidden tests.
+    if verdict["verdict"] == "tests_failed" and tests:
+        detail += ("\nThe module already passes the PA's hidden tests, so a failing test "
+                   "is wrong, not the module. Recompute each failing test's expected "
+                   "value from the contract's numbered rules and worked examples (copy "
+                   "a worked example's bytes exactly), then fix or remove that test.")
+    elif verdict["verdict"] == "tests_failed":
         detail += ("\nThe hidden tests fail. This is the evidence; fix the module, "
                    "do not argue with it.")
     elif verdict["verdict"] == "compile_failed":
@@ -1191,6 +1200,22 @@ def rs_code_tests_preload(spec: dict, cfg: Config, toolbox) -> str:
              f"modules are: {', '.join(mods)}. Each test is a `#[test] fn`.", "",
              "CONTRACT:", "", contract]
     parts += _rs_reference(spec, cfg)
+    # 2026-10-20 (Nemotron, lineart tests): the contract says dependency sources are
+    # "shown below", but testers were not shown them and guessed Error's field types
+    # three times. Show every accepted dependency; never the module under test.
+    # Fail closed: if the module under test cannot be named, show no sources at all.
+    under_test = Path(spec.get("module") or "").name
+    test_file = Path(spec.get("test_file") or spec["output"]["files"][0]).name
+    if not under_test and test_file.startswith("test_") and test_file.endswith(".rs"):
+        under_test = test_file[len("test_"):]
+    deps = ({n: s for n, s in _workspace_modules(spec, cfg).items() if n != under_test}
+            if under_test else {})
+    if deps:
+        parts += ["", f"ALREADY ACCEPTED MODULES the contract builds on (NOT {under_test}, "
+                      f"which you test blind) - their exact types and values:"]
+        for name, src in deps.items():
+            toolbox.evidence.add(f"module:{name}", src)
+            parts += ["", f"----- src/{name} -----", src[:6000]]
     parts += ["", f"RULES: at least {spec['min_tests']} #[test] functions; whole-value "
                   f"assert_eq!; the same allowlist as modules (no files, network, "
                   f"processes, env, threads, unsafe, include!, macro_rules!); never "
@@ -1213,7 +1238,7 @@ def rs_code_tests_gates(files, spec, cfg, toolbox):
             verdict = rsrun.judge_tests(source, out_file, _workspace_modules(spec, cfg),
                                         spec["rs_profile"], int(spec["min_tests"]),
                                         int(spec["test_timeout_s"]))
-            steps.append(_rs_step(verdict, out_file))
+            steps.append(_rs_step(verdict, out_file, tests=True))
     return steps
 
 

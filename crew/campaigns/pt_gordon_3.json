@@ -1,0 +1,37 @@
+{
+  "name": "pt-gordon-3",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 3: Gordon authors strokes.rs (L). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Strokes": {
+      "author": "Gordon",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_strokes",
+      "team": "Strokes",
+      "module": "strokes.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_strokes.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_strokes.rs"
+      ],
+      "api": [
+        "neighbours",
+        "trace"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "L",
+      "instructions": "m-neighbours first (rule 2); a node has degree != 2; pass 1 over nodes, then pass 2 over closed loops; directions always in the order E, SE, S, SW, W, NW, N, NE; a used link is marked at both ends. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Walk every table row and the neighbours examples; add a check that every foreground pixel appears in some chain."
+    }
+  ]
+}

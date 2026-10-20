@@ -11,7 +11,7 @@
   "teams": {
     "Lineart": {
       "author": "Hoss",
-      "tester": "Nemotron"
+      "tester": "Kimi"
     }
   },
   "tasks": [
@@ -30,7 +30,7 @@
       "min_tests": 6,
       "scope": "C",
       "instructions": "Validate first, then the empty check. Gray comes from crate::luma::rgb_to_gray, never to_luma8. Only blur when blur > 0. Canny gives white edges: invert them. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Build expected values from the accepted modules and imageproc as the contract describes; include the red-pixel Rec. 601 case and the threshold rounding rows.",
+      "test_instructions": "Build expected values from the accepted modules and imageproc as the contract describes; include the red-pixel Rec. 601 case and the threshold rounding rows. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
       "uses": [
         "luma.rs",
         "sobel.rs",

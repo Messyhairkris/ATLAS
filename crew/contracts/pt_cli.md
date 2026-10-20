@@ -46,11 +46,19 @@ pub struct Args {
     #[arg(long)] pub columns: Option<u32>,
     #[arg(long)] pub ansi: bool,
     #[arg(long)] pub invert: bool,
+    #[arg(long)] pub select: Option<String>,
+    #[arg(long)] pub mask: Option<String>,
 }
 
 /// A parsed command line.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Invocation { pub input: String, pub output: String, pub job: Job }
+pub struct Invocation {
+    pub input: String,
+    pub output: String,
+    pub job: Job,
+    pub select: Option<String>,
+    pub mask: Option<String>,
+}
 
 /// Why parsing stopped: help or version text (code 0) or an error (code 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,12 +88,15 @@ the option structs with `Default` and `validate()`, and `Error`'s Display text.
    | --threshold | yes | | |
    | --colors, --smoothness, --speckle, --iterations | | yes | |
    | --style, --cell, --columns, --ansi, --invert | | | yes |
+   | --select, --mask | yes | yes | yes |
    A flag counts as GIVEN when its `Option` is `Some`, or for `ansi`/`invert` when true.
 3. Check the flags in the `Args` FIELD ORDER (filter, blur, threshold, colors,
    smoothness, speckle, iterations, style, cell, columns, ansi, invert). The first GIVEN
    flag that does not belong to `--mode` -> `Err(Exit { code: 2, message:
    "error: --{flag} does not apply to --mode {mode}" })` with `{mode}` = `lineart`,
-   `vector` or `fx`.
+   `vector` or `fx`. (`select` and `mask` belong to every mode.)
+3a. If BOTH `select` and `mask` are given -> `Err(Exit { code: 2, message:
+   "error: use --select or --mask, not both" })`.
 4. Start from the mode's `Default` options and overwrite only what was given:
    - lineart: `filter` (Sobel -> `EdgeFilter::Sobel`, Canny -> `EdgeFilter::Canny`),
      `blur`; `threshold` through `parse_threshold(&text)` into `(low, high)`.
@@ -94,8 +105,9 @@ the option structs with `Default` and `validate()`, and `Error`'s Display text.
      `columns`, and `ansi`, `invert` copied as given.
 5. Any `Error` from `parse_threshold` or from `validate()` (call validate after rule 4)
    -> `Err(Exit { code: 2, message: format!("error: {e}") })` (Error's Display text).
-6. Otherwise `Ok(Invocation { input, output, job })` with `Job::LineArt(..)`,
-   `Job::Vector(..)` or `Job::Effect(..)`.
+6. Otherwise `Ok(Invocation { input, output, job, select, mask })` with
+   `Job::LineArt(..)`, `Job::Vector(..)` or `Job::Effect(..)`, and `select` / `mask`
+   copied from `Args` as given (the paths are not opened here; `main.rs` does that).
 
 ## Worked examples
 
@@ -103,9 +115,16 @@ argv always starts with `"photo_tools"`; shown here without it.
 
 | arguments | result |
 |---|---|
-| `--input photo.jpg --output lineart.png --mode lineart --filter canny --blur 1.2 --threshold 45` | `Ok(Invocation { input: "photo.jpg", output: "lineart.png", job: LineArt(LineArtOptions { filter: Canny, blur: 1.2, low: 45.0, high: 90.0 }) })` |
+| `--input photo.jpg --output lineart.png --mode lineart --filter canny --blur 1.2 --threshold 45` | `Ok(Invocation { input: "photo.jpg", output: "lineart.png", job: LineArt(LineArtOptions { filter: Canny, blur: 1.2, low: 45.0, high: 90.0 }), select: None, mask: None })` |
+| `--input a --output b.svg --mode lineart --select keep.txt` | `Ok(Invocation { input: "a", output: "b.svg", job: LineArt(LineArtOptions::default()), select: Some("keep.txt"), mask: None })` |
+| `--input a --output b --mode fx --style hatch --mask m.png` | `Ok(..)` with `job: Effect { style: Hatch, .. }`, `select: None`, `mask: Some("m.png")` |
+| `--input a --output b --mode vector --select s.txt --mask m.png` | `Err(Exit { code: 2, message: "error: use --select or --mask, not both" })` |
+| `--input a --output b --mode vector --blur 2 --select s.txt --mask m.png` | `Err(Exit { code: 2, message: "error: --blur does not apply to --mode vector" })` (rule 3 comes before 3a) |
+| `--input a --output b --mode vector --colors 1 --select s.txt --mask m.png` | `Err(Exit { code: 2, message: "error: use --select or --mask, not both" })` (3a comes before validation) |
 | `--input landscape.png --output vector.svg --mode vector --colors 8 --smoothness 1.5` | job `Vector(VectorOptions { colors: 8, smoothness: 1.5, speckle: 8, max_iterations: 20 })` |
-| `--input a --output b --mode fx` | job `Effect(EffectOptions::default())` |
+| `--input a --output b --mode fx` | job `Effect(EffectOptions::default())` = `Effect { style: Sketch, blur: 8.0, cell: 6, columns: 100, ansi: false, invert: false }` |
+| `--input a --output b --mode lineart` | job `LineArt(LineArtOptions::default())` = `LineArt { filter: Canny, blur: 1.0, low: 50.0, high: 100.0 }` (the defaults in `options.rs`, NOT zeros) |
+| `--input a --output b --mode vector` | job `Vector(VectorOptions::default())` = `Vector { colors: 8, smoothness: 1.0, speckle: 8, max_iterations: 20 }` |
 | `--input a --output b --mode lineart --filter sobel --threshold 20,60 --blur 0` | `LineArt { filter: Sobel, blur: 0.0, low: 20.0, high: 60.0 }` |
 | `--input a --output b --mode vector --colors 3 --smoothness 0 --speckle 0 --iterations 5` | `Vector { colors: 3, smoothness: 0.0, speckle: 0, max_iterations: 5 }` |
 | `--input a --output - --mode fx --style ascii --columns 80 --ansi --invert` | `Effect { style: Ascii, blur: 8.0, cell: 6, columns: 80, ansi: true, invert: true }` |

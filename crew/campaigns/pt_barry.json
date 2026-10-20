@@ -15,7 +15,7 @@
     },
     "Despeckle": {
       "author": "Barry",
-      "tester": "Larry"
+      "tester": "Kimi"
     }
   },
   "tasks": [
@@ -51,7 +51,7 @@
       "min_tests": 6,
       "scope": "M",
       "instructions": "Components are found once on the input (4-connected); one pass in raster order using CURRENT labels; ties to the smaller label; areas are never recomputed. Walk both walk-throughs in the contract. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Use the table rows; include the diagonal case and the one-pass row [0, 5, 2]."
+      "test_instructions": "Use the table rows; include the diagonal case and the one-pass row [0, 5, 2]. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally."
     }
   ]
 }

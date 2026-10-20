@@ -1,0 +1,38 @@
+{
+  "name": "pt-kimi",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 1: Kimi authors hatch.rs (S). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Hatch": {
+      "author": "Kimi",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_hatch",
+      "team": "Hatch",
+      "module": "hatch.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_hatch.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_hatch.rs"
+      ],
+      "api": [
+        "hatch"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Four layers, strict < comparisons, spacing below 2 counts as 2. Check the 4x3 table row by row. Write the module once, in one reply; do not restate the contract. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
+      "test_instructions": "Test each layer threshold at its boundary (192/191, 128/127, 64/63, 32/31) and the spacing rule."
+    }
+  ],
+  "requests_per_attempt": 6,
+  "tokens_per_attempt": 80000
+}

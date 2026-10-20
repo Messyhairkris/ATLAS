@@ -11,7 +11,7 @@
   "teams": {
     "Sobel": {
       "author": "Nemotron",
-      "tester": "Larry"
+      "tester": "Kimi"
     },
     "Options": {
       "author": "Nemotron",
@@ -35,7 +35,7 @@
       "min_tests": 6,
       "scope": "S",
       "instructions": "Clamp sample coordinates to the image; kernels indexed [row][column]; magnitude rounded with f64::round; the mask uses >=. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Include the clamped border (the vertical step), the single bright pixel and the threshold boundary 361/362."
+      "test_instructions": "Include the clamped border (the vertical step), the single bright pixel and the threshold boundary 361/362. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally."
     },
     {
       "id": "pt_options",

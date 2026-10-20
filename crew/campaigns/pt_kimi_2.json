@@ -1,5 +1,5 @@
 {
-  "name": "pt-nemotron-2",
+  "name": "pt-kimi-2",
   "rs_profile": "photo_tools",
   "workspace_subdir": "photo_tools",
   "senior": "Claude",
@@ -7,10 +7,10 @@
   "max_attempts": 3,
   "max_escalations": 1,
   "max_requests": 90,
-  "goal": "photo_tools (image_convert) wave 2: Nemotron authors effects.rs (C). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "goal": "photo_tools (image_convert) wave 2: Kimi authors effects.rs (C). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
   "teams": {
     "Effects": {
-      "author": "Nemotron",
+      "author": "Kimi",
       "tester": "Barry"
     }
   },
@@ -30,7 +30,7 @@
       "depends": [],
       "min_tests": 6,
       "scope": "C",
-      "instructions": "Validate first, then the empty check. Gray from crate::luma, never to_luma8. The hatch spacing is opts.cell. ASCII returns Text; the rest return Image. Write the module once, in one reply; do not restate the contract.",
+      "instructions": "Validate first, then the empty check. Gray from crate::luma, never to_luma8. The hatch spacing is opts.cell. ASCII returns Text; the rest return Image. Write the module once, in one reply; do not restate the contract. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
       "test_instructions": "Build expected values from the accepted modules; include the (0, 200, 0) Rec. 601 case and both ASCII variants.",
       "uses": [
         "luma.rs",
@@ -45,5 +45,7 @@
         "C:/Users/user/ATLAS-api-harness/crew/contracts/cards/image_imageproc_clap_card.md"
       ]
     }
-  ]
+  ],
+  "requests_per_attempt": 6,
+  "tokens_per_attempt": 80000
 }

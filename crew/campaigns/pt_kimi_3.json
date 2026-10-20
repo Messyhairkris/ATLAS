@@ -1,0 +1,51 @@
+{
+  "name": "pt-kimi-3",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 3: Kimi authors select.rs (L). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Select": {
+      "author": "Kimi",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_select",
+      "team": "Select",
+      "module": "select.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_select.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_select.rs"
+      ],
+      "api": [
+        "Shape",
+        "Op",
+        "Mask",
+        "Mask::new",
+        "Mask::from_bits",
+        "Mask::from_luma",
+        "Mask::width",
+        "Mask::height",
+        "Mask::bits",
+        "Mask::get",
+        "Mask::count",
+        "Mask::apply",
+        "rasterize",
+        "build"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "L",
+      "instructions": "Rule 2 is the truth; compute it with rule 3's per-row sweep (sort the crossings, sum those with xi > px). f64 throughout. Rule 1 first for both shapes. The Mask fields stay private. Write the module once, in one reply; do not restate the contract. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
+      "test_instructions": "Use every table row. Put a small per-pixel version of rule 2 in your test file and check a few irregular and self-crossing polygons against it; include build's Subtract-first rule and Mask::get outside the image."
+    }
+  ],
+  "requests_per_attempt": 6,
+  "tokens_per_attempt": 80000
+}

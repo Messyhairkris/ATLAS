@@ -190,5 +190,57 @@ Interface tests ran in a cloud routine (Claude Code, Linux, `CARGO_PROFILE_DEV_D
 - Run at most 2 jobs per model at once: a third Gordon job got a 429.
 - **Nemotron, final (overnight 15-16 October):** 6 of 13 digest tests passed every gate and found no errors; 7 died on 504 gateway timeouts and were not retried. His "partly" flags were details he looked for in only one part of a multi-part transcript, so give a tester the part list and tell it to search every part before flagging.
 
+**Kris, 2026-10-20 (photo_tools Rust campaigns):**
+- "Larry's biggest strength is a gofer, a monitor, and a single task agent." He passed
+  two small Rust modules first try (luma, dodge) before his model (GLM-4.7-Flash) gave
+  nine 504 gateway timeouts in 50 minutes; his open jobs went to Kimi.
+- "Kimi is great but needs good scoping to keep from overthinking." Kimi's Rust jobs get
+  one file per job, the 2026-10-15 wording ("your reply is read by a program, think
+  silently"), a 24576 reply cap and 6 requests per attempt.
+- Qwen's whole contour module (the largest exact algorithm) hit the 10-minute gateway
+  limit three times; it was split into junction / edges / contour, each a small job.
+- "Qwen, Gordon, and Kimi are our strongest reasoning agents. The others have their
+  skills, but much of the higher difficulty tasks should work with these agents." Wave 2:
+  vector (Gordon), cli (Qwen), effects (Kimi, moved from Nemotron), vector tests (Kimi);
+  `module_author_rs` now starts Qwen, Gordon, Kimi.
+- Rust results by member and scope: `python crew/runners/rs_scoping.py`.
+
+**Measured 2026-10-20, photo_tools waves 1-4 (31 modules and test files, Rust):**
+- **Every member is a working Rust author at S and M scope.** Of the module jobs that
+  reached judging, all were accepted on the first attempt; most cost 1-4 requests.
+- **Kimi, scoped (one file, "read by a program", 24576 cap): 12/12, every one first try,
+  14 requests in all** - select (L, 2), editor (L, 1), effects (C, 1), composite (S, 1),
+  hatch, and seven test files. The 2026-10-15 scoping fix holds; Kimi is now the fastest
+  dependable hand for exact L work.
+- **Gordon: 11/11 first try** - strokes (L, 6 requests, 30 min), smooth (M, 6),
+  vector and vector_select (C, 1 each), and the hardest test files. Slow, very sure.
+- **Hoss: 11/11** (9 first try), including his first C module (lineart, 1 request) and
+  L-scope tests (strokes, 3 requests). His two misses were assumptions a contract left
+  open (cli defaults); a worked-example row fixed both.
+- **Qwen: 9/10 judged, all first try** - but his endpoint stalled twice (12:22-13:40:
+  two 504s then 40 min silent on three jobs; 14:29 another long silence). Kris's rule
+  applied: his pieces went to Kimi and Hoss. Give Qwen one job at a time; three at once
+  queued behind each other.
+- **Nemotron: modules yes, crate-facing tests no.** sobel, options, thin (Guo-Hall), and
+  the cli revision (C, with the old source as a scaffold) all first try, 1 request each.
+  His lineart tests failed 9 attempts on his own Rust API guesses (`crate::` in an
+  integration test, an invented `DynamicImage::from_rgb8`, `&Vec` vs `Vec`) even after
+  two harness fixes; Kimi then did them in 1 request. Keep him on modules.
+- **Barry 5/5 first try** when he answers; his model's long reasoning hit the 10-minute
+  gateway three times on smooth tests. Give him M modules and M tests, not L.
+- **Larry 2/2 (luma, dodge) when up**; his endpoint was down 08:30-09:20 and again at
+  14:22 (20 min silent on a one-function job). Kris's rule: gofer, monitor, single task;
+  reassign when he stalls.
+- **Harness fixes that came from this (ours, not theirs):** test jobs were told "fix the
+  module" (now: the module passed the hidden tests, so fix the test); testers were not
+  shown the accepted modules a contract builds on (now shown, never the module under
+  test); one Cargo package name shared by three build slots made jobs link each other's
+  libraries; LNK1104 when the virus scanner held a test .exe (now retried).
+- **Contract lessons:** say every default value outright in a worked-example row;
+  measure an algorithm on real photos before fixing it in a contract (Zhang-Suen
+  thinning erased 2-pixel diagonals; Guo-Hall did not); a mutation run on the PA's
+  reference before the crew starts found two real test gaps (a 1-pixel-wide image, and
+  distances that only start at the origin).
+
 **Measured 2026-10-16 (code review of new Rust, scout jobs):**
 - **Gordon** as a code reviewer: five files (~1,000 lines) at once cut his reasoning off at about 52k tokens per reply, twice (about 7 minutes each). One file (288 lines) still failed (budget_requests): he re-read it, listed folders, opened a file the instructions only described, and was cut off again. Lesson: for review, preload one file, describe only that file, and give no tools; and try Qwen (the best tester) before Gordon. Not retried, to save credit.

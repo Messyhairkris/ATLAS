@@ -1,0 +1,42 @@
+{
+  "name": "pt-hoss-4",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 4: Hoss authors shapes_file.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Shapes_file": {
+      "author": "Hoss",
+      "tester": "Barry"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_shapes_file",
+      "team": "Shapes_file",
+      "module": "shapes_file.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_shapes_file.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_shapes_file.rs"
+      ],
+      "api": [
+        "Selection",
+        "parse",
+        "write"
+      ],
+      "depends": [],
+      "min_tests": 8,
+      "scope": "M",
+      "instructions": "Errors are exact strings that start with the line number; the first error stops the parse; check the points before counting them; write uses f32 Display. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Cover every error row, comments, blank lines, \\r\\n, and parse(&write(&s)) == s.",
+      "uses": [
+        "select.rs",
+        "options.rs"
+      ]
+    }
+  ]
+}

@@ -23,8 +23,10 @@ WORK = ROOT / "runs" / "crew" / "outbox" / "workspace" / "photo_tools"
 HIDDEN = ROOT / "crew" / "hidden_tests" / "rs_photo_tools"
 DEST = Path(r"\\WILKINSKNOWSYOU\Users\Public\Documents\image_convert")
 TARGET = ROOT / "runs" / "crew" / "rs_target" / "image_convert"
-MODULES = ["ascii", "cli", "contour", "despeckle", "dither", "dodge", "effects", "halftone",
-           "hatch", "kmeans", "lineart", "luma", "options", "smooth", "sobel", "svg", "vector"]
+MODULES = ["ascii", "cli", "composite", "contour", "despeckle", "dither", "dodge", "edges",
+           "editor", "effects", "halftone", "hatch", "junction", "kmeans", "lineart",
+           "lineart_svg", "luma", "options", "select", "shapes_file", "smooth", "sobel",
+           "strokes", "svg", "thin", "vector", "vector_select"]
 
 
 def cargo(dest: Path, *args: str, timeout: int = 1800) -> subprocess.CompletedProcess:
@@ -93,6 +95,14 @@ def main() -> int:
     if rel.returncode != 0:
         print(rel.stderr[-3000:])
         return 1
+    # The editor window (egui) is its own binary behind the `gui` feature.
+    if "gui = " in (dest / "Cargo.toml").read_text(encoding="utf-8"):
+        gui = cargo(dest, "build", "--release", "--features", "gui", timeout=3600)
+        exe = TARGET / "release" / "photo_tools_gui.exe"
+        print(f"gui release build: {'ok' if gui.returncode == 0 else 'FAILED'} -> {exe}")
+        if gui.returncode != 0:
+            print(gui.stderr[-3000:])
+            return 1
     return 0
 
 

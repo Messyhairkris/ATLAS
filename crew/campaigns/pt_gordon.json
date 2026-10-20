@@ -15,7 +15,7 @@
     },
     "Smooth": {
       "author": "Gordon",
-      "tester": "Barry"
+      "tester": "Kimi"
     }
   },
   "tasks": [
@@ -57,7 +57,7 @@
       "min_tests": 8,
       "scope": "M",
       "instructions": "Write the arithmetic exactly as the contract shows - the two sides of a shared border must agree bit for bit. Distances strictly greater than epsilon are kept; ties go to the smallest index. Closed loops wrap the Catmull-Rom neighbours; chains between junctions clamp them. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Cover simplify's rules, both canonical directions, split_chains with 0, 1 and several junctions, epsilon 0 versus Catmull-Rom, and that walking a loop backwards gives the same segments reversed."
+      "test_instructions": "Cover simplify's rules, both canonical directions, split_chains with 0, 1 and several junctions, epsilon 0 versus Catmull-Rom, and that walking a loop backwards gives the same segments reversed. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally."
     }
   ]
 }

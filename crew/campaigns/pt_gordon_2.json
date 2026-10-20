@@ -11,7 +11,7 @@
   "teams": {
     "Vector": {
       "author": "Gordon",
-      "tester": "Larry"
+      "tester": "Kimi"
     }
   },
   "tasks": [
@@ -30,10 +30,12 @@
       "min_tests": 6,
       "scope": "C",
       "instructions": "Pipeline in the contract's order; background = most common label after despeckle, ties to the smaller label; one shape per palette label in label order. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Include the exact 2x1 document, the background rule, and compare a larger image with the pipeline built from the accepted modules.",
+      "test_instructions": "Include the exact 2x1 document, the background rule, and compare a larger image with the pipeline built from the accepted modules. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally.",
       "uses": [
         "kmeans.rs",
         "despeckle.rs",
+        "junction.rs",
+        "edges.rs",
         "contour.rs",
         "smooth.rs",
         "svg.rs",

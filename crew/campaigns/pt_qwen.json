@@ -7,9 +7,17 @@
   "max_attempts": 3,
   "max_escalations": 1,
   "max_requests": 90,
-  "goal": "photo_tools (image_convert) wave 1: Qwen authors ascii.rs (M), contour.rs (L). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "goal": "photo_tools (image_convert) wave 1: Qwen authors ascii.rs (M), junction.rs (S), edges.rs (M), contour.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
   "teams": {
     "Ascii": {
+      "author": "Qwen",
+      "tester": "Hoss"
+    },
+    "Junction": {
+      "author": "Qwen",
+      "tester": "Gordon"
+    },
+    "Edges": {
       "author": "Qwen",
       "tester": "Hoss"
     },
@@ -39,6 +47,42 @@
       "test_instructions": "Compare whole strings; include the truncating-mean case, ignored pixels past the last cell, and the ANSI layout."
     },
     {
+      "id": "pt_junction",
+      "team": "Junction",
+      "module": "junction.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_junction.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_junction.rs"
+      ],
+      "api": [
+        "is_junction"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "S",
+      "instructions": "Do the neighbour arithmetic in i64 (x - 1 at x == 0). OUTSIDE is its own value. Walk every table row, especially the saddle and the two-labels-but-not-a-checkerboard rows. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the table rows; include border vertices, a saddle, a straight split and an L corner."
+    },
+    {
+      "id": "pt_edges",
+      "team": "Edges",
+      "module": "edges.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_edges.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_edges.rs"
+      ],
+      "api": [
+        "RawLoop",
+        "boundary_edges",
+        "raw_loops"
+      ],
+      "depends": [],
+      "min_tests": 7,
+      "scope": "M",
+      "instructions": "One slot per possible edge, index vertex_index * 4 + direction, holding the owning label; iterate slots in index order for both functions. Linking: right, else straight, else left; never back. Walk the hole, saddle and L-shape examples. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the worked examples; check edge order at a shared vertex and that every edge lands in exactly one loop."
+    },
+    {
       "id": "pt_contour",
       "team": "Contour",
       "module": "contour.rs",
@@ -51,11 +95,14 @@
         "is_junction",
         "trace"
       ],
-      "depends": [],
+      "depends": [
+        "pt_junction",
+        "pt_edges"
+      ],
       "min_tests": 8,
-      "scope": "L",
-      "instructions": "The hardest module: follow rules 1-7 literally. Edges keep the region on the right; at a saddle turn RIGHT; drop straight-through points unless they are junctions; rotate to the smallest (y, x) point; sort by label then first point. Check every worked example, especially the saddle and the T-junction. Write the module once, in one reply; do not restate the contract.",
-      "test_instructions": "Use the worked examples as tests, plus is_junction on its own. Compare whole Vec<Loop> values."
+      "scope": "M",
+      "instructions": "Assembly only: call crate::edges::raw_loops and crate::junction::is_junction (re-exported with `pub use`). Keep corners and junctions, rotate to the smallest (y, x) point (tie: smaller following point), sort by label, first point, second point. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Use the worked examples as tests, plus is_junction through the re-export. Compare whole Vec<Loop> values."
     }
   ]
 }

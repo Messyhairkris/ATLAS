@@ -1,0 +1,36 @@
+{
+  "name": "pt-nemotron-3",
+  "rs_profile": "photo_tools",
+  "workspace_subdir": "photo_tools",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 90,
+  "goal": "photo_tools (image_convert) wave 3: Nemotron authors thin.rs (M). First Rust campaigns: measure which scope suits each member. S small, M exact/byte-exact, L largest algorithm, C crate-facing with the API card.",
+  "teams": {
+    "Thin": {
+      "author": "Nemotron",
+      "tester": "Kimi"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pt_thin",
+      "team": "Thin",
+      "module": "thin.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/pt_thin.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_photo_tools/hidden_thin.rs"
+      ],
+      "api": [
+        "thin"
+      ],
+      "depends": [],
+      "min_tests": 6,
+      "scope": "M",
+      "instructions": "Judge every pixel of a sub-iteration against a snapshot taken at its start, then remove all marked pixels together. Outside the image is background. Walk the 2 x 2 walk-through in the contract before you write. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "Walk the table rows; include the 2 x 2 square, the ring, and that thinning a result again changes nothing. YOUR REPLY IS READ BY A PROGRAM. Think silently and briefly - everything you need is in the contract above; do not reason aloud. Begin your reply with SUBMIT and the one file, and nothing after it. SCOPE: one file, one reply; do not explore, re-derive the rules, or add features or extra checks - apply the numbered rules and the table literally."
+    }
+  ]
+}

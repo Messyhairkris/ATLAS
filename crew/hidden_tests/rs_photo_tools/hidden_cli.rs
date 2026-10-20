@@ -23,8 +23,54 @@ fn spec_example_one_canny() {
             input: "photo.jpg".to_string(),
             output: "lineart.png".to_string(),
             job: Job::LineArt(LineArtOptions { filter: EdgeFilter::Canny, blur: 1.2, low: 45.0, high: 90.0 }),
+            select: None,
+            mask: None,
         })
     );
+}
+
+#[test]
+fn select_and_mask_are_copied_in_every_mode() {
+    assert_eq!(
+        parse(&argv("--input a --output b.svg --mode lineart --select keep.txt")),
+        Ok(Invocation {
+            input: "a".to_string(),
+            output: "b.svg".to_string(),
+            job: Job::LineArt(LineArtOptions::default()),
+            select: Some("keep.txt".to_string()),
+            mask: None,
+        })
+    );
+    let inv = parse(&argv("--input a --output b --mode fx --style hatch --mask m.png")).unwrap();
+    assert_eq!((inv.select, inv.mask), (None, Some("m.png".to_string())));
+    assert!(matches!(inv.job, Job::Effect(o) if o.style == Style::Hatch));
+    let inv = parse(&argv("--input a --output b.svg --mode vector --mask m.png")).unwrap();
+    assert_eq!(inv.mask.as_deref(), Some("m.png"));
+    assert_eq!(inv.job, Job::Vector(VectorOptions::default()));
+}
+
+#[test]
+fn select_and_mask_together_are_refused_after_the_mode_check_before_validation() {
+    let both = Exit { code: 2, message: "error: use --select or --mask, not both".to_string() };
+    assert_eq!(err("--input a --output b --mode vector --select s.txt --mask m.png"), both);
+    assert_eq!(err("--input a --output b --mode lineart --mask m.png --select s.txt"), both);
+    assert_eq!(err("--input a --output b --mode vector --colors 1 --select s.txt --mask m.png"), both);
+    assert_eq!(
+        err("--input a --output b --mode vector --blur 2 --select s.txt --mask m.png"),
+        Exit { code: 2, message: "error: --blur does not apply to --mode vector".to_string() }
+    );
+}
+
+#[test]
+fn select_and_mask_appear_in_help() {
+    let help = err("--help").message;
+    assert!(help.contains("--select") && help.contains("--mask"), "{help}");
+}
+
+#[test]
+fn no_select_or_mask_is_none() {
+    let inv = parse(&argv("--input a --output b --mode fx")).unwrap();
+    assert_eq!((inv.select, inv.mask), (None, None));
 }
 
 #[test]

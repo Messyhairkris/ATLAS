@@ -37,7 +37,7 @@ pub struct Args {
     /// Image to read (PNG or JPEG).
     #[arg(long)]
     pub input: String,
-    /// File to write: .png for images, .svg for vector, .txt or - for ASCII.
+    /// File to write: .png or .jpg for images, .svg for vector or line art, .txt or - for ASCII.
     #[arg(long)]
     pub output: String,
     #[arg(long, value_enum)]
@@ -66,6 +66,12 @@ pub struct Args {
     pub ansi: bool,
     #[arg(long)]
     pub invert: bool,
+    /// A selection saved by the editor: only those areas are rendered.
+    #[arg(long)]
+    pub select: Option<String>,
+    /// A mask image: gray 128 and above is kept, darker is left out.
+    #[arg(long)]
+    pub mask: Option<String>,
 }
 
 /// A parsed command line.
@@ -74,6 +80,8 @@ pub struct Invocation {
     pub input: String,
     pub output: String,
     pub job: Job,
+    pub select: Option<String>,
+    pub mask: Option<String>,
 }
 
 /// Why parsing stopped: help or version text (code 0) or an error (code 2).
@@ -122,6 +130,9 @@ pub fn parse(argv: &[String]) -> Result<Invocation, Exit> {
         if present && !applies[slot] {
             return Err(usage(format!("error: --{flag} does not apply to --mode {mode_name}")));
         }
+    }
+    if args.select.is_some() && args.mask.is_some() {
+        return Err(usage("error: use --select or --mask, not both".to_string()));
     }
     let job = match args.mode {
         ModeArg::Lineart => {
@@ -172,5 +183,5 @@ pub fn parse(argv: &[String]) -> Result<Invocation, Exit> {
             Job::Effect(o)
         }
     };
-    Ok(Invocation { input: args.input, output: args.output, job })
+    Ok(Invocation { input: args.input, output: args.output, job, select: args.select, mask: args.mask })
 }
