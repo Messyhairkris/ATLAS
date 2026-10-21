@@ -1,3 +1,6 @@
+// 3.14159 is a rounding input for fmt_num, not an approximation of PI.
+#![allow(clippy::approx_constant)]
+
 use photo_tools::svg::{document, fmt_num, hex, path_data};
 
 #[test]
