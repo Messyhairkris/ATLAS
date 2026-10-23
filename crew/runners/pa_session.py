@@ -40,6 +40,19 @@ AHK_LSP = HOME / ".ahk-lsp" / "server.js"
 PYLSP = Path(PYTHON).parent / "Scripts" / "pylsp.exe"
 
 
+KEEPER = HOME / "TheCrew" / "bin" / "mcp-keeper.exe"
+KEEPER_LOG = REPO / "runs" / "mcp-keeper" / "keeper.jsonl"
+
+
+def _keeper(name: str) -> list:
+    """Kris 2026-10-23: every MCP server starts behind mcp-keeper, which starts it again
+    when the first (cold) start fails. Without the keeper built, the server runs bare."""
+    if not KEEPER.is_file():
+        return []
+    return [str(KEEPER), "--name", name, "--first-wait", "40", "--total", "85",
+            "--log", str(KEEPER_LOG), "--"]
+
+
 def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool = False) -> dict:
     """The generated opencode.json: one provider, one primary agent, the crew MCP."""
     model = scope["model"]
@@ -61,7 +74,7 @@ def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool
                                "limit": {"output": reply,
                                          "context": int(member.get("context_window")
                                                         or 200000)}}}}},
-        "mcp": {"crew": {"type": "local", "command": [PYTHON, str(REPO / "crew_server.py")],
+        "mcp": {"crew": {"type": "local", "command": _keeper("crew") + [PYTHON, str(REPO / "crew_server.py")],
                          # worker off by default: a worker would also run every stale READY job in
                          # the queue (14 on 2026-10-23); the PA runs work with campaigns
                          "environment": {"CREW_CLIENT": f"OpenCode-{pa}",

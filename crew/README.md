@@ -100,6 +100,13 @@ Any task can also carry **acceptance gates**: `must_mention`, `must_read` (the m
 - **No self-promotion.** No MCP tool can change an Autonomy Stage. `python -m crew promote` is Kris-only. It refuses to skip stages and refuses to promote right after a failure.
 - **Deny list available, currently empty.** `deny_models` in `config.json` is enforced by the provider layer; it was used to measure roster-only spend and is now off. Big models are not crew members by default: `defaults.assigned_to` is Hoss, and naming a large model in `assigned_to` usually means the task was mis-scoped.
 
+## Cold starts (2026-10-23)
+
+Every stdio MCP server, `crew` included, starts behind
+`C:\Users\user\TheCrew\bin\mcp-keeper.exe`, which starts it again when the first
+(cold) start fails or hangs; `MCP_TIMEOUT` is 90000 in the user settings. Retries are logged to
+`runs/mcp-keeper/keeper.jsonl` and counted by the night report.
+
 ## Register the server
 
 **Claude Code:** `.mcp.json` at the repo root registers `crew` for this project. Approve it when Claude Code asks.

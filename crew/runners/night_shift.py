@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 GUARD_LOG = REPO / "runs" / "guard" / "hits.jsonl"
+KEEPER_LOG = REPO / "runs" / "mcp-keeper" / "keeper.jsonl"
 
 # Windows PowerShell 5.1 still projects the WinRT toast types; pwsh 7 does not.
 _TOAST = r"""
@@ -100,6 +101,29 @@ def guard_hits(cutoff: float) -> dict:
     return {k: dict(v) for k, v in hits.items()}
 
 
+def keeper_events(cutoff: float) -> dict:
+    """{server: {"restarts", "recovered", "gave_up"}} from mcp-keeper's log (Kris,
+    2026-10-23: every MCP server is started again when its first, cold start fails)."""
+    out = collections.defaultdict(lambda: {"restarts": 0, "recovered": 0, "gave_up": 0})
+    if not KEEPER_LOG.is_file():
+        return {}
+    for line in KEEPER_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+            if float(event.get("epoch", 0)) < cutoff:
+                continue
+        except (ValueError, TypeError):
+            continue
+        message, server = str(event.get("message", "")), str(event.get("server", "?"))
+        if message.startswith("attempt "):
+            out[server]["restarts"] += 1
+        elif message.startswith("started on attempt"):
+            out[server]["recovered"] += 1
+        elif message.startswith("gave up"):
+            out[server]["gave_up"] += 1
+    return dict(out)
+
+
 def _table(rows: list, header: list) -> list:
     if not rows:
         return ["(none)"]
@@ -108,15 +132,19 @@ def _table(rows: list, header: list) -> list:
 
 
 def report(groups: list, camps: list, guard: dict, signatures, hours: int,
-           threshold: int, now: dt.datetime) -> tuple:
+           threshold: int, now: dt.datetime, keeper: dict = None) -> tuple:
+    keeper = keeper or {}
     failed_jobs_n = len({j for g in groups for j in g["job_ids"]})
     candidates = [g for g in groups if g["candidate"]]
     relays = [r for c in camps for r in c["relays"]]
     rewrites = sum(guard.get("rewrite", {}).values())
     blocks = sum(guard.get("block", {}).values())
+    gave_up = sum(k["gave_up"] for k in keeper.values())
     headline = (f"{failed_jobs_n} failed job(s) in {len(groups)} group(s); "
                 f"{len(candidates)} fixer candidate(s); {len(relays)} relay(s); "
-                f"guard: {rewrites} rewrite(s), {blocks} block(s)")
+                f"guard: {rewrites} rewrite(s), {blocks} block(s); "
+                f"MCP: {sum(k['restarts'] for k in keeper.values())} restart(s)"
+                + (f", {gave_up} server(s) never came up" if gave_up else ""))
     md = [f"# Night report - {now:%Y-%m-%d %H:%M}", "",
           f"Window: the last {hours} h. Zero tokens: sorted by night_signatures.py from what "
           f"the harness wrote.", "", f"**{headline}**", "",
@@ -146,6 +174,10 @@ def report(groups: list, camps: list, guard: dict, signatures, hours: int,
     md += _table([[action, n, note] for action, notes in sorted(guard.items())
                   for note, n in sorted(notes.items(), key=lambda kv: -kv[1])],
                  ["action", "count", "note"])
+    md += ["", "## MCP servers (mcp-keeper: started again after a failed start)", ""]
+    md += _table([[name, k["restarts"], k["recovered"], k["gave_up"]]
+                  for name, k in sorted(keeper.items())],
+                 ["server", "failed starts", "recovered", "never came up"])
     md += ["", "## For the morning (PA)", "",
            "- Each fixer candidate: write a contract and hidden tests for a zero-token fixer "
            "(autofix / quirklint), let the crew build it, and keep Kris's Unify order "
@@ -198,7 +230,8 @@ def main(argv=None) -> int:
     try:
         groups = signatures.group(failed_jobs(state, cutoff), args.threshold)
         headline, md, data = report(groups, campaigns(state, cutoff), guard_hits(cutoff),
-                                    signatures, args.hours, args.threshold, now)
+                                    signatures, args.hours, args.threshold, now,
+                                    keeper_events(cutoff))
         stamp = f"{now:%Y-%m-%d}"
         (out / f"NIGHT_REPORT-{stamp}.md").write_text(md, encoding="utf-8")
         (out / "NIGHT_REPORT.md").write_text(md, encoding="utf-8")

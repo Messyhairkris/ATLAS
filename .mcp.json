@@ -1,9 +1,23 @@
 {
   "mcpServers": {
     "crew": {
-      "command": "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
-      "args": ["C:/Users/user/ATLAS-api-harness/crew_server.py"],
-      "env": {"CREW_CLIENT": "Claude"}
+      "command": "C:\\Users\\user\\TheCrew\\bin\\mcp-keeper.exe",
+      "args": [
+        "--name",
+        "crew",
+        "--first-wait",
+        "40",
+        "--total",
+        "85",
+        "--log",
+        "C:\\Users\\user\\ATLAS-api-harness\\runs\\mcp-keeper\\keeper.jsonl",
+        "--",
+        "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
+        "C:/Users/user/ATLAS-api-harness/crew_server.py"
+      ],
+      "env": {
+        "CREW_CLIENT": "Claude"
+      }
     }
   }
 }
