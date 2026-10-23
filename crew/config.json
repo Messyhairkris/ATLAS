@@ -126,6 +126,10 @@
     }
   },
   "deny_models": [],
+  "bench_until": {
+    "comment": "Member -> local time the bench ends; ignored once it passes (crew/config.py benched_members). 2026-09-28 Kris: Gordon benched 24 h after his model (DeepSeek-V4.1-Flash on Synthetic) stopped answering: one request hung 14 min then 524, the retry never replied, a direct 60 s probe timed out while Hoss and Qwen answered in under 2 s.",
+    "Gordon": "2026-09-29T15:39"
+  },
   "rate_limit": {
     "comment": "Published limits (https://synthetic.new/rate-limits, recorded 2026-09-21; details in crew/SYNTHETIC_LIMITS.md). Per pack: 500 requests/5h regenerating 5% every 15 min; $24/week credits regenerating 2% every 202 min; 1 concurrent request per model. Kris has 2 packs (1000 req/5h, $48/week, 2 per model) until 2026-09-30. Requests are weighted by the model's input price against Kimi-K3 = 1 (GLM-5.3-Flash ~0.1; measured 2026-09-20: a cheap-model call ~0.033). The provider's x-synthetic-quotas header is the truth and the governor reads it; the numbers here are the fallback before the first answer. credit_reserve_percent is kept for Kris and Crush.",
     "mode": "bucket",
@@ -153,11 +157,12 @@
     "observation_chars": 6000,
     "lease_seconds": 180,
     "max_tokens_by_member": {
-      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured. 2026-09-21 (gl-std140): Barry on GLM-5.3-Flash spent 36,448 tokens reasoning against 32768 and was cut off before answering; raised to 65536, the provider's max_output_length for GLM-5.3-Flash. 2026-09-22: GLM-4.7-Flash reactivated as its own member, Larry (separate from Barry) - starts at its old measured ceiling, 49152, rather than re-measuring from 16384.",
+      "comment": "Output ceiling per member. Barry (GLM-4.7-Flash) and Nemotron reason at length before answering; at 16384 Barry returned three empty replies in a row, having spent 18-20k tokens thinking. A bigger ceiling costs tokens, which are cheap, and saves whole retries, which are not. 2026-09-20: Qwen hit the same wall on profiles.py - a ~200 line module cannot be re-emitted whole inside 16384, so three retries in a row died as budget_tokens without producing a file. Raised Qwen to 32768 and Hoss to 24576. 2026-09-21: Barry moved from GLM-4.7-Flash (archived; needed 49152) to GLM-5.3-Flash, and Gordon (DeepSeek-V4.1-Flash) joined; both start at 32768 until measured. 2026-09-21 (gl-std140): Barry on GLM-5.3-Flash spent 36,448 tokens reasoning against 32768 and was cut off before answering; raised to 65536, the provider's max_output_length for GLM-5.3-Flash. 2026-09-22: GLM-4.7-Flash reactivated as its own member, Larry (separate from Barry) - starts at its old measured ceiling, 49152, rather than re-measuring from 16384. 2026-10-07 (splat-camera-lock): Qwen was cut off (output_truncated) twice writing camera-limits tests (a long contract with a verbatim OrbitControls port to reproduce); raised Qwen to 65536. 2026-10-20 (photo_tools): Kimi set to 24576, the cap that worked with the 'think silently, read by a program' prompt on 2026-10-15 (PERSONNEL.md); at the 16384 default one reply spent it all thinking aloud.",
+      "Kimi": 24576,
       "Barry": 65536,
-      "Nemotron": 24576,
+      "Nemotron": 49152,
       "Hoss": 24576,
-      "Qwen": 32768,
+      "Qwen": 65536,
       "Gordon": 32768,
       "Haiku": 32768,
       "Larry": 49152

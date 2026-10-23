@@ -30,6 +30,15 @@ def test_forbidden_globals_exact():
     ("import {\n  a,\n  b,\n} from 'multi'", ["multi"]),
     ('require\n(\n"spaced")', ["spaced"]),
     ("", []),
+    # 2026-09-27: the trigger must END the code before the string (a variable named
+    # `from` falsely rejected a correct module in the touchup-splice campaign).
+    ('let from = 0; f("a")', []),
+    ('out.push({ from, to: i }); g(":")', []),
+    ('const u = import.meta.url; f("a")', []),
+    ('let from = 0; f("a"); import x from "y"', ["y"]),
+    ("const b = '\\\\'; import x from 'y'", ["y"]),
+    ('const t = `a\\\\`; import x from "y"', ["y"]),
+    ('const r = /a\\\\/g; import x from "y"', ["y"]),
 ])
 def test_imports_table(source, expected):
     assert ji.imports(source) == expected

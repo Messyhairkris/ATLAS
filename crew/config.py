@@ -4,6 +4,7 @@ CREW_HOME for tests and second machines."""
 import fnmatch
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -13,6 +14,28 @@ REPO_ROOT = CREW_DIR.parent
 
 class CrewError(Exception):
     """A request the crew refuses (bad spec, out-of-bounds path, bad state)."""
+
+
+def benched_members(bench_until: dict, now: Optional[datetime] = None) -> List[str]:
+    """Members whose bench has not yet run out.
+
+    config.json `bench_until` maps a member name to a local ISO time, e.g.
+    {"Gordon": "2026-09-29T15:39"}. Until then the member is denied like a
+    deny_models entry (by name for "@post" routing, by model for direct calls);
+    after it the entry is ignored, so nobody has to remember to lift it.
+    """
+    now = now or datetime.now()
+    return [name for name, until in bench_until.items()
+            if not name.startswith("comment") and datetime.fromisoformat(until) > now]
+
+
+def _member_model(member: str) -> Optional[str]:
+    """The model id personnel.json gives a member, or None."""
+    try:
+        staff = json.loads((CREW_DIR / "personnel.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return staff.get("members", {}).get(member, {}).get("model")
 
 
 class Config:
@@ -27,6 +50,10 @@ class Config:
         self.deny_globs: List[str] = data.get("deny_globs", [])
         self.fetch_allowlist: List[str] = data.get("fetch_allowlist", [])
         self.deny_models: List[str] = data.get("deny_models", [])
+        self.benched = benched_members(data.get("bench_until", {}))
+        self.deny_models = self.deny_models + [
+            name for member in self.benched for name in (member, _member_model(member))
+            if name and name not in self.deny_models]
         self.project = data.get("project", "crosstalk")
         self.telemetry_file = data.get("telemetry_file")
         self.defaults = {"assigned_to": "Hoss", "max_requests": 12,

@@ -39,11 +39,14 @@ def _is_import_specifier(code: str) -> bool:
     * ``require`` followed by optional whitespace and ``(``
     """
     # ``code`` already has trailing whitespace removed by the caller.
+    # Anchored with \Z: the trigger must END the code before the string. Unanchored,
+    # a variable named ``from`` anywhere since the previous string (``let from = 0``)
+    # made the next string an "import" (touchup-splice campaign, 2026-09-27).
     patterns = (
-        r"(?<![A-Za-z0-9_$\.])from\b",
-        r"(?<![A-Za-z0-9_$\.])import\b",
-        r"(?<![A-Za-z0-9_$\.])import\s*\(",
-        r"(?<![A-Za-z0-9_$\.])require\s*\(",
+        r"(?<![A-Za-z0-9_$\.])from\Z",
+        r"(?<![A-Za-z0-9_$\.])import\Z",
+        r"(?<![A-Za-z0-9_$\.])import\s*\(\Z",
+        r"(?<![A-Za-z0-9_$\.])require\s*\(\Z",
     )
     return any(re.search(p, code) for p in patterns)
 

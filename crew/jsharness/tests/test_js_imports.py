@@ -91,3 +91,40 @@ def test_forbidden_uses_commented_out():
 def test_forbidden_uses_string_literal():
     source = '"document"'
     assert js_imports.forbidden_uses(source) == []
+
+
+# Regression, 2026-09-27: the trigger must END the code before the string. A variable
+# named `from` earlier in that code made the next string an "import" and falsely
+# rejected a correct module (touchup-splice campaign, style_decl, attempt 1).
+
+def test_imports_variable_named_from_is_not_a_trigger():
+    source = 'let from = 0; f("a")'
+    assert js_imports.imports(source) == []
+
+
+def test_imports_shorthand_property_from_is_not_a_trigger():
+    source = 'out.push({ from, to: i }); g(":")'
+    assert js_imports.imports(source) == []
+
+
+def test_imports_from_as_condition_is_not_a_trigger():
+    source = 'if (from) f("x")'
+    assert js_imports.imports(source) == []
+
+
+def test_imports_import_meta_is_not_a_trigger():
+    source = 'const u = import.meta.url; f("a")'
+    assert js_imports.imports(source) == []
+
+
+def test_imports_real_import_after_variable_named_from():
+    source = 'let from = 0; f("a"); import x from "y"'
+    assert js_imports.imports(source) == ["y"]
+
+
+def test_imports_found_after_each_escaped_backslash_literal():
+    bs = "\\"
+    for literal in ('"' + bs + bs + '"', "'" + bs + bs + "'", "`a" + bs + bs + "`",
+                    "`a" + bs + "``", "/a" + bs + bs + "/g", "/a" + bs + "//g"):
+        source = "const v = " + literal + '; import x from "y"; f(":")'
+        assert js_imports.imports(source) == ["y"], literal

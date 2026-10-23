@@ -118,3 +118,39 @@ def test_code_only_template_is_two_backticks():
 def test_code_only_import_line():
     """code_only: the string and the trailing comment are both replaced."""
     assert js_lex.code_only('import x from "fs" // note') == 'import x from ""  '
+
+
+# Escaped backslash at the end of each literal kind: the literal still closes, and the
+# code after it is code. (Checked 2026-09-27 while chasing a false "import" report; the
+# lexer was right, js_imports was not - these pin the lexer so it stays right.)
+BS = "\\"
+
+
+def test_double_quoted_escaped_backslash_closes():
+    source = 'a = "' + BS + BS + '"; b'
+    assert js_lex.segments(source) == [
+        ("code", "a = "), ("string", '"' + BS + BS + '"'), ("code", "; b")]
+
+
+def test_single_quoted_escaped_backslash_closes():
+    source = "a = '" + BS + BS + "'; b"
+    assert js_lex.segments(source) == [
+        ("code", "a = "), ("string", "'" + BS + BS + "'"), ("code", "; b")]
+
+
+def test_template_escaped_backslash_closes():
+    source = "a = `x" + BS + BS + "`; b"
+    assert js_lex.segments(source) == [
+        ("code", "a = "), ("template", "`x" + BS + BS + "`"), ("code", "; b")]
+
+
+def test_regex_escaped_backslash_closes():
+    source = "a = /x" + BS + BS + "/g; b"
+    assert js_lex.segments(source) == [
+        ("code", "a = "), ("regex", "/x" + BS + BS + "/g"), ("code", "; b")]
+
+
+def test_regex_escaped_slash_does_not_close():
+    source = "a = /x" + BS + "//g; b"
+    assert js_lex.segments(source) == [
+        ("code", "a = "), ("regex", "/x" + BS + "//g"), ("code", "; b")]
