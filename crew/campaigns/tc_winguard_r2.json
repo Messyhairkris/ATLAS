@@ -1,0 +1,40 @@
+{
+  "name": "tc-winguard-r2",
+  "rs_profile": "the_crew",
+  "workspace_subdir": "the_crew",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 24,
+  "goal": "Rework, not restart (2026-10-23): the live guard refused correct PowerShell (a ; inside @{...}); the contract gained split rule 3b (nesting). Gordon reworks his accepted winguard.rs from the appendix; the hidden tests gained 7 tests (40 in all).",
+  "teams": {
+    "Guard": {
+      "tester": "Hoss",
+      "author": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "team": "Guard",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tc_winguard_r2.md",
+      "cross_tests": false,
+      "module": "winguard.rs",
+      "depends": [],
+      "instructions": "REWORK, DO NOT RESTART: the contract's appendix holds your accepted winguard.rs. Add split rule 3b (a DEPTH counter: { and ( add 1, } and ) subtract 1 but never below 0; while DEPTH > 0 rules 4 and 5 do not apply). Change nothing else; copy every other line exactly. Walk the new split rows of the worked-example table. Reply with the whole file once.",
+      "id": "tc_winguard_r2",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_the_crew/hidden_winguard.rs"
+      ],
+      "api": [
+        "Action",
+        "Verdict",
+        "suggestion",
+        "split",
+        "replace_words",
+        "check"
+      ],
+      "scope": "S"
+    }
+  ]
+}

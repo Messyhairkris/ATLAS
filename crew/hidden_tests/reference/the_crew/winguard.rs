@@ -90,6 +90,8 @@ pub fn split(command: &str) -> Vec<String> {
     let mut pieces = Vec::new();
     let mut current = String::new();
     let mut state = Quote::Outside;
+    // split rule 3b (2026-10-23): a `;` inside @{...}, {...} or $(...) is not a separator
+    let mut depth: usize = 0;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -114,6 +116,14 @@ pub fn split(command: &str) -> Vec<String> {
                 } else if c == '"' {
                     current.push(c);
                     state = Quote::Double;
+                } else if c == '{' || c == '(' {
+                    current.push(c);
+                    depth += 1;
+                } else if c == '}' || c == ')' {
+                    current.push(c);
+                    depth = depth.saturating_sub(1);
+                } else if depth > 0 {
+                    current.push(c);
                 } else if (c == '&' || c == '|') && next == Some(c) {
                     pieces.push(std::mem::take(&mut current));
                     pieces.push(format!("{c}{c}"));

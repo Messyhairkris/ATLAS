@@ -134,6 +134,65 @@ fn split_separators_are_exact_strings() {
     assert_eq!(seps, vec!["&&", "||", "|", ";", "\n"]);
 }
 
+// ---- split: nesting (rule 3b, added 2026-10-23 after a live false positive) --
+
+#[test]
+fn split_semicolon_inside_a_hashtable_is_not_a_separator() {
+    assert_eq!(
+        split("Select-Object @{n='f';e={$_.Name}} | Sort-Object"),
+        s(&["Select-Object @{n='f';e={$_.Name}} ", "|", " Sort-Object"])
+    );
+}
+
+#[test]
+fn split_subexpression_and_script_block_hold_their_separators() {
+    assert_eq!(split("$(a; b); c"), s(&["$(a; b)", ";", " c"]));
+    assert_eq!(
+        split("if ($x) { a | b; c }\nd"),
+        s(&["if ($x) { a | b; c }", "\n", "d"])
+    );
+    assert_eq!(split("x { a && b || c } && y"), s(&["x { a && b || c } ", "&&", " y"]));
+}
+
+#[test]
+fn split_unbalanced_closers_never_go_below_zero() {
+    assert_eq!(split("a } ; b"), s(&["a } ", ";", " b"]));
+    assert_eq!(split("a ) ) ; b"), s(&["a ) ) ", ";", " b"]));
+}
+
+#[test]
+fn split_unclosed_brace_keeps_the_rest() {
+    assert_eq!(split("x { y; z"), s(&["x { y; z"]));
+}
+
+#[test]
+fn split_braces_inside_quotes_do_not_count() {
+    assert_eq!(split("'{' ; b"), s(&["'{' ", ";", " b"]));
+    assert_eq!(split("\"(\" | b"), s(&["\"(\" ", "|", " b"]));
+    assert_eq!(split("`{ ; b"), s(&["`{ ", ";", " b"]));
+}
+
+#[test]
+fn check_hashtable_with_semicolon_is_allowed() {
+    // the live false positive of 2026-10-23
+    let cmd = "Get-ChildItem | Select-Object @{n='file';e={$_.FullName}}, Length";
+    assert_eq!(check(cmd), v(Action::Allow, cmd, &[]));
+}
+
+#[test]
+fn check_inside_a_script_block_is_not_checked_but_after_it_is() {
+    let cmd = "if ($x) { ls -la }";
+    assert_eq!(check(cmd), v(Action::Allow, cmd, &[]));
+    assert_eq!(
+        check("foreach ($n in 'a','b') { $n }; ls -la"),
+        v(
+            Action::Rewrite,
+            "foreach ($n in 'a','b') { $n }; Get-ChildItem -Force",
+            &["ls -la -> Get-ChildItem -Force"]
+        )
+    );
+}
+
 // ---- replace_words ----------------------------------------------------------
 
 #[test]

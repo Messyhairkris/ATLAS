@@ -98,11 +98,20 @@ In OUTSIDE, look at the current character `c` (and the next one):
 2. `@` followed by `'` -> copy both, state HERE-SINGLE. `@` followed by `"` -> copy both,
    state HERE-DOUBLE.
 3. `'` -> copy, state SINGLE. `"` -> copy, state DOUBLE.
+3b. **Nesting** (added 2026-10-23): keep a counter DEPTH, starting at 0. `{` or `(` ->
+   copy it and add 1. `}` or `)` -> copy it and subtract 1, but never below 0. While
+   DEPTH is above 0, rules 4 and 5 do not apply: every other character is copied. (So
+   `@{n='f';e={$_.Name}}`, `$(a; b)` and `if ($x) { a; b }` are one segment each. A
+   command inside braces is therefore not checked: a missed Linux command there is far
+   better than refusing correct PowerShell.)
 4. `&&` or `||` (two identical characters) -> end the current segment; push the
    two-character separator. A single `&` is NOT a separator (it is copied).
 5. `|`, `;` or a newline `\n` -> end the current segment; push that one character as
    the separator.
 6. Anything else: copy it into the current segment.
+
+Braces and parentheses inside SINGLE, DOUBLE and the here-strings do not change DEPTH, and
+neither does an escaped one (`` `{ `` is copied by rule 1).
 
 In SINGLE: copy every character; a `'` returns to OUTSIDE.
 In DOUBLE: copy every character; a backtick copies itself and the next character (so
@@ -192,6 +201,10 @@ words, return the segment unchanged.
 | `split("one\ntwo")` | `["one", "\n", "two"]` |
 | ``split("say \"a`\"\|b\" \| c")`` | ``["say \"a`\"\|b\" ", "\|", " c"]`` |
 | `split("'open \| x")` | `["'open \| x"]` (unterminated quote) |
+| `split("Select-Object @{n='f';e={$_.Name}} \| Sort-Object")` | `["Select-Object @{n='f';e={$_.Name}} ", "\|", " Sort-Object"]` (rule 3b) |
+| `split("$(a; b); c")` | `["$(a; b)", ";", " c"]` |
+| `split("a } ; b")` | `["a } ", ";", " b"]` (DEPTH never goes below 0) |
+| `split("'{' ; b")` | `["'{' ", ";", " b"]` (a quoted brace does not count) |
 
 `replace_words`:
 
@@ -227,6 +240,8 @@ words, return the segment unchanged.
 | `cat x &>/dev/null` | R | `cat x *>$null` | `&>/dev/null -> *>$null` |
 | `python -c "import a; print(1)"` | A | same | none (the `;` is quoted) |
 | a here-string: `git commit -m @'` newline `export the data` newline `'@` | A | same | none (inside a here-string nothing is a separator) |
+| `Get-ChildItem \| Select-Object @{n='file';e={$_.FullName}}` | A | same | none (rule 3b: the `;` is inside braces) |
+| `foreach ($n in 'a','b') { $n }; ls -la` | R | `foreach ($n in 'a','b') { $n }; Get-ChildItem -Force` | `ls -la -> Get-ChildItem -Force` |
 
 (In the tables, `\|` is a single `|` character.)
 
