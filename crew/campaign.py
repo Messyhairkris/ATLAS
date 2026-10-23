@@ -15,6 +15,12 @@ The pieces that make that safe rather than reckless:
   as the reason; after `max_attempts` it goes to a senior for DIRECTIVES (never
   code), gets one more attempt, then is recorded as failed and the campaign moves
   on rather than burning the budget on it.
+* rework, not restart (Kris, 2026-10-23). A retry is handed the best submission
+  so far and its failed checks, and fixes it instead of writing the file again.
+* relay. After `attempts_per_member` failed attempts, or when a member's model is
+  down, the task passes to the next holder of its post (personnel.json) who has
+  not had it yet - carrying that best submission, so the work is passed on, not
+  started over.
 * the request budget and a wall-clock deadline both stop new work, and nothing
   is ever left half-applied.
 * it says what it is doing, always, to the console and to status.json - Kris's
@@ -28,10 +34,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+from . import personnel
 from .config import REPO_ROOT, Config, CrewError, load_config
 from .core import Crew
 from .store import COMPLETED, FAILED, REVIEW
@@ -39,6 +47,10 @@ from .store import COMPLETED, FAILED, REVIEW
 ACCEPTED, RUNNING, WAITING, ESCALATED, DEAD = (
     "accepted", "running", "waiting", "escalated", "failed")
 
+# A submission longer than this is not pasted back for rework; the retry starts
+# from the contract instead, as before (and says so in the progress log).
+REWORK_MAX_CHARS = 40000
+_LANG_FENCE = {"rs": "rust", "js": "javascript", "ahk": "autohotkey", "py": "python"}
 
 PROVIDER_ERROR_LIMIT = 3
 PROVIDER_BACKOFF_S = 60
@@ -56,6 +68,17 @@ def _provider_error(brief: dict) -> bool:
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _attempt_score(steps: List[dict]) -> Tuple[int, int]:
+    """(checks passed, tests passed): which earlier submission to rework from.
+
+    A gate count alone cannot tell one failing hidden test from thirty, so the
+    "N passed" counts in the step details break ties."""
+    ok = sum(1 for s in steps if s.get("ok"))
+    tests = sum(int(n) for s in steps
+                for n in re.findall(r"(\d+) passed", str(s.get("detail", ""))))
+    return ok, tests
 
 
 def _language(module: str) -> str:
@@ -85,6 +108,12 @@ class Campaign:
         # not a roster model), so the whole run gets a small fixed allowance.
         self.max_escalations = int(spec.get("max_escalations", 2))
         self.escalations_used = 0
+        # Kris 2026-10-23: "issues are reworked not restarted" and "for failures the
+        # work is PASSED to the next capable agent". Both default on; a campaign can
+        # switch either off to measure the difference.
+        self.rework = bool(spec.get("rework", True))
+        self.relay = bool(spec.get("relay", True))
+        self.attempts_per_member = max(1, int(spec.get("attempts_per_member", 2)))
         self.deadline = self._deadline(spec.get("deadline"))
         self.requests_used = 0
         self.events: List[dict] = []
@@ -150,7 +179,9 @@ class Campaign:
                         "grants": list(t.get("grants", [])),
                         "reference": list(t.get("reference", [])),
                         "instructions": t.get("instructions", ""),
+                        "post": t.get("post", ""), "relay_ladder": list(t.get("relay", [])),
                         "state": WAITING, "attempts": 0, "job_ids": [],
+                        "member_attempts": 0, "tried": [], "relays": [],
                         "requests": 0, "tokens": 0, "seconds": 0.0,
                         "failed_gates": [], "escalations": 0, "senior": ""})
             if t.get("cross_tests", True):
@@ -170,7 +201,10 @@ class Campaign:
                             "reference": list(t.get("reference", [])),
                             "min_tests": int(t.get("min_tests", 6)),
                             "instructions": t.get("test_instructions", ""),
+                            "post": t.get("test_post", ""),
+                            "relay_ladder": list(t.get("test_relay", [])),
                             "state": WAITING, "attempts": 0, "job_ids": [],
+                            "member_attempts": 0, "tried": [], "relays": [],
                             "requests": 0, "tokens": 0, "seconds": 0.0,
                             "failed_gates": [], "escalations": 0, "senior": ""})
         return out
@@ -259,6 +293,7 @@ class Campaign:
                               "requests", "tokens", "seconds", "escalations")},
                           # when a running task is likely done (crew/eta.py, 2026-09-26)
                           **({"eta": self._eta(t)} if t["state"] == RUNNING else {}),
+                          **({"relays": t["relays"]} if t.get("relays") else {}),
                           **({"prior": t["prior"]} if t.get("prior") else {})}
                       for i, t in self.tasks.items()},
             "counts": {s: sum(1 for t in self.tasks.values() if t["state"] == s)
@@ -323,6 +358,7 @@ class Campaign:
                 task["state"] = WAITING
                 return
             task["attempts"] += 1
+            task["member_attempts"] = task.get("member_attempts", 0) + 1
             self.say(f"{task['id']}: attempt {task['attempts']} by "
                      f"{task['member']} (team {task['team']})")
             t0 = time.time()
@@ -356,12 +392,19 @@ class Campaign:
                 # to review. js-harness 2026-09-21: four of Barry's attempts died this
                 # way and were logged as "unknown", and the escalation was wasted.
                 task["attempts"] -= 1
+                task["member_attempts"] -= 1
                 task["provider_errors"] = task.get("provider_errors", 0) + 1
                 self.say(f"{task['id']}: provider error, not counted - "
                          f"{str(brief.get('error'))[:120]}")
                 self.event("task_provider_error", task=task["id"],
                            error=str(brief.get("error"))[:300])
                 if task["provider_errors"] >= PROVIDER_ERROR_LIMIT:
+                    # 2026-10-20 Larry and Qwen: a member whose endpoint is down hands
+                    # the task on rather than waiting for a person to reassign it.
+                    if self._relay(task, f"{task['member']}'s model failed "
+                                         f"{task['provider_errors']} times in a row"):
+                        task["provider_errors"] = 0
+                        continue
                     task["state"] = DEAD
                     task["failed_gates"].append(["provider_down"])
                     self.say(f"{task['id']}: stopped - {task['member']}'s model failed "
@@ -387,12 +430,16 @@ class Campaign:
                 self.say(f"{task['id']}: FAILED for good after senior review")
                 self.event("task_dead", task=task["id"], gates=gates[:3])
                 return
+            if task["member_attempts"] >= self.attempts_per_member:
+                self._relay(task, f"{task['member_attempts']} failed attempt(s) by "
+                                  f"{task['member']}")
         task["state"] = DEAD
 
     def _attempt(self, task: dict) -> dict:
         """One submission, from a fresh job. A retry is a new job with the
         previous failure quoted in its instructions, which keeps every attempt
-        independently reviewable in the store."""
+        independently reviewable in the store - and, since 2026-10-23, with the
+        best submission so far pasted in to rework (_rework_text)."""
         history = ""
         if task["failed_gates"]:
             last = task["failed_gates"][-1]
@@ -402,6 +449,8 @@ class Campaign:
         if task.get("directives"):
             history += ("\n\nSENIOR DIRECTIVES (a senior model read the failure; "
                         "follow these):\n- " + "\n- ".join(task["directives"]))
+        if self.rework and task["job_ids"]:
+            history += self._rework_text(task)
         if task["kind"] == "module":
             kind = _language(task["module"])
             spec = {"task_type": {"js": "js_code_task", "ahk": "ahk_code_task",
@@ -444,6 +493,98 @@ class Campaign:
             return self.crew.run_job(job_id)
         finally:
             self.crew.store.release(job_id)
+
+    # -- rework and relay (Kris, 2026-10-23) ------------------------------------------
+    def _best_submission(self, task: dict) -> Optional[dict]:
+        """The best judged submission among this task's earlier jobs, whoever wrote it.
+
+        Only jobs whose output was gated count: a provider error or a crash has
+        nothing to rework. Ties go to the earlier job (the later one did not beat it).
+        """
+        name = Path(task["module"] if task["kind"] == "module" else task["test_file"]).name
+        best = None
+        for job_id in task["job_ids"]:
+            try:
+                job = self.crew.store.load(job_id)
+            except (CrewError, OSError, ValueError):
+                continue
+            steps = (job.get("result") or {}).get("steps") or []
+            found = sorted((self.crew.store.job_dir(job_id) / "output").rglob(name))
+            if not steps or not found:
+                continue
+            source = found[0].read_text(encoding="utf-8")
+            score = _attempt_score(steps)
+            if best is None or score > best["score"]:
+                best = {"job_id": job_id, "member": job.get("assigned_to", ""),
+                        "name": name, "source": source, "score": score,
+                        "failed": [f"{s['rung']}: {s['detail']}"
+                                   for s in steps if not s.get("ok")][:6]}
+        return best
+
+    def _rework_text(self, task: dict) -> str:
+        """The handoff packet's working part: the best submission so far and what it
+        still fails. Without it every retry wrote the file again from the contract
+        (campaign.py before 2026-10-23), throwing away whatever already passed."""
+        best = self._best_submission(task)
+        if best is None:
+            return ""
+        if len(best["source"]) > REWORK_MAX_CHARS:
+            self.say(f"{task['id']}: best submission is {len(best['source'])} characters, "
+                     f"over {REWORK_MAX_CHARS}; this attempt starts from the contract")
+            return ""
+        task["reworked_from"] = best["job_id"]
+        fence = _LANG_FENCE[_language(best["name"])]
+        if best["member"] == task["member"]:
+            opening = "REWORK, DO NOT RESTART. Below is your best submission so far."
+        else:
+            opening = (f"REWORK, DO NOT RESTART. You are taking this task over from "
+                       f"{best['member']}; below is the best submission so far.")
+        failed = ("\n\nWHAT THAT SUBMISSION STILL FAILS:\n- " + "\n- ".join(best["failed"])
+                  if best["failed"] else "")
+        return (f"\n\n{opening} It already passes {best['score'][0]} check(s). Keep "
+                f"every part that works and copy every other line exactly; change only "
+                f"what the failed checks point to. Reply with the WHOLE file."
+                f"{failed}\n\nBEST SUBMISSION SO FAR ({best['name']}, job "
+                f"{best['job_id']}):\n```{fence}\n{best['source']}\n```")
+
+    def _ladder(self, task: dict) -> List[str]:
+        """Who may take this task over, in order: the task's own `relay` list, else
+        the holders of its post in personnel.json (module_author_<language> for a
+        module, `tester` for tests). Denied and benched members are skipped, and a
+        test task never goes to the member who wrote the module it tests."""
+        ladder = list(task.get("relay_ladder") or [])
+        if not ladder:
+            post = task.get("post") or (f"module_author_{_language(task['module'])}"
+                                        if task["kind"] == "module" else "tester")
+            ladder = list((personnel.load().get("posts") or {}).get(post) or [])
+        skip = set(self.cfg.deny_models)
+        if task["kind"] == "tests":
+            skip |= {self.tasks[d]["member"] for d in task["depends"] if d in self.tasks}
+        return [m for m in ladder if m not in skip]
+
+    def _relay(self, task: dict, reason: str) -> bool:
+        """Pass the task to the next capable member who has not had it yet.
+
+        False (and the current member carries on) when relay is off or the ladder
+        is used up. The next attempt is a rework of the best submission so far,
+        so the new member continues the work rather than starting over."""
+        if not self.relay:
+            return False
+        tried = list(dict.fromkeys(task.get("tried", []) + [task["member"]]))
+        task["tried"] = tried
+        nxt = next((m for m in self._ladder(task) if m not in tried), None)
+        if nxt is None:
+            self.say(f"{task['id']}: nobody left to relay to ({reason}); "
+                     f"{task['member']} carries on")
+            return False
+        task["relays"].append({"from": task["member"], "to": nxt, "reason": reason,
+                               "after_attempt": task["attempts"]})
+        self.say(f"{task['id']}: relayed from {task['member']} to {nxt} - {reason}")
+        self.event("task_relayed", task=task["id"], to=nxt, reason=reason,
+                   **{"from": task["member"]})
+        task["member"] = nxt
+        task["member_attempts"] = 0
+        return True
 
     def escalate(self, task: dict, gates: List[str]) -> bool:
         """Ask a senior model what is going wrong. It returns DIRECTIVES, never

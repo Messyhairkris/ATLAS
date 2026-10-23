@@ -1,0 +1,41 @@
+{
+  "name": "tc-winguard",
+  "rs_profile": "the_crew",
+  "workspace_subdir": "the_crew",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 60,
+  "goal": "The Crew, Phase 0 (2026-10-23): the Windows command guard's rule core, winguard.rs, for a Claude Code PreToolUse hook on the PowerShell tool. Kris: rewrite when the translation is certain, block ambiguous Linux commands with the PowerShell form, log every hit. Scope M (byte-exact notes, quote-aware splitting).",
+  "teams": {
+    "Guard": {
+      "author": "Qwen",
+      "tester": "Gordon"
+    }
+  },
+  "tasks": [
+    {
+      "id": "tc_winguard",
+      "team": "Guard",
+      "module": "winguard.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tc_winguard.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_the_crew/hidden_winguard.rs"
+      ],
+      "api": [
+        "Action",
+        "Verdict",
+        "suggestion",
+        "split",
+        "replace_words",
+        "check"
+      ],
+      "depends": [],
+      "min_tests": 10,
+      "scope": "M",
+      "instructions": "Byte-exact: copy every note template and every suggestion string character for character. split works on chars with an explicit state (OUTSIDE/SINGLE/DOUBLE/HERE-SINGLE/HERE-DOUBLE). check runs the WHOLE block pass over every segment before any rewrite. Walk every row of the worked-example tables through your code. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "One test per rule, comparing whole Verdict values with assert_eq!. Include: a block winning over a rewrite in another segment, a here-string containing a separator, a piped where, the several-paths rule with a 2>/dev/null word that must not count as an argument, and split round-tripping (joined pieces equal the input)."
+    }
+  ]
+}

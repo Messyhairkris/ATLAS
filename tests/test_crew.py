@@ -706,6 +706,190 @@ class CampaignTests(CrewTestCase):
         self.assertIn("three or more attempts", out["markdown"])
 
 
+class ReworkRelayTests(CrewTestCase):
+    """Kris, 2026-10-23: issues are reworked, not restarted, and a failure passes to
+    the next capable member instead of starting over."""
+
+    POSTS = {"posts": {"module_author_py": ["Hoss", "Nemotron", "Kimi", "Qwen"],
+                       "tester": ["Hoss", "Qwen", "Gordon"]}}
+
+    def _spec(self, **extra):
+        contract = self.tmp / "c.md"
+        contract.write_text("api: a\n", encoding="utf-8")
+        return {"name": "unit", "senior": "none", "max_requests": 50,
+                "teams": {"A": {"author": "Hoss", "tester": "Qwen"}},
+                "tasks": [{"id": "one", "team": "A", "module": "one.py",
+                           "contract": str(contract), "api": ["a"]}], **extra}
+
+    def _campaign(self, **extra):
+        from unittest import mock
+        from crew.campaign import Campaign
+        patcher = mock.patch("crew.personnel.load", return_value=self.POSTS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Campaign(self._spec(**extra), cfg=self.cfg, crew=self.crew([]), quiet=True)
+
+    class _Store:
+        """Just enough of the job store for _best_submission: load() and job_dir()."""
+
+        def __init__(self, root):
+            self.root, self.jobs = root, {}
+
+        def add(self, job_id, member, steps, files):
+            self.jobs[job_id] = {"assigned_to": member, "result": {"steps": steps}}
+            for name, text in files.items():
+                path = self.root / job_id / "output" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+
+        def load(self, job_id):
+            if job_id not in self.jobs:
+                raise CrewError(job_id)
+            return self.jobs[job_id]
+
+        def job_dir(self, job_id):
+            return self.root / job_id
+
+    def _scripted(self, c, briefs):
+        """Replace the real job with scripted briefs; record who each attempt went to."""
+        import types
+        calls = []
+
+        def attempt(task):
+            calls.append(task["member"])
+            return {"task_id": f"j{len(calls)}", "requests": 1, "tokens": 1,
+                    **briefs.pop(0)}
+
+        c._attempt = attempt
+        c.crew = types.SimpleNamespace(review=lambda *a, **k: None,
+                                       store=self._Store(self.tmp / "jobs"))
+        return calls
+
+    FAIL = {"passed_gates": False, "failed_gates": ["hidden tests: 1 failed, 4 passed"]}
+    PASS = {"passed_gates": True, "failed_gates": []}
+
+    def test_attempt_score_counts_checks_then_passed_tests(self):
+        from crew.campaign import _attempt_score
+        steps = [{"rung": "api", "ok": True},
+                 {"rung": "hidden tests", "ok": False, "detail": "3 failed, 30 passed"}]
+        self.assertEqual(_attempt_score(steps), (1, 30))
+        self.assertGreater(_attempt_score(steps),
+                           _attempt_score([{"rung": "api", "ok": True},
+                                           {"rung": "hidden tests", "ok": False,
+                                            "detail": "30 failed, 3 passed"}]))
+
+    def test_rework_pastes_the_best_earlier_submission_not_the_last(self):
+        c = self._campaign()
+        store = self._Store(self.tmp / "jobs")
+        c.crew.store = store
+        store.add("j1", "Hoss", [{"rung": "api", "ok": True},
+                                 {"rung": "hidden tests", "ok": False,
+                                  "detail": "1 failed, 7 passed"}], {"one.py": "V1 = 1\n"})
+        store.add("j2", "Hoss", [{"rung": "api", "ok": True},
+                                 {"rung": "hidden tests", "ok": False,
+                                  "detail": "6 failed, 2 passed"}], {"one.py": "V2 = 2\n"})
+        store.add("j3", "Hoss", [], {})          # provider error: nothing was judged
+        task = c.tasks["one"]
+        task["job_ids"] = ["j1", "j2", "j3"]
+        text = c._rework_text(task)
+        self.assertIn("REWORK, DO NOT RESTART", text)
+        self.assertIn("your best submission", text)
+        self.assertIn("V1 = 1", text)
+        self.assertNotIn("V2 = 2", text)
+        self.assertIn("hidden tests: 1 failed, 7 passed", text)
+        self.assertIn("```python", text)
+        self.assertEqual(task["reworked_from"], "j1")
+
+    def test_rework_names_the_member_it_was_taken_over_from(self):
+        c = self._campaign()
+        store = self._Store(self.tmp / "jobs")
+        c.crew.store = store
+        store.add("j1", "Hoss", [{"rung": "hidden tests", "ok": False, "detail": "x"}],
+                  {"one.py": "A = 1\n"})
+        task = c.tasks["one"]
+        task.update(job_ids=["j1"], member="Nemotron")
+        self.assertIn("taking this task over from Hoss", c._rework_text(task))
+
+    def test_rework_skips_a_submission_too_long_to_paste(self):
+        from crew import campaign as cm
+        c = self._campaign()
+        store = self._Store(self.tmp / "jobs")
+        c.crew.store = store
+        store.add("j1", "Hoss", [{"rung": "api", "ok": True}],
+                  {"one.py": "x" * (cm.REWORK_MAX_CHARS + 1)})
+        task = c.tasks["one"]
+        task["job_ids"] = ["j1"]
+        self.assertEqual(c._rework_text(task), "")
+
+    def test_rework_can_be_switched_off(self):
+        c = self._campaign(rework=False)
+        self.assertFalse(c.rework)
+
+    def test_ladder_skips_denied_members(self):
+        c = self._campaign()                       # cfg denies Kimi
+        self.assertEqual(c._ladder(c.tasks["one"]), ["Hoss", "Nemotron", "Qwen"])
+
+    def test_a_task_relay_list_beats_the_post(self):
+        spec_task = {"relay": ["Gordon", "Barry"]}
+        c = self._campaign()
+        c.tasks["one"]["relay_ladder"] = spec_task["relay"]
+        self.assertEqual(c._ladder(c.tasks["one"]), ["Gordon", "Barry"])
+
+    def test_tester_ladder_never_includes_the_module_author(self):
+        c = self._campaign()
+        c.tasks["one"]["member"] = "Hoss"
+        tests = c.tasks["one-tests"]
+        self.assertEqual(c._ladder(tests), ["Qwen", "Gordon"])
+        self.assertTrue(c._relay(tests, "two failures"))
+        self.assertEqual(tests["member"], "Gordon")
+
+    def test_relay_walks_the_ladder_once_each_then_stops(self):
+        c = self._campaign()
+        task = c.tasks["one"]
+        self.assertTrue(c._relay(task, "r1"))
+        self.assertEqual(task["member"], "Nemotron")
+        self.assertTrue(c._relay(task, "r2"))
+        self.assertEqual(task["member"], "Qwen")
+        self.assertFalse(c._relay(task, "r3"))        # Hoss and Nemotron already had it
+        self.assertEqual(task["member"], "Qwen")
+        self.assertEqual([(r["from"], r["to"]) for r in task["relays"]],
+                         [("Hoss", "Nemotron"), ("Nemotron", "Qwen")])
+
+    def test_relay_can_be_switched_off(self):
+        c = self._campaign(relay=False)
+        self.assertFalse(c._relay(c.tasks["one"], "r"))
+        self.assertEqual(c.tasks["one"]["member"], "Hoss")
+
+    def test_two_failures_pass_the_task_to_the_next_member(self):
+        c = self._campaign()
+        calls = self._scripted(c, [dict(self.FAIL), dict(self.FAIL), dict(self.PASS)])
+        c.run_task(c.tasks["one"])
+        self.assertEqual(calls, ["Hoss", "Hoss", "Nemotron"])
+        self.assertEqual(c.tasks["one"]["state"], "accepted")
+        self.assertEqual(c.tasks["one"]["relays"][0]["from"], "Hoss")
+        self.assertIn("task_relayed", [e["event"] for e in c.events])
+
+    def test_attempts_per_member_sets_when_the_relay_happens(self):
+        c = self._campaign(attempts_per_member=1, max_attempts=4)
+        calls = self._scripted(c, [dict(self.FAIL), dict(self.FAIL), dict(self.PASS)])
+        c.run_task(c.tasks["one"])
+        self.assertEqual(calls, ["Hoss", "Nemotron", "Qwen"])
+
+    def test_a_dead_endpoint_relays_instead_of_failing_the_task(self):
+        from unittest import mock
+        down = {"passed_gates": None, "failed_gates": [],
+                "error": "HTTPStatusError: 504 Gateway Timeout"}
+        c = self._campaign()
+        calls = self._scripted(c, [dict(down), dict(down), dict(down), dict(self.PASS)])
+        with mock.patch("crew.campaign.PROVIDER_BACKOFF_S", 0):
+            c.run_task(c.tasks["one"])
+        self.assertEqual(calls, ["Hoss", "Hoss", "Hoss", "Nemotron"])
+        task = c.tasks["one"]
+        self.assertEqual(task["state"], "accepted")
+        self.assertEqual(task["attempts"], 1)       # provider errors are not attempts
+        self.assertIn("model failed 3 times", task["relays"][0]["reason"])
+
+
 class SafetyTests(CrewTestCase):
     def test_tools_refuse_outside_roots_and_denied(self):
         from crew.tools import Evidence, Toolbox, ToolError

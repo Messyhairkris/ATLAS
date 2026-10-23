@@ -1,0 +1,5 @@
+{
+  "comment": "the_crew (The Crew control room and guards, 2026-10-23): pure std, no crates. Rule 1 of rs_scan (std minus its machine-facing modules) is the whole allowlist.",
+  "crate_name": "the_crew",
+  "crates": {}
+}

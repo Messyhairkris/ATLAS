@@ -1,0 +1,27 @@
+{
+  "name": "ns-signatures",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 50,
+  "workspace_subdir": "night_shift",
+  "goal": "The Crew, Phase 0 (2026-10-23): the night shift's failure grouper. Kris: reasons for failures are evaluated at the end of the work day (about 3 AM), zero tokens; repeated mechanical failures become candidates for programs that fix them. Nemotron writes clean logic modules; Gordon tests from the contract.",
+  "teams": {
+    "Night": {"author": "Nemotron", "tester": "Gordon"}
+  },
+  "tasks": [
+    {
+      "id": "ns_signatures",
+      "team": "Night",
+      "module": "night_signatures.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ns_signatures.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_night_signatures.py"],
+      "api": ["CATEGORIES", "head", "classify", "group", "advice"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "classify's rules apply in order and the first that applies decides, except rule 4, which gives one finding per failed step. head looks for its three markers from index 20 on, with str.find(marker, 20), and cuts at the smallest index found. Copy every advice string character for character. Walk every worked example through your code. Write the module once, in one reply; do not restate the contract.",
+      "test_instructions": "One test per numbered rule, plus every worked example. Include: an error that wins over a stop_reason and failed steps, a marker that starts before index 20 (not cut), group order across categories, and candidate at exactly the threshold."
+    }
+  ]
+}
