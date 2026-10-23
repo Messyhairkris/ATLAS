@@ -81,7 +81,34 @@ def main(argv=None) -> int:
     s = sub.add_parser("promote")
     s.add_argument("persona"); s.add_argument("task_type"); s.add_argument("stage")
     s.add_argument("--by", required=True); s.add_argument("--demote", action="store_true")
+    s = sub.add_parser("pa", help="who may be the PA; promote/demote (Kris only); the brief")
+    s.add_argument("action", choices=["list", "promote", "demote", "brief"])
+    s.add_argument("member", nargs="?")
+    s.add_argument("--by", default="")
+    s.add_argument("--runtime", default="opencode")
+    s.add_argument("--steps", type=int, default=40)
+    s.add_argument("--task", default="")
     args = ap.parse_args(argv)
+
+    if args.cmd == "pa":
+        from . import pa
+        try:
+            if args.action == "list":
+                _print(pa.listing())
+            elif args.action == "brief":
+                from . import pa_brief
+                sys.stdout.reconfigure(encoding="utf-8")
+                print(pa_brief.render(args.member or "Claude", args.task))
+            elif not args.member:
+                raise CrewError(f"pa {args.action} needs a member name")
+            elif args.action == "promote":
+                _print(pa.promote(args.member, args.by, args.runtime, args.steps))
+            else:
+                _print(pa.demote(args.member, args.by))
+        except (CrewError, ValueError) as e:
+            print(f"crew: {e}", file=sys.stderr)
+            return 2
+        return 0
 
     if args.cmd == "serve":
         from .server import main as serve

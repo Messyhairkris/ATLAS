@@ -168,6 +168,22 @@ Building and running work:
 | `python crew/runners/research_compare.py --members A B --question q.md --name n` | the same research question to several members at once; `--read-root` sets the folder relative citations resolve against |
 | `python crew/runners/load_lab.py <x>.json` | several jobs at once, measuring what it costs the machine |
 | `python -m crew budget` | the live provider quota; the governor holds jobs rather than failing them |
+| `python crew/runners/night_shift.py [--notify]` | zero-token night report: the day's failures by category and signature, relays, guard hits (Task Scheduler runs it at 03:00 as "The Crew night shift") |
+| `python -m crew pa list` / `pa brief NAME` | who may be the PA (personnel.json `pa`) and the brief that starts their session |
+| `python -m crew pa promote|demote NAME --by Kris` | Kris only, at a real console: a PA's shell is refused |
+| `python crew/runners/pa_session.py --pa Gordon` | open OpenCode with an approved crew member as the PA: the brief as its agent prompt, the crew MCP, LSP and skills |
+
+**Rework and relay (2026-10-23).** A campaign retry is handed the best submission so far and
+its failed checks and reworks it; after `attempts_per_member` failures (default 2), or when a
+member's model is down, the task relays to the next holder of its post who has not had it.
+Campaign keys: `rework`, `relay`, `attempts_per_member`; per task `post`, `relay` (and
+`test_post`, `test_relay`).
+
+**PAs (2026-10-23).** Claude, Kimi, Qwen and Gordon are approved PAs. The brief
+(`crew/pa_brief.py`) is injected once per session - a SessionStart hook for Claude Code, the
+agent prompt for OpenCode - never per reply, under `pa.brief_max_chars`. The Windows command
+guard (`C:\Users\user\TheCrew\bin\winguard-hook.exe`, crew-built by Gordon) is a
+PreToolUse hook on Claude Code's PowerShell tool; hits go to `runs/guard/hits.jsonl`.
 
 Checking what came back - run the evidence, do not read and nod:
 

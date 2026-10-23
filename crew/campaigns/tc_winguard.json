@@ -7,11 +7,11 @@
   "max_attempts": 3,
   "max_escalations": 1,
   "max_requests": 60,
-  "goal": "The Crew, Phase 0 (2026-10-23): the Windows command guard's rule core, winguard.rs, for a Claude Code PreToolUse hook on the PowerShell tool. Kris: rewrite when the translation is certain, block ambiguous Linux commands with the PowerShell form, log every hit. Scope M (byte-exact notes, quote-aware splitting).",
+  "goal": "The Crew, Phase 0 (2026-10-23): the Windows command guard's rule core, winguard.rs, for a Claude Code PreToolUse hook on the PowerShell tool. Kris: rewrite when the translation is certain, block ambiguous Linux commands with the PowerShell form, log every hit. Scope M (byte-exact notes, quote-aware splitting). 2026-10-23 13:05: Qwen's first two replies died at the provider's 10-minute gateway limit (HTTP 5xx after ~611 s each); per Kris's rule (reassign when an endpoint keeps failing) Gordon authors and Hoss tests, on the new rework/relay campaign code.",
   "teams": {
     "Guard": {
-      "author": "Qwen",
-      "tester": "Gordon"
+      "author": "Gordon",
+      "tester": "Hoss"
     }
   },
   "tasks": [

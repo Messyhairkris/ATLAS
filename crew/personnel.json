@@ -17,6 +17,40 @@
     "ahk_code_task": 14, "ahk_code_tests": 12, "rs_code_task": 14, "rs_code_tests": 12
   },
 
+  "pa": {
+    "comment": "Kris 2026-10-23: the PA (the agent the PM assigns work to, which assigns the crew) may be Claude, Kimi, Qwen or Gordon; a crew member becomes a PA only when Kris promotes it (python -m crew pa promote NAME --by Kris). Every PA is scoped: crew/pa_brief.py renders its first prompt from this section, the roster and live state, ONCE per session - never per reply (the Crush lesson: hooks that injected context on every reply burned the weekly limits). 'may' and 'may_not' go into the brief; the harness also enforces what it can (Kris-only commands refuse a PA). runtime: claude-code = the Claude Code desktop app with a SessionStart hook; opencode = crew/runners/pa_session.py opens OpenCode with the brief as the agent, the crew MCP, LSP and skills. steps = OpenCode's cap on agent iterations per message.",
+    "default": "Claude",
+    "approved": ["Claude", "Kimi", "Qwen", "Gordon"],
+    "brief_max_chars": 14000,
+    "common": {
+      "may": ["plan the path with the PM and split it into crew-sized, checkable tasks",
+              "write contracts, reference implementations and hidden tests, and run the reference before a request is spent",
+              "submit crew jobs and campaigns, read their stop reasons, rework or relay",
+              "commit work the PM asked for on the working branch, then summarize it",
+              "write reports, memory notes and night-report follow-ups"],
+      "may_not": ["push or upload anywhere (GitHub only when the PM says so)",
+                  "promote or demote anyone, change an Autonomy Stage or PA status",
+                  "edit hidden tests or gates to make a member pass",
+                  "add a crew read root before crew/runners/security_scan.py has run on it",
+                  "run AutoHotkey on the desktop (Windows Sandbox only)",
+                  "create scheduled tasks or user-wide settings the PM did not ask for"]
+    },
+    "scopes": {
+      "Claude": {"runtime": "claude-code", "model": "the Claude Code desktop app's model",
+                 "steps": null,
+                 "notes": "Holds senior duties (directives, reviewing another PA's contracts when the PM asks). Big-model credits are the scarce resource: push bounded work to the crew."},
+      "Kimi": {"runtime": "opencode", "model": "hf:moonshotai/Kimi-K3", "steps": 40,
+               "reply_tokens": 24576,
+               "notes": "Strong reasoner and expensive: one plan per reply, think silently, never restate the contract. Wants native tool calling, which OpenCode gives it."},
+      "Qwen": {"runtime": "opencode", "model": "hf:Qwen/Qwen3.8-27B", "steps": 40,
+               "reply_tokens": 65536,
+               "notes": "Byte-exact work and testing. Long reasoning hits the provider's 10-minute limit (two 5xx at ~611 s on 2026-10-23): keep every reply small. Costly in tokens (2026-10-09)."},
+      "Gordon": {"runtime": "opencode", "model": "hf:deepseek-ai/DeepSeek-V4.1-Flash", "steps": 60,
+                 "reply_tokens": 32768,
+                 "notes": "Cheap, fast, the most accurate researcher, first-try modules. The low-cost PA."}
+    }
+  },
+
   "posts": {
     "comment": "assigned_to: \"@post\" resolves to the first holder that is not denied. Order = who we send first. Built from the measured table in PERSONNEL.md.",
     "clerk": ["Larry", "Hoss"],
