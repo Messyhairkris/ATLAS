@@ -140,6 +140,15 @@ class PaBriefTests(unittest.TestCase):
         self.assertIn("## This session's task\nBuild the guard.",
                       self.render("Gordon", task="Build the guard."))
 
+    def test_chat_rules_carry_every_artifact_rule_for_claude(self):
+        # The Crew's window appends these to a Claude chat (--append-system-prompt): Claude's
+        # own brief leaves them out, so this is the only place it gets them.
+        rules = pa_brief.chat_rules()
+        self.assertTrue(rules.startswith("## Plan, tasks, walkthrough (The Crew's chat)"))
+        for rule in pa_brief.ARTIFACTS:
+            self.assertIn(f"- {rule}", rules)
+        self.assertNotIn(pa_brief.ARTIFACTS[0], self.render("Claude"))
+
     def test_hook_json_is_sessionstart_additional_context(self):
         out = json.loads(pa_brief.hook_json("hello"))
         self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "SessionStart",

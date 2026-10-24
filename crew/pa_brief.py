@@ -76,8 +76,10 @@ ARTIFACTS = [
     "A task with unfinished dependencies is blocked, not ready. Submit only ready tasks "
     "(crew_submit, or a campaign for a batch), put each job id in its task, and keep every "
     "status current: blocked, ready, in_progress, completed, failed.",
-    "Look around with your read, list, glob and grep tools: they need no approval. Shell "
-    "commands ask the PM, and one the PM refuses ends your turn.",
+    "Look around with your read, list, glob and grep tools and read-only commands (git "
+    "status/log/diff/show, Get-ChildItem, Get-Content, the status commands): they need no "
+    "approval. Other shell commands ask the PM; when the PM refuses one, stop and ask what "
+    "to do instead.",
     "plan.md, BEFORE work that changes files or spends crew requests: # Goal; ## Review "
     "required (what the PM must decide, or 'nothing'); ## Changes, grouped by component, each "
     "file marked [NEW], [MODIFY] or [DELETE]; ## Crew jobs (member, task type, contract); "
@@ -317,6 +319,13 @@ def render(pa: str, task: str = "", staff: Optional[dict] = None,
     return text
 
 
+def chat_rules() -> str:
+    """The Crew chat's rules (modes, artifacts) for a PA that gets its brief elsewhere:
+    Claude Code's brief comes from the SessionStart hook, so The Crew's window appends these
+    with --append-system-prompt when Claude chats in the window."""
+    return "\n".join(["## Plan, tasks, walkthrough (The Crew's chat)", *[f"- {r}" for r in ARTIFACTS]])
+
+
 def hook_json(brief: str) -> str:
     """Claude Code SessionStart output: the brief as additional context, once."""
     return json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
@@ -329,7 +338,13 @@ def main(argv=None) -> int:
     ap.add_argument("--task", default="", help="layer 3: this session's task")
     ap.add_argument("--hook", action="store_true", help="print Claude Code SessionStart JSON")
     ap.add_argument("--write", help="write the brief to this file instead of printing it")
+    ap.add_argument("--chat-rules", action="store_true",
+                    help="print only The Crew chat's rules (modes, artifacts)")
     args = ap.parse_args(argv)
+    if args.chat_rules:
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(chat_rules())
+        return 0
     from crew import personnel
     staff = personnel.load()
     pa = args.pa or (staff.get("pa") or {}).get("default") or "Claude"
