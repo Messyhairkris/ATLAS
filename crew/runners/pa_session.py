@@ -62,14 +62,68 @@ def provider_model(pa: str, scope: dict, staff: dict) -> tuple:
                              "context": int(member.get("context_window") or 200000)}}
 
 
-def pa_agent(pa: str, scope: dict, brief: Path) -> dict:
+# Kris 2026-10-24: "a healthy toggle at the top to switch between planning with the PA and
+# Assigning the Crew. This way I can talk to the agent in charge to plan or adapt to new
+# information without immediately assigning work." In plan mode the crew's write tools are
+# off (enforced here, not just asked of the model), and so is every edit but the chat's own
+# artifacts. Tool names are the MCP server's name + "_" + the tool's (crew_crew_roster).
+PLAN_DENIED_TOOLS = ("crew_crew_submit", "crew_crew_review")
+
+# The read-only commands the PA brief lists (crew/pa_brief.py COMMANDS) run without a card in
+# The Crew's chat; any other shell command asks. 2026-10-24: a PA reaching for
+# active_status.py lost its turn when the card was refused. OpenCode checks each command of a
+# chain on its own, so `git log; anything` still asks for `anything`.
+READ_ONLY_COMMANDS = (
+    "python crew/runners/active_status.py", "python crew/runners/member_stats.py",
+    "python crew/runners/rs_scoping.py", "python crew/runners/pm_queue.py status",
+    "python -m crew budget", "git status", "git log", "git diff", "git show",
+    # Same day: models list folders with PowerShell whatever the brief says, and a card per
+    # listing would bury the PM. Read-only cmdlets only; paths outside the project still ask
+    # (OpenCode's external_directory rule).
+    "Get-ChildItem", "Get-Item", "Get-Content", "Test-Path", "Resolve-Path", "Split-Path",
+    "Join-Path", "Select-Object", "Select-String", "Where-Object", "Sort-Object",
+    "Measure-Object", "Format-Table", "Format-List", "Out-String", "Write-Output",
+    "ConvertFrom-Json",
+)
+
+
+def chat_bash() -> dict:
+    rules = {"*": "ask"}
+    for command in READ_ONLY_COMMANDS:
+        for form in {command, command.replace("/", "\\")}:
+            rules[form + "*"] = "allow"
+    return rules
+
+
+def pa_agent(pa: str, scope: dict, brief: Path, artifacts: Path = None, mode: str = None) -> dict:
     """A PA as an OpenCode primary agent: its model, its brief as the prompt, its steps.
-    Edits, shell commands and web fetches ask the human; crew MCP tools and skills do not."""
-    return {"mode": "primary", "description": f"{pa} as the PA of The Crew",
+    Edits, shell commands and web fetches ask the human; crew MCP tools and skills do not.
+    With `artifacts`, writing its own plan/walkthrough there asks nobody: the last matching
+    rule wins in OpenCode, and the pattern is given relative and absolute, both slash forms.
+    (Measured 2026-10-24: OpenCode 1.2.6 on Windows matches the project-relative path with
+    backslashes, `runs\\crew\\pa\\chats\\...`.) `mode` is "plan" or "assign" for The Crew's
+    chat (see PLAN_DENIED_TOOLS); None is the terminal session of main() below."""
+    edit = "ask"
+    if artifacts is not None:
+        edit = {"*": "deny" if mode == "plan" else "ask"}
+        forms = {artifacts.as_posix(), str(artifacts)}
+        try:
+            relative = artifacts.relative_to(REPO)
+            forms |= {relative.as_posix(), str(relative)}
+        except ValueError:
+            pass
+        for form in sorted(forms):
+            edit[form.rstrip("/\\") + ("\\*" if "\\" in form else "/*")] = "allow"
+    bash = chat_bash() if mode in ("plan", "assign") else "ask"
+    permission = {"edit": edit, "bash": bash, "webfetch": "ask", "skill": {"*": "allow"}}
+    if mode == "plan":
+        permission.update({tool: "deny" for tool in PLAN_DENIED_TOOLS})
+    what = {"plan": "plans with the PM (cannot assign crew work)",
+            "assign": "assigns the crew"}.get(mode, "is the PA of The Crew")
+    return {"mode": "primary", "description": f"{pa} {what}",
             "model": f"synthetic/{scope['model']}", "prompt": "{file:" + brief.as_posix() + "}",
             **({"steps": int(scope["steps"])} if scope.get("steps") else {}),
-            "permission": {"edit": "ask", "bash": "ask", "webfetch": "ask",
-                           "skill": {"*": "allow"}}}
+            "permission": permission}
 
 
 def base_config(models: dict, agents: dict, default_agent: str, client: str,
@@ -106,6 +160,14 @@ def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool
     model, entry = provider_model(pa, scope, staff)
     return base_config({model: entry}, {"pa": pa_agent(pa, scope, brief)}, "pa",
                        f"OpenCode-{pa}", worker)
+
+
+def with_real_python(env: dict) -> dict:
+    """`python` in the PA's shell must be this Python (3.14, with the harness's packages), not
+    the hermes venv that is first on this machine's PATH."""
+    first = [str(Path(PYTHON).parent), str(Path(PYTHON).parent / "Scripts")]
+    env["PATH"] = os.pathsep.join(first + [env.get("PATH", "")])
+    return env
 
 
 def synthetic_key() -> str:
@@ -171,7 +233,7 @@ def main(argv=None) -> int:
         print(f"would run: {exe} {args.project}   (OPENCODE_CONFIG={config})")
         return 0
     print(link_crush_skills())
-    env = dict(os.environ)
+    env = with_real_python(dict(os.environ))
     env["OPENCODE_CONFIG"] = str(config)
     env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(scope.get("reply_tokens") or 32768))
     key = synthetic_key()

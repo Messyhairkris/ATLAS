@@ -59,6 +59,39 @@ RULES = [
     "crew/runners/security_scan.py on a folder before it becomes a crew read root.",
 ]
 
+# Kris 2026-10-24 (after the Antigravity study): every PA chat leaves a plan, a task list and
+# a walkthrough, with a review policy. For the PAs that chat in The Crew's window; Claude
+# Code PAs keep CLAUDE.md. Shapes follow Antigravity's implementation_plan / task / walkthrough.
+ARTIFACTS = [
+    "In The Crew's chat each message from the PM ends with a line `[The Crew] chat <id>; mode: "
+    "<plan|assign>; artifacts: <folder>; review: <policy>`. Keep this chat's artifacts in that "
+    "folder (writing there needs no approval); answer questions and small requests without them.",
+    "mode: plan = deliberate with the PM: research, read crew state (status, roster, budget, "
+    "task types, results), write and revise plan.md. Crew submissions and other edits are "
+    "switched off in this mode; when the plan is ready, say so - the PM switches to Assign.",
+    "mode: assign = turn the approved plan into atomic tasks (CrossTalk's AtomicTask): write "
+    "tasks.json in the artifacts folder as {\"milestone\": \"...\", \"tasks\": [{\"id\": \"t1\", "
+    "\"title\": \"...\", \"assigned_to\": \"<member>\", \"task_type\": \"...\", \"contract\": "
+    "\"<path>\", \"depends\": [], \"context_files\": [], \"status\": \"ready\", \"job_id\": \"\"}]}. "
+    "A task with unfinished dependencies is blocked, not ready. Submit only ready tasks "
+    "(crew_submit, or a campaign for a batch), put each job id in its task, and keep every "
+    "status current: blocked, ready, in_progress, completed, failed.",
+    "Look around with your read, list, glob and grep tools: they need no approval. Shell "
+    "commands ask the PM, and one the PM refuses ends your turn.",
+    "plan.md, BEFORE work that changes files or spends crew requests: # Goal; ## Review "
+    "required (what the PM must decide, or 'nothing'); ## Changes, grouped by component, each "
+    "file marked [NEW], [MODIFY] or [DELETE]; ## Crew jobs (member, task type, contract); "
+    "## Verification (tests, gates, what the PM will see). Revise the same file, never a second.",
+    "Tasks: keep your todo list current with your todo tool (pending, in_progress, completed); "
+    "the PM sees it live beside the chat.",
+    "walkthrough.md, when the work is done: what changed (files, crew jobs and their results), "
+    "what was tested and how, the results, anything left over. Update the same file for "
+    "follow-ups.",
+    "review: request = after writing plan.md, stop and ask the PM to review it; change no "
+    "files and spend no crew requests until the PM approves. pa = you decide: ask only when the "
+    "plan is risky, costly or unclear. proceed = go ahead; the PM reads the plan when they like.",
+]
+
 WHERE = [
     ("How the crew works, every tool", REPO / "crew" / "README.md"),
     ("The playbook for delegating (contracts, gates, roster, cost)",
@@ -254,7 +287,8 @@ def render(pa: str, task: str = "", staff: Optional[dict] = None,
                  "- Your CLAUDE.md and project memory carry the standing rules; they are "
                  "already loaded, so they are not repeated here.", ""]
     else:
-        rules = ["## Standing rules", *[f"- {r}" for r in RULES], ""]
+        rules = ["## Standing rules", *[f"- {r}" for r in RULES], "",
+                 "## Plan, tasks, walkthrough (The Crew's chat)", *[f"- {r}" for r in ARTIFACTS], ""]
     live = (["## The crew (personnel.json; measured outranks reputation)", *roster(staff), "",
              "## Work in flight", *work_in_flight(state), "",
              "## Waiting on the PM (Review Desk)", *pm_queue(), "",
