@@ -1,0 +1,64 @@
+{
+  "name": "tc-control-room",
+  "rs_profile": "the_crew",
+  "workspace_subdir": "the_crew",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 40,
+  "goal": "The Crew, Phase 1 (2026-10-23): the pure-logic pieces of the egui control room. mdlite.rs reads the Markdown that the Night and Desk panes show (night reports, crew reports, review items); diffview.rs labels and numbers the lines of a commit request's unified diff. The PA writes the window, the file reading and the Desk's Python bridge.",
+  "teams": {
+    "Markdown": {
+      "author": "Gordon",
+      "tester": "Hoss"
+    },
+    "Diff": {
+      "author": "Nemotron",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "tc_mdlite",
+      "team": "Markdown",
+      "module": "mdlite.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tc_mdlite.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_the_crew/hidden_mdlite.rs"
+      ],
+      "api": [
+        "Span",
+        "Block",
+        "inline",
+        "split_row",
+        "parse"
+      ],
+      "depends": [],
+      "cross_tests": false,
+      "scope": "L",
+      "instructions": "Not CommonMark: follow the contract's rules in their stated order. inline works on a Vec<char> with an index and a text buffer that is pushed as Text only before another span and at the end. parse handles one line at a time with one open block (Paragraph, Bullet, Numbered or Quote) and a close step. Walk every row of both worked-example tables through your code before replying. Write the module once, in one reply; do not restate the contract."
+    },
+    {
+      "id": "tc_diffview",
+      "team": "Diff",
+      "module": "diffview.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tc_diffview.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_the_crew/hidden_diffview.rs"
+      ],
+      "api": [
+        "Kind",
+        "Line",
+        "parse_hunk_header",
+        "classify",
+        "stats",
+        "files"
+      ],
+      "depends": [],
+      "cross_tests": false,
+      "scope": "S",
+      "instructions": "classify is a small state machine (OUTSIDE, HEADER, BODY with old_no, new_no, old_left, new_left): the first matching row of rule C's table decides each line, and table B decides lines inside a hunk. Use saturating_add / saturating_sub for every count. Walk the worked example and the files table through your code. Write the module once, in one reply; do not restate the contract."
+    }
+  ]
+}

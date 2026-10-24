@@ -213,6 +213,7 @@ For a human:
 | Tool | What it is for |
 |---|---|
 | `runners/Launch Review Desk.bat` | the queue of work waiting on Kris: approve needs no words, reject/question/defer do; **SEND** hands decisions to the agent (`for_agent.json`, `handoff.json`) |
+| `C:\Users\user\TheCrew\Launch The Crew.bat` | The Crew's control room (Rust/egui): Board (campaigns, relays), Crew (who is working), Desk (the same queue), Night (the 3 AM reports), Reader. It writes the Desk only through `runners/desk_cli.py` (`list`, `decide ID DECISION < note`, `undecide`, `draft`, `send`; one JSON answer each), so both windows keep one writer and the same rules |
 | `runners/Launch TTS bench.bat` | hear the TTS modules on real devices, including remembered headsets |
 | `runners/ui_sweep.py` | press every control in a Windows app, visibly, and report what was observed |
 | `runners/format_check.py` | check an exported VtoT document against the formatting test spec |
