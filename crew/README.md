@@ -203,6 +203,7 @@ Checking what came back - run the evidence, do not read and nod:
 | `python crew/runners/check_accepted.py [--workspace DIR]` | every accepted module, together, against every hidden test (pairs by name: `test_<stem>.py` or `test_tts_<stem>.py`) |
 | `python crew/runners/mutants.py --module m.py [--hidden]` | whether a test file tests anything: seeds one defect at a time and lists the survivors by line |
 | `python crew/runners/member_stats.py` | each member's record across every campaign |
+| `python crew/runners/close_campaign.py NAME --reason "..." [--superseded-by X] [--apply]` | close a campaign that died mid-run (it never wrote summary.json, so it looks live for ever): open tasks become "stopped", a summary and REPORT say who, why and what took over; nothing is deleted. Dry run unless `--apply`; refuses one changed in the last 2 h |
 | `python crew/runners/rs_mutants.py --profile P --module m.rs --tests t.rs [--deps ..]` | the Rust twin of mutants.py: one-token defects, built and tested in the profile crate |
 | `python crew/runners/rs_scoping.py [--prefix pt_]` | Rust campaigns by member, role and scope (S/M/L/C): which scope suits whom |
 | `python -m crew unify --workspace [--check]` | mechanical cleanup with ruff, each stage kept only if the tests still pass; lists what needs a reader |
