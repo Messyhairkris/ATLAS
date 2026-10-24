@@ -111,13 +111,17 @@ Every stdio MCP server, `crew` included, starts behind
 
 **Claude Code:** `.mcp.json` at the repo root registers `crew` for this project. Approve it when Claude Code asks.
 
-**Crush (Windows):** add this under `"mcp"` in `%LOCALAPPDATA%\crush\crush.json`. It runs through the same stdio wrapper the other Python servers use, because Crush's pipes break FastMCP's stdin otherwise:
+**Crush (Windows):** add this under `"mcp"` in `%LOCALAPPDATA%\crush\crush.json`. Since
+2026-10-23 it starts behind mcp-keeper, whose pipes FastMCP reads fine, so the old
+`~/.octofriend/mcp/mcp_stdio_wrapper.py` (removed with Octofriend) is no longer needed:
 
 ```json
 "crew": {
   "type": "stdio",
-  "command": "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
-  "args": ["C:/Users/user/.octofriend/mcp/mcp_stdio_wrapper.py",
+  "command": "C:\\Users\\user\\TheCrew\\bin\\mcp-keeper.exe",
+  "args": ["--name", "crew", "--first-wait", "40", "--total", "85",
+           "--log", "C:\\Users\\user\\ATLAS-api-harness\\runs\\mcp-keeper\\keeper.jsonl",
+           "--", "C:/Users/user/AppData/Local/Programs/Python/Python314/python.exe",
            "C:/Users/user/ATLAS-api-harness/crew_server.py"],
   "env": {"CREW_CLIENT": "Crush"},
   "timeout": 120
