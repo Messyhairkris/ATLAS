@@ -124,7 +124,7 @@
     },
     "Gordon": {
       "model": "hf:deepseek-ai/DeepSeek-V4.1-Flash",
-      "context_window": 1000000,
+      "context_window": 524288,
       "vision": true,
       "public": {
         "strengths": ["unusually strong for a Flash model (GPQA 90.9, Terminal-Bench 90.6)", "fast (~232 tok/s), cheap on input-heavy agentic work", "native vision"],
@@ -140,7 +140,7 @@
     },
     "Barry": {
       "model": "hf:zai-org/GLM-5.3-Flash",
-      "context_window": 1000000,
+      "context_window": 524288,
       "vision": false,
       "public": {
         "strengths": ["strong coding/agent benchmarks for its price (Terminal-Bench 84.3)", "hybrid sparse+linear attention keeps long context cheap"],
@@ -156,7 +156,7 @@
     },
     "Larry": {
       "model": "hf:zai-org/GLM-4.7-Flash",
-      "context_window": 131072,
+      "context_window": 196608,
       "vision": false,
       "public": {
         "strengths": ["interleaved thinking before each tool call", "decent coding for 30B-A3B", "cheap"],
@@ -186,7 +186,7 @@
     },
     "Kimi": {
       "model": "hf:moonshotai/Kimi-K3",
-      "context_window": 1000000,
+      "context_window": 524288,
       "vision": true,
       "public": {
         "strengths": ["best open model for long tool-using work (SWE Marathon 42.0, BrowseComp 91.2)", "sustained multi-hour sessions, large repositories, terminal tools"],

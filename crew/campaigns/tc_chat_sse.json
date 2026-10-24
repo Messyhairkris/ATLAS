@@ -1,0 +1,39 @@
+{
+  "name": "tc-chat-sse",
+  "rs_profile": "the_crew",
+  "workspace_subdir": "the_crew",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "max_requests": 20,
+  "goal": "The Crew, Phase 2 (2026-10-24): Kris wants The Crew to be its own Claude Desktop / Antigravity - a chat with the selected PA that assigns crew jobs. The chat follows each PA through OpenCode's HTTP event stream; sse.rs turns the stream's bytes into whole events. Small and exact: Larry's kind of single task (relay ladder behind him).",
+  "teams": {
+    "Stream": {
+      "author": "Larry",
+      "tester": "Hoss"
+    }
+  },
+  "tasks": [
+    {
+      "id": "tc_sse",
+      "team": "Stream",
+      "module": "sse.rs",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/tc_sse.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/rs_the_crew/hidden_sse.rs"
+      ],
+      "api": [
+        "Event",
+        "Parser",
+        "Parser::new",
+        "Parser::retry",
+        "Parser::feed"
+      ],
+      "depends": [],
+      "cross_tests": false,
+      "scope": "S",
+      "instructions": "Keep a Vec<u8> buffer; only complete lines (up to a newline byte) are turned into Strings with from_utf8_lossy, so chunks may split anywhere. Strip the byte-order mark from the first line of the stream only. The last id carries over between events; the event name and the data lines are cleared at every blank line. Walk every row of the worked-example table through your code. Write the module once, in one reply; do not restate the contract."
+    }
+  ]
+}

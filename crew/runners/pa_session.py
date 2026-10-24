@@ -53,11 +53,28 @@ def _keeper(name: str) -> list:
             "--log", str(KEEPER_LOG), "--"]
 
 
-def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool = False) -> dict:
-    """The generated opencode.json: one provider, one primary agent, the crew MCP."""
+def provider_model(pa: str, scope: dict, staff: dict) -> tuple:
+    """-> (model id, its entry under the Synthetic provider)."""
     model = scope["model"]
     member = (staff.get("members") or {}).get(pa) or {}
-    reply = int(scope.get("reply_tokens") or 32768)
+    return model, {"name": f"{pa} ({model})",
+                   "limit": {"output": int(scope.get("reply_tokens") or 32768),
+                             "context": int(member.get("context_window") or 200000)}}
+
+
+def pa_agent(pa: str, scope: dict, brief: Path) -> dict:
+    """A PA as an OpenCode primary agent: its model, its brief as the prompt, its steps.
+    Edits, shell commands and web fetches ask the human; crew MCP tools and skills do not."""
+    return {"mode": "primary", "description": f"{pa} as the PA of The Crew",
+            "model": f"synthetic/{scope['model']}", "prompt": "{file:" + brief.as_posix() + "}",
+            **({"steps": int(scope["steps"])} if scope.get("steps") else {}),
+            "permission": {"edit": "ask", "bash": "ask", "webfetch": "ask",
+                           "skill": {"*": "allow"}}}
+
+
+def base_config(models: dict, agents: dict, default_agent: str, client: str,
+                worker: bool = False) -> dict:
+    """The parts every PA config shares: Synthetic, the crew MCP, LSP, no updates or sharing."""
     lsp = {"pyright": {"disabled": True}}             # not installed; pylsp instead
     if PYLSP.is_file():
         lsp["pylsp"] = {"command": [str(PYLSP)], "extensions": [".py", ".pyi"]}
@@ -70,26 +87,33 @@ def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool
             "npm": "@ai-sdk/openai-compatible", "name": "Synthetic",
             "options": {"baseURL": "https://api.synthetic.new/v1",
                         "apiKey": "{env:SYNTHETIC_API_KEY}"},
-            "models": {model: {"name": f"{pa} ({model})",
-                               "limit": {"output": reply,
-                                         "context": int(member.get("context_window")
-                                                        or 200000)}}}}},
+            "models": models}},
         "mcp": {"crew": {"type": "local", "command": _keeper("crew") + [PYTHON, str(REPO / "crew_server.py")],
                          # worker off by default: a worker would also run every stale READY job in
                          # the queue (14 on 2026-10-23); the PA runs work with campaigns
-                         "environment": {"CREW_CLIENT": f"OpenCode-{pa}",
+                         "environment": {"CREW_CLIENT": client,
                                          "CREW_WORKER": "1" if worker else "0"},
                          "enabled": True, "timeout": 120000}},
         "lsp": lsp,
-        "agent": {"pa": {
-            "mode": "primary", "description": f"{pa} as the PA of The Crew",
-            "model": f"synthetic/{model}", "prompt": "{file:" + brief.as_posix() + "}",
-            **({"steps": int(scope["steps"])} if scope.get("steps") else {}),
-            "permission": {"edit": "ask", "bash": "ask", "webfetch": "ask",
-                           "skill": {"*": "allow"}}}},
-        "default_agent": "pa",
+        "agent": agents,
+        "default_agent": default_agent,
         "autoupdate": False, "share": "disabled",
     }
+
+
+def opencode_config(pa: str, scope: dict, staff: dict, brief: Path, worker: bool = False) -> dict:
+    """The generated opencode.json: one provider, one primary agent, the crew MCP."""
+    model, entry = provider_model(pa, scope, staff)
+    return base_config({model: entry}, {"pa": pa_agent(pa, scope, brief)}, "pa",
+                       f"OpenCode-{pa}", worker)
+
+
+def synthetic_key() -> str:
+    """The Synthetic key from the environment or the provider registry; never printed."""
+    if os.environ.get("SYNTHETIC_API_KEY"):
+        return os.environ["SYNTHETIC_API_KEY"]
+    from providers.registry import _get_provider, _resolve_secret
+    return _resolve_secret((_get_provider("synthetic") or {}).get("auth") or {}) or ""
 
 
 def link_crush_skills() -> str:
@@ -150,11 +174,9 @@ def main(argv=None) -> int:
     env = dict(os.environ)
     env["OPENCODE_CONFIG"] = str(config)
     env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(scope.get("reply_tokens") or 32768))
-    if not env.get("SYNTHETIC_API_KEY"):
-        from providers.registry import _get_provider, _resolve_secret
-        key = _resolve_secret((_get_provider("synthetic") or {}).get("auth") or {})
-        if key:
-            env["SYNTHETIC_API_KEY"] = key
+    key = synthetic_key()
+    if key:
+        env["SYNTHETIC_API_KEY"] = key
     print(f"opening OpenCode with {args.pa} as the PA in {args.project} ...")
     return subprocess.call([exe, args.project], env=env)
 
