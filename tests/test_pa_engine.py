@@ -69,11 +69,21 @@ class EngineConfigTests(unittest.TestCase):
                          {"output": 32768, "context": 200000})
 
     def test_edits_and_commands_ask_the_human(self):
-        for agent in pa_engine.engine_config(STAFF, BRIEFS)["agent"].values():
+        for name, agent in pa_engine.engine_config(STAFF, BRIEFS)["agent"].items():
             permission = agent["permission"]
+            other = "deny" if name.endswith("-plan") else "ask"
             self.assertEqual((permission["edit"], permission["bash"]["*"], permission["webfetch"]),
-                             ("ask", "ask", "ask"))
+                             ("ask", other, "ask"))
             self.assertNotIn("Remove-Item*", permission["bash"])
+
+    def test_plan_mode_refuses_writing_commands_and_redirections(self):
+        # 2026-10-25: a plan-mode PA got a shell card allowed and rewrote another chat's files.
+        agents = pa_engine.engine_config(STAFF, BRIEFS)["agent"]
+        plan, assign = agents["Kimi-plan"]["permission"]["bash"], agents["Kimi-assign"]["permission"]["bash"]
+        self.assertEqual((plan["*"], plan["*>*"]), ("deny", "deny"))
+        self.assertEqual((assign["*"], assign["*>*"]), ("ask", "ask"))
+        self.assertEqual(list(plan)[-1], "*>*", "the redirection rule must come last: the last match wins")
+        self.assertEqual(plan["Get-ChildItem*"], "allow")
 
     def test_crew_mcp_is_shared_with_the_worker_off(self):
         crew = pa_engine.engine_config(STAFF, BRIEFS)["mcp"]["crew"]
@@ -87,7 +97,7 @@ class EngineConfigTests(unittest.TestCase):
         self.assertIn("{env:SYNTHETIC_API_KEY}", text)
 
     def test_read_only_commands_run_without_a_card_and_the_rest_ask(self):
-        bash = pa_engine.engine_config(STAFF, BRIEFS)["agent"]["Kimi-plan"]["permission"]["bash"]
+        bash = pa_engine.engine_config(STAFF, BRIEFS)["agent"]["Kimi-assign"]["permission"]["bash"]
         self.assertEqual(list(bash)[0], "*")
         self.assertEqual(bash["*"], "ask")
         self.assertEqual(bash["python crew/runners/active_status.py*"], "allow")

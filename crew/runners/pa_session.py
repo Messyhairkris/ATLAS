@@ -87,11 +87,17 @@ READ_ONLY_COMMANDS = (
 )
 
 
-def chat_bash() -> dict:
-    rules = {"*": "ask"}
+def chat_bash(mode: str = "assign") -> dict:
+    """In plan mode every other command is refused, not asked: 2026-10-25 a plan-mode PA
+    (Claude, in The Crew's chat) was allowed a shell card and rewrote another chat's
+    tasks.json and plan.md with it. A redirection turns a read-only command into a write, so
+    `*>*` comes last (OpenCode: the last matching rule wins)."""
+    other = "deny" if mode == "plan" else "ask"
+    rules = {"*": other}
     for command in READ_ONLY_COMMANDS:
         for form in {command, command.replace("/", "\\")}:
             rules[form + "*"] = "allow"
+    rules["*>*"] = other
     return rules
 
 
@@ -114,7 +120,7 @@ def pa_agent(pa: str, scope: dict, brief: Path, artifacts: Path = None, mode: st
             pass
         for form in sorted(forms):
             edit[form.rstrip("/\\") + ("\\*" if "\\" in form else "/*")] = "allow"
-    bash = chat_bash() if mode in ("plan", "assign") else "ask"
+    bash = chat_bash(mode) if mode in ("plan", "assign") else "ask"
     permission = {"edit": edit, "bash": bash, "webfetch": "ask", "skill": {"*": "allow"}}
     if mode == "plan":
         permission.update({tool: "deny" for tool in PLAN_DENIED_TOOLS})
