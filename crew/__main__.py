@@ -1,7 +1,8 @@
 """Crew CLI.
 
     python -m crew serve                      MCP server over stdio (+ worker)
-    python -m crew worker                     worker only, no MCP
+    python -m crew worker [--stop-file PATH]  worker only, no MCP; ends after the job
+                                              in hand once PATH exists (The Crew's Stop)
     python -m crew submit spec.json [--by Kris]
     python -m crew run TASK_ID                run one ready task now (foreground)
     python -m crew status [TASK_ID]
@@ -50,7 +51,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m crew")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve")
-    sub.add_parser("worker")
+    s = sub.add_parser("worker")
+    s.add_argument("--stop-file", type=pathlib.Path, default=None,
+                   help="finish the job in hand, then exit, once this file exists")
     s = sub.add_parser("submit"); s.add_argument("spec"); s.add_argument("--by", default="Kris")
     s.add_argument("--run", action="store_true",
                    help="claim before queueing and run it now in this process")
@@ -153,8 +156,9 @@ def main(argv=None) -> int:
     crew = Crew()
     try:
         if args.cmd == "worker":
-            print("crew worker running; Ctrl+C to stop", file=sys.stderr)
-            crew.work_forever()
+            print("crew worker running; Ctrl+C to stop", file=sys.stderr, flush=True)
+            crew.work_forever(stop_file=args.stop_file)
+            print("crew worker stopped (stop file)", file=sys.stderr, flush=True)
         elif args.cmd == "submit":
             with open(args.spec, encoding="utf-8") as fh:
                 job = crew.submit(json.load(fh), args.by, claim=args.run)

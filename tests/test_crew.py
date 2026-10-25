@@ -102,6 +102,35 @@ class CrewTestCase(unittest.TestCase):
                             "folder": str(self.lab), **extra}, "Claude")
 
 
+class WorkerStopFileTests(CrewTestCase):
+    """The Crew's runner stops a worker by writing a file: the job in hand runs
+    to its end (a killed job restarts later from nothing and its requests are lost)."""
+
+    def test_a_stop_file_ends_the_worker_before_any_job_and_is_used_up(self):
+        c = self.crew([])
+        stop = self.tmp / "stop"
+        stop.write_text("")
+        ran = []
+        c.tick = lambda: ran.append(1)
+        c.work_forever(poll_seconds=0.01, stop_file=stop)
+        self.assertEqual(ran, [])
+        self.assertFalse(stop.exists())
+
+    def test_the_job_in_hand_finishes_before_the_worker_stops(self):
+        c = self.crew([])
+        stop = self.tmp / "stop"
+        ran = []
+
+        def tick():
+            ran.append(len(ran))
+            stop.write_text("")          # Stop pressed while this job runs
+            return "job-1"
+        c.tick = tick
+        c.work_forever(poll_seconds=0.01, stop_file=stop)
+        self.assertEqual(ran, [0])
+        self.assertFalse(stop.exists())
+
+
 class LifecycleTests(CrewTestCase):
     def test_submit_run_review_approve_writes_with_backup(self):
         (self.lab / "INDEX.md").write_text("old index\n")

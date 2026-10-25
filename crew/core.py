@@ -599,8 +599,18 @@ class Crew:
         self.store.log(node, "system", job_id)
         return True
 
-    def work_forever(self, poll_seconds: float = 3.0) -> None:
+    def work_forever(self, poll_seconds: float = 3.0, stop_file: Optional[Path] = None) -> None:
+        """Run jobs until stopped. A job runs to its end inside tick(), so a
+        `stop_file` seen between ticks stops the worker without cutting a job
+        short (The Crew's runner: a killed job restarts later from nothing and
+        its requests are lost)."""
         while not self._stop.is_set():
+            if stop_file is not None and stop_file.exists():
+                try:
+                    stop_file.unlink()
+                except OSError:
+                    pass
+                return
             self._hold = 0.0
             try:
                 ran = self.tick()
