@@ -198,17 +198,18 @@ class RateWindow:
         percent = view.get("credits_percent_remaining")
         if percent is not None and percent / 100.0 <= reserve_frac:
             return (False, 3600.0,
-                    f"weekly credits are down to {percent:.1f}% "
-                    f"(${view.get('credits_remaining_usd')} of "
-                    f"${view.get('credits_max_usd')}), below the "
+                    f"weekly credits are down to {quotas.credits_text(view)}, below the "
                     f"{reserve_frac * 100:.0f}% reserve kept for interactive work. "
-                    f"+${view.get('credits_next_regen_usd')} at "
-                    f"{view.get('credits_next_regen_at')}")
+                    f"{quotas.regen_text(view)}")
         binding = quotas.binding_limit(view) if quotas else {}
+        # Either number can be missing (2026-10-24: a header shape change left both
+        # None and this line raised on every worker tick, so no job was claimed).
+        requests = (f"{remaining:.1f}/{view.get('requests_max')}"
+                    if remaining is not None else "? (not reported)")
+        credits = f"{percent:.1f}%" if percent is not None else "? (not reported)"
         return (True, 0.0,
-                f"provider reports {remaining:.1f}/{view.get('requests_max')} "
-                f"requests and {percent:.1f}% of weekly credits; binding limit is "
-                f"{binding.get('limit', '?')}")
+                f"provider reports {requests} requests and {credits} of weekly "
+                f"credits; binding limit is {binding.get('limit', '?')}")
 
     def gate(self, job_requests: int = 0) -> Tuple[bool, float, str]:
         """(may_start, wait_seconds, detail). A job may start when the window

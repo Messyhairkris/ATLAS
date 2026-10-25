@@ -69,20 +69,38 @@ def record(snapshot: Dict) -> Dict:
 
 
 def summarize(snapshot: Dict) -> Dict:
-    """The four numbers a governor actually needs, plus where they came from."""
+    """The four numbers a governor actually needs, plus where they came from.
+
+    Read 2026-10-24 09:30, the header changed shape: no rollingFiveHourLimit or
+    weeklyTokenLimit, only `subscription` {limit: 500, requests, renewsAt} (the
+    five-hour request window) and `planWeeklyLimit` {percentRemaining, nextRegenAt,
+    nextRegenPercent} (no dollar figures). Both shapes are read; the old one wins
+    where it is present."""
     five = (snapshot.get("rollingFiveHourLimit") or {})
     week = (snapshot.get("weeklyTokenLimit") or {})
+    sub = (snapshot.get("subscription") or {})
+    plan_week = (snapshot.get("planWeeklyLimit") or {})
+    remaining, maximum = five.get("remaining"), five.get("max")
+    next_tick = five.get("nextTickAt")
+    if not five and sub.get("limit") is not None and sub.get("requests") is not None:
+        maximum = sub["limit"]
+        remaining = float(sub["limit"]) - float(sub["requests"])
+        next_tick = sub.get("renewsAt")
+    percent = week.get("percentRemaining")
+    if percent is None:
+        percent = plan_week.get("percentRemaining")
     return {
-        "requests_remaining": five.get("remaining"),
-        "requests_max": five.get("max"),
+        "requests_remaining": remaining,
+        "requests_max": maximum,
         "requests_tick_percent": five.get("tickPercent"),
-        "requests_next_tick": five.get("nextTickAt"),
+        "requests_next_tick": next_tick,
         "requests_limited": bool(five.get("limited")),
         "credits_remaining_usd": _money(week.get("remainingCredits")),
         "credits_max_usd": _money(week.get("maxCredits")),
-        "credits_percent_remaining": week.get("percentRemaining"),
+        "credits_percent_remaining": percent,
         "credits_next_regen_usd": _money(week.get("nextRegenCredits")),
-        "credits_next_regen_at": week.get("nextRegenAt"),
+        "credits_next_regen_at": week.get("nextRegenAt") or plan_week.get("nextRegenAt"),
+        "credits_next_regen_percent": plan_week.get("nextRegenPercent"),
     }
 
 
@@ -128,8 +146,25 @@ def binding_limit(view: Optional[Dict] = None) -> Dict:
                           f"{view['requests_max']} requests left in this five-hour "
                           f"window"}
     return {"limit": "credits", "headroom": cred_frac,
-            "detail": f"${view.get('credits_remaining_usd')} of "
-                      f"${view.get('credits_max_usd')} weekly credits left "
-                      f"({cred_frac * 100:.1f}%), +$"
-                      f"{view.get('credits_next_regen_usd')} at "
-                      f"{view.get('credits_next_regen_at')}"}
+            "detail": f"{credits_text(view)} weekly credits left; "
+                      f"{regen_text(view)}"}
+
+
+def credits_text(view: Dict) -> str:
+    """'$24.0 of $48.0 (50.0%)' when the provider gives dollars, else '50.0%'."""
+    percent = view.get("credits_percent_remaining")
+    shown = f"{float(percent):.1f}%" if percent is not None else "?%"
+    if view.get("credits_remaining_usd") is None or view.get("credits_max_usd") is None:
+        return shown
+    return f"${view['credits_remaining_usd']} of ${view['credits_max_usd']} ({shown})"
+
+
+def regen_text(view: Dict) -> str:
+    """The next weekly refill, in whatever unit the provider reported it."""
+    if view.get("credits_next_regen_usd") is not None:
+        amount = f"+${view['credits_next_regen_usd']}"
+    elif view.get("credits_next_regen_percent") is not None:
+        amount = f"+{view['credits_next_regen_percent']}%"
+    else:
+        amount = "next refill"
+    return f"{amount} at {view.get('credits_next_regen_at') or '(not reported)'}"

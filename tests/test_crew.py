@@ -1108,6 +1108,58 @@ class ProviderQuotaTests(CrewTestCase):
         self._with_reading(rollingFiveHourLimit__remaining=10.0)
         self.assertEqual(quotas.binding_limit()["limit"], "requests")
 
+    def _record(self, snapshot):
+        """A raw header as given, nothing filled in."""
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "v3-service"))
+        from providers import quotas
+        os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "quota.json")
+        view = quotas.record(snapshot)
+        self.cfg.data["rate_limit"] = {"mode": "bucket", "max_requests": 1000,
+                                       "regen_percent": 5, "regen_hours": 3,
+                                       "reserve": 10, "min_headroom": 4,
+                                       "credit_reserve_percent": 5}
+        from crew.ratelimit import RateWindow
+        return view, RateWindow(self.cfg)
+
+    # The header Synthetic sent 2026-10-24 09:30 (runs/quotas.json), verbatim.
+    OCTOBER = {"subscription": {"limit": 500, "requests": 0,
+                                "renewsAt": "2026-10-24T21:30:33.172Z"},
+               "search": {"hourly": {"limit": 250, "requests": 0,
+                                     "renewsAt": "2026-10-24T17:30:33.174Z"}},
+               "planWeeklyLimit": {"nextRegenAt": "2026-10-24T19:13:17.000Z",
+                                   "percentRemaining": 99.3120700122399,
+                                   "nextRegenPercent": 2}}
+
+    def test_the_october_header_shape_is_read(self):
+        view, rate = self._record(self.OCTOBER)
+        self.assertEqual((view["requests_remaining"], view["requests_max"]), (500.0, 500))
+        self.assertEqual(view["requests_next_tick"], "2026-10-24T21:30:33.172Z")
+        self.assertAlmostEqual(view["credits_percent_remaining"], 99.312, places=3)
+        self.assertEqual(view["credits_next_regen_percent"], 2)
+        ok, wait, detail = rate.gate(14)
+        self.assertTrue(ok)
+        self.assertEqual(wait, 0.0)
+        self.assertIn("500.0/500", detail)
+
+    def test_a_low_weekly_pool_in_the_october_shape_stops_work(self):
+        low = json.loads(json.dumps(self.OCTOBER))
+        low["planWeeklyLimit"]["percentRemaining"] = 3.0
+        _view, rate = self._record(low)
+        ok, _wait, detail = rate.gate(14)
+        self.assertFalse(ok)
+        self.assertIn("3.0%", detail)
+        self.assertIn("+2%", detail)
+        self.assertNotIn("None", detail)
+
+    def test_a_reading_without_numbers_never_breaks_the_gate(self):
+        """The worker died on this: every number None, and the detail line
+        formatted None with :.1f on every tick."""
+        _view, rate = self._record({"search": {"hourly": {"limit": 250, "requests": 0}}})
+        ok, _wait, detail = rate.gate(14)
+        self.assertTrue(ok)
+        self.assertIn("not reported", detail)
+
     def test_no_reading_falls_back_to_the_model(self):
         os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "missing.json")
         self.cfg.data["rate_limit"] = {"mode": "bucket", "max_requests": 100,
