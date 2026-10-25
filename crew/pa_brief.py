@@ -326,6 +326,39 @@ def chat_rules() -> str:
     return "\n".join(["## Plan, tasks, walkthrough (The Crew's chat)", *[f"- {r}" for r in ARTIFACTS]])
 
 
+def continuation(to_pa: str, from_pa: str, summary: str, summary_path: str, request: str,
+                 staff: Optional[dict] = None) -> str:
+    """The first message to a PA taking over a chat (Kris 2026-10-25): "a new prompt that
+    explains it continuing to work on this project, here is the summary, then the user
+    request" - so the new model is caught up by a summary instead of the whole conversation
+    (a model switch re-reads everything from scratch: no cache carries over). The PA's own
+    brief (system prompt, or Claude's SessionStart hook) still says how to be a PA; this says
+    where the work stands."""
+    from crew import personnel
+    staff = staff if staff is not None else personnel.load()
+    scope = ((staff.get("pa") or {}).get("scopes") or {}).get(to_pa) or {}
+    who = f"{to_pa} ({scope['model']})" if scope.get("model") else to_pa
+    lines = [
+        f"## Continuing as PA - handoff from {from_pa}",
+        "",
+        f"You are {who}, and you are now the PA for this chat. {from_pa} worked on it until now. "
+        f"You do not have that conversation and you do not need it: the handoff summary below "
+        f"replaces it (it is also saved at {summary_path}).",
+        "",
+        "- The summary is the record of the PM's goal and decisions. Check live state before you "
+        "act on it: crew_status for the jobs it names, and this chat's artifacts folder (in the "
+        "chat line) - plan.md, tasks.json and walkthrough.md carry on in the same folder.",
+        "- Do not redo finished work or reopen decisions the PM made. Where the summary and the "
+        "live state disagree, the live state wins: say what differed.",
+        "- If something you need is not in the summary, ask the PM instead of guessing.",
+    ]
+    if scope.get("notes"):
+        lines.append(f"- About you: {scope['notes']}")
+    lines += ["", "### Handoff summary", "", summary.strip(), "", "### The PM's request", "",
+              request.strip()]
+    return "\n".join(lines)
+
+
 def hook_json(brief: str) -> str:
     """Claude Code SessionStart output: the brief as additional context, once."""
     return json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",

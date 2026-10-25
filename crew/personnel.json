@@ -22,6 +22,8 @@
     "default": "Claude",
     "approved": ["Claude", "Kimi", "Qwen", "Gordon"],
     "brief_max_chars": 14000,
+    "handoff_summarizer": "Gordon",
+    "handoff_comment": "Kris 2026-10-25: switching a chat to another PA or model in The Crew's window first runs crew/runners/pa_handoff.py - this member writes a summary of the conversation and the project (one request; DeepSeek-V4.1-Flash has a 512k window), and the new PA starts its own thread with pa_brief.continuation(): it is continuing, the summary, then the PM's request.",
     "common": {
       "may": ["plan the path with the PM and split it into crew-sized, checkable tasks",
               "write contracts, reference implementations and hidden tests, and run the reference before a request is spent",
