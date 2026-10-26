@@ -27,7 +27,11 @@ from .config import CrewError
 
 
 def _print(obj) -> None:
-    print(json.dumps(obj, indent=2, ensure_ascii=False))
+    # UTF-8 bytes, not the console code page: The Crew reads these as UTF-8, and a title
+    # with a dash or an accent made print() raise under cp1252.
+    sys.stdout.buffer.write((json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+                            .encode("utf-8"))
+    sys.stdout.flush()
 
 
 def main(argv=None) -> int:
@@ -61,6 +65,11 @@ def main(argv=None) -> int:
     s = sub.add_parser("status"); s.add_argument("task_id", nargs="?")
     s = sub.add_parser("result"); s.add_argument("task_id")
     sub.add_parser("inbox")
+    s = sub.add_parser("search"); s.add_argument("query")
+    s.add_argument("--kind", default=""); s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--json", action="store_true"); s.add_argument("--rebuild", action="store_true")
+    s = sub.add_parser("cards"); s.add_argument("--seen", default=None)
+    s.add_argument("--mark-seen", action="store_true")
     s = sub.add_parser("review")
     s.add_argument("task_id"); s.add_argument("decision")
     s.add_argument("--by", required=True); s.add_argument("--notes", default="")
@@ -181,6 +190,21 @@ def main(argv=None) -> int:
             _print(crew.result(args.task_id))
         elif args.cmd == "inbox":
             _print(crew.inbox())
+        elif args.cmd == "search":
+            from . import history
+            if args.rebuild:
+                print(json.dumps(history.update(crew.cfg, rebuild=True)), file=sys.stderr)
+            hits = history.search(crew.cfg, args.query, args.kind, args.limit)
+            if args.json:
+                _print(hits)
+            else:
+                sys.stdout.buffer.write((history.render(hits) + "\n").encode("utf-8"))
+        elif args.cmd == "cards":
+            from . import landing
+            if args.mark_seen:
+                _print({"seen_at": landing.mark_seen(crew.cfg, args.seen)})
+            else:
+                _print(landing.cards(crew.cfg, crew.store, args.seen))
         elif args.cmd == "review":
             _print(crew.review(args.task_id, args.decision, args.by, args.notes,
                                args.constraint, args.lesson, args.accept_member_notes,

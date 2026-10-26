@@ -168,6 +168,10 @@ def main(argv=None) -> int:
 
     env = {k: v for k, v in os.environ.items() if k != "CREW_HOME"}
     env["OPENCODE_CONFIG"] = str(cfg_path)
+    # Its own OpenCode database: three PAs started at once on the shared
+    # ~/.local/share/opencode/opencode.db, and two stopped on "database is locked"
+    # before their first request (2026-10-26). Also keeps them out of the window's engine.
+    env["XDG_DATA_HOME"] = str(home / "data")
     env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(scope.get("reply_tokens") or 32768))
     if cargo:
         env["CARGO_TARGET_DIR"] = a.cargo_target

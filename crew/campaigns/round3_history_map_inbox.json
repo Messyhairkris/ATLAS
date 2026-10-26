@@ -1,0 +1,53 @@
+{
+  "name": "round3-history-map-inbox",
+  "goal": "Three pure modules for finishing The Crew (Round 3, 2026-10-26): history_docs.py turns jobs and documents into search records and safe FTS5 queries; codemap.py outlines Python/JS/Rust/AHK files and maps a repository; inbox.py orders the cards Kris lands on. The PA wires them into the index, member tools, CLI and window.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 120,
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 12,
+  "teams": {
+    "Docs":  {"author": "Hoss", "tester": "Nemotron"},
+    "Map":   {"author": "Nemotron", "tester": "Hoss"},
+    "Inbox": {"author": "Hoss", "tester": "Nemotron"}
+  },
+  "tasks": [
+    {
+      "id": "history_docs",
+      "team": "Docs",
+      "module": "history_docs.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/history_docs.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_history_docs.py"],
+      "api": ["MAX_BODY_CHARS", "job_record", "doc_record", "fts_query"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. fts_query walks the text ONCE with the one regex the contract gives; a phrase and a word are both terms, compared whole for duplicates. Every record has exactly the eight keys, all strings.",
+      "test_instructions": "Cover every table row, an FTS5 operator word typed by a person (NOT, OR, NEAR), a column-filter colon, an unmatched quote, the max_terms cap, frontmatter with CRLF lines, a title containing a colon, and the body cap."
+    },
+    {
+      "id": "codemap",
+      "team": "Map",
+      "module": "codemap.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/codemap.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_codemap.py"],
+      "api": ["LANGUAGES", "language_of", "outline", "render_outline", "repo_map"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. Copy each regex from the contract exactly; the rules for a language apply in order and the first match wins. Python uses ast first and falls back to the two line regexes only on SyntaxError. In AHK only column-0 lines define anything.",
+      "test_instructions": "Cover every table row, the Python fallback on a syntax error, a decorated def, the AHK next-line brace rule with a comment line between, excluded AHK keywords, rust impl names with generics, and repo_map's cap (a block that does not fit, and the first block not fitting)."
+    },
+    {
+      "id": "inbox",
+      "team": "Inbox",
+      "module": "inbox.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/inbox.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_inbox.py"],
+      "api": ["RANKS", "cards", "counts"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. Each input item gives at most one card; a job that is a question card is never also a finished card. 'After seen_at' is a plain string comparison and an empty time is never after. Sort by rank, then when newest first, then title.",
+      "test_instructions": "Cover every table row, the order (rank, then newest when, then title, with an empty when last), an answered question becoming a finished card, a campaign exactly at the stale limit, seen_at empty, and counts."
+    }
+  ]
+}

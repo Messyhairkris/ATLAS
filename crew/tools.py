@@ -23,6 +23,7 @@ TEXT_SUFFIXES = {".md", ".txt", ".json", ".jsonl", ".py", ".gd", ".tscn",
                  ".ahk", ".xml", ".log", ".rst", ""}
 MAX_FILE_BYTES = 2_000_000
 MAX_SEARCH_FILES = 4000
+SKIP_DIRS = {"node_modules", "target", ".git", "__pycache__", ".venv", "venv", "dist", "build"}
 GITHUB_REPO = re.compile(r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 GITHUB_COMMITS = re.compile(r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)/commits/?$")
 
@@ -331,10 +332,58 @@ class Toolbox:
         self.evidence.add(p.as_posix(), body)
         return self._clip(f"{self.display(p)} (diagnostics)\n{body}")
 
+    # -- maps and memory (Round 3, 2026-10-26) ---------------------------------------
+    # 50 runs had ended out of requests, mostly while still looking for things. These
+    # read through resolve() like read_file, and they are NOT evidence: citing a file
+    # still needs read_file.
+    def outline(self, path: str) -> str:
+        from . import codemap
+        p = self.resolve(path)
+        if not p.is_file():
+            raise ToolError(f"{path}: not a file")
+        language = codemap.language_of(p.name)
+        if language is None:
+            raise ToolError(f"{path}: no outline for this file type (Python, JS/TS, Rust, AHK)")
+        if p.stat().st_size > MAX_FILE_BYTES:
+            raise ToolError(f"{path}: larger than {MAX_FILE_BYTES} bytes")
+        source = p.read_text(encoding="utf-8", errors="replace")
+        return self._clip(codemap.render_outline(self.display(p),
+                                                 codemap.outline(source, language)))
+
+    def repo_map(self, path: str = ".") -> str:
+        from . import codemap
+        base = self.resolve(path)
+        if not base.is_dir():
+            raise ToolError(f"{path}: not a directory")
+        files, scanned = {}, 0
+        for f in sorted(base.rglob("*")):
+            if scanned >= MAX_SEARCH_FILES:
+                break
+            if (set(f.parts) & SKIP_DIRS or not f.is_file()
+                    or codemap.language_of(f.name) is None):
+                continue
+            fr = f.resolve()
+            if self.cfg.denied(fr) or f.stat().st_size > MAX_FILE_BYTES:
+                continue
+            scanned += 1
+            try:
+                files[self.display(fr)] = fr.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        return codemap.repo_map(files, max_chars=self.obs_chars)
+
+    def search_history(self, query: str, kind: str = "", limit: int = 8) -> str:
+        from . import history
+        hits = history.search(self.cfg, query, kind or "", max(1, min(int(limit or 8), 20)),
+                              readable_only=True, roots=self.roots)
+        return self._clip(history.render(hits))
+
     def call(self, name: str, args: Optional[dict]) -> str:
         args = args or {}
         tools = {"list_dir": self.list_dir, "read_file": self.read_file,
-                 "search": self.search, "fetch_url": self.fetch_url}
+                 "search": self.search, "fetch_url": self.fetch_url,
+                 "outline": self.outline, "repo_map": self.repo_map,
+                 "search_history": self.search_history}
         if self.lsp:
             tools.update(symbols=self.symbols, definition=self.definition,
                          references=self.references, diagnostics=self.diagnostics)

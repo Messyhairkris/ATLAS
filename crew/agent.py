@@ -62,7 +62,9 @@ TOOLS
 - list_dir(path=".")
 - read_file(path, start=1, lines=200)
 - search(pattern, path=".", max_hits=30)  (regex, case-insensitive, searches file contents)
-- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}{lsp_tools}{ask_tool}
+- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}
+- outline(path) / repo_map(path=".")  (a code file's functions and classes / every code file under a folder; Python, JS/TS, Rust, AHK)
+- search_history(query, kind="")  (past crew work: digests, playbooks, night reports, chat artifacts){lsp_tools}{ask_tool}
 Relative paths resolve against the first read root.
 
 BUDGET: {max_requests} replies in total for this task, tool calls and submissions included. Submit before you run out.

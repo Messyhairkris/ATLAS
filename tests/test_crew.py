@@ -5,6 +5,7 @@ Run: python -m pytest tests/test_crew.py -q
 """
 
 import asyncio
+import datetime as dt
 import json
 import pathlib
 import os
@@ -785,6 +786,81 @@ class AskAndCompactTests(CrewTestCase):
         self.assertTrue(msgs[0]["content"].startswith("x" * 400 + "\n...[trimmed: read_file("))
         self.assertNotIn("TOKENS", msgs[0]["content"])
         self.assertEqual(msgs[3]["content"], "y" * 2000)
+
+
+class UnapproveAndStatusTests(CrewTestCase):
+    """Undo an approval (Round 3, 2026-10-26) and a no-id status that answers in a page,
+    not in 90 KB of every review and failure since September."""
+
+    F = chr(96) * 3
+    READ = '{"tool": "read_file", "args": {"path": "wiki/lab/runs/RUN-a.md"}}'
+    DIGEST = ("SUBMIT\n" + F + "d.md\n---\ntitle: D\ntags: [x]\n---\n"
+              "- Battery scored 9/12 [src: wiki/lab/runs/RUN-a.md]\n" + F)
+
+    def _approved(self, existing=None):
+        out = self.tmp / "state" / "outbox"
+        out.mkdir(parents=True, exist_ok=True)
+        if existing is not None:
+            (out / "d.md").write_text(existing, encoding="utf-8")
+        c = self.crew([self.READ, self.DIGEST])
+        jid = c.submit({"task_type": "research_digest", "title": "Battery score",
+                        "instructions": "What did the battery score?",
+                        "output": {"root": str(out), "files": ["d.md"]}}, "Claude")["task_id"]
+        c.tick()
+        c.review(jid, "approve", "Claude")
+        return c, jid, out / "d.md"
+
+    def test_undo_moves_a_created_file_aside_and_reopens_the_job(self):
+        c, jid, dest = self._approved()
+        self.assertTrue(dest.exists())
+        out = c.review(jid, "unapprove", "Kris")
+        self.assertEqual(out["status"], "review")
+        self.assertFalse(dest.exists())
+        aside = self.cfg.state_home / "jobs" / jid / "unapplied" / "d.md"
+        self.assertIn("9/12", aside.read_text(encoding="utf-8"))
+        c.review(jid, "approve", "Kris")                  # it can be approved again
+        self.assertTrue(dest.exists())
+
+    def test_undo_restores_what_the_approval_overwrote(self):
+        c, jid, dest = self._approved(existing="the old digest\n")
+        self.assertIn("9/12", dest.read_text(encoding="utf-8"))
+        c.review(jid, "unapprove", "Kris")
+        self.assertEqual(dest.read_text(encoding="utf-8"), "the old digest\n")
+        types = [n["type"] for n in c.store.nodes_for(jid)]
+        self.assertEqual(types[-2:], ["review_submitted", "output_unapplied"])
+
+    def test_undo_refuses_when_the_file_was_edited_since(self):
+        c, jid, dest = self._approved()
+        dest.write_text("Kris edited this\n", encoding="utf-8")
+        with self.assertRaises(CrewError):
+            c.review(jid, "unapprove", "Kris")
+        self.assertEqual(dest.read_text(encoding="utf-8"), "Kris edited this\n")
+        self.assertEqual(c.status(jid)["status"], "completed")
+
+    def test_undo_needs_an_applied_job(self):
+        c = self.crew([self.READ, self.DIGEST])
+        jid = c.submit({"task_type": "research_digest", "title": "t", "instructions": "q",
+                        "output": {"files": ["d.md"]}}, "Claude")["task_id"]
+        c.tick()
+        with self.assertRaises(CrewError):
+            c.review(jid, "unapprove", "Kris")
+
+    def test_status_without_an_id_is_short(self):
+        c = self.crew([])
+        ids = [c.submit({"task_type": "research_digest", "title": f"t{i}", "instructions": "q",
+                         "output": {"files": ["d.md"]}}, "Claude")["task_id"] for i in range(40)]
+        old = (dt.datetime.now() - dt.timedelta(days=5)).isoformat(timespec="seconds")
+        new = dt.datetime.now().isoformat(timespec="seconds")
+        for i, jid in enumerate(ids[:-1]):
+            job = c.store.load(jid)
+            job["status"] = "failed"
+            job["finished_at"] = old if i < 5 else new
+            c.store.save(job)
+        st = c.status()
+        self.assertEqual([j["task_id"] for j in st["open"]], [ids[-1]])
+        self.assertEqual(len(st["needs_attention"]), 30)
+        self.assertEqual(st["older_not_shown"], 39 - 30)
+        self.assertNotIn(ids[0], [j["task_id"] for j in st["needs_attention"]])
 
 
 class CodeTaskTests(CrewTestCase):

@@ -145,8 +145,9 @@ def crew_submit(task_type: str, title: str, instructions: str = "",
 
 @mcp.tool()
 def crew_status(task_id: str = "", wait_seconds: int = 0) -> str:
-    """Status of one task, or of all open/attention-needing tasks when task_id
-    is empty. wait_seconds (max 50) long-polls until the task leaves
+    """Status of one task; with task_id empty, the open tasks plus at most 30
+    needing attention from the last two days, newest first (older ones are only
+    counted). wait_seconds (max 50) long-polls until the task leaves
     ready/in_progress, saving you repeated calls."""
     try:
         return _ok(crew().status(task_id or None, wait_seconds))
@@ -176,8 +177,10 @@ def crew_review(task_id: str, decision: str, reviewer: str, notes: str = "",
       target), revise (re-queue with retry_constraint = what to do differently;
       the member sees it verbatim), answer (a stuck member asked ONE question -
       crew_status shows it under "question"; put the answer, or an option's
-      number, in notes and the job re-runs with it), reject, or acknowledge
-      (clear an auto-applied notice).
+      number, in notes and the job re-runs with it), unapprove (undo an approval:
+      overwritten files come back from the job's backup, created ones move into the
+      job folder; refused if a file was edited since), reject, or acknowledge (clear
+      an auto-applied notice).
     must_read / ascii_only (revise only): make your constraint ENFORCEABLE —
       the next submission fails unless the member actually opened each
       must_read file (paths relative to the task's read root) / wrote plain

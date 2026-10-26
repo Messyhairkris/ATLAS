@@ -4,6 +4,7 @@ Transport-free, so the MCP server (crew/server.py), the CLI (python -m crew)
 and the tests all drive the same code.
 """
 
+import datetime as dt
 import json
 import os
 import shutil
@@ -27,7 +28,7 @@ from .tools import Evidence, Toolbox
 sys.path.insert(0, str(REPO_ROOT / "v3-service"))
 
 RESULT_CHARS = 20000
-DECISIONS = ("approve", "revise", "answer", "reject", "acknowledge")
+DECISIONS = ("approve", "revise", "answer", "unapprove", "reject", "acknowledge")
 
 
 def _env_setup(cfg: Config) -> None:
@@ -457,6 +458,35 @@ class Crew:
                        paths=written)
         return written
 
+    def _unapply(self, job: dict, actor: str, parent: Optional[str] = None) -> List[str]:
+        """Undo an approval: what it overwrote comes back from the job's backup, a file it
+        created moves into the job folder (unapplied/), nothing is deleted. Refused, and
+        nothing touched, when a file was edited after the approval."""
+        jdir = self.store.job_dir(job["task_id"])
+        root = Path(job["spec"]["output"]["root"])
+        pairs = [(rel, (root / rel).resolve()) for rel in job["result"]["files"]]
+        edited = [str(dest) for rel, dest in pairs if dest.exists()
+                  and dest.read_bytes() != (jdir / "output" / rel).read_bytes()]
+        if edited:
+            raise CrewError("changed since the approval, so nothing was undone: "
+                            + ", ".join(edited))
+        restored = []
+        for rel, dest in pairs:
+            backup = jdir / "backup" / rel
+            if backup.exists():
+                shutil.copy2(backup, dest)
+            elif dest.exists():
+                aside = jdir / "unapplied" / rel
+                aside.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(dest), str(aside))
+            restored.append(str(dest))
+        job["unapplied"] = {"at": now_iso(), "by": actor, "paths": restored,
+                            "was": job.get("applied")}
+        job["applied"] = None
+        self.store.log("output_unapplied", actor, job["task_id"], parent=parent,
+                       paths=restored)
+        return restored
+
     # -- review ------------------------------------------------------------------------
     def review(self, job_id: str, decision: str, reviewer: str, notes: str = "",
                retry_constraint: str = "", playbook_add: Optional[List[str]] = None,
@@ -500,6 +530,11 @@ class Crew:
             job["revisions"] += 1
             job["status"] = READY
             job["notice"] = False
+        elif decision == "unapprove":
+            if st != COMPLETED or not job.get("applied"):
+                raise CrewError(f"{job_id} has no applied output to undo ({st})")
+            self._unapply(job, actor=reviewer, parent=node)
+            job["status"] = REVIEW       # approve it again, revise it, or reject it
         elif decision == "answer":
             if not pending or st != REVIEW:
                 raise CrewError(f"{job_id} has no question waiting for an answer")
@@ -554,11 +589,22 @@ class Crew:
                 **({"question": job["question"]}
                    if job.get("question") and not job.get("asked") else {})}
 
-    def status(self, job_id: Optional[str] = None, wait_seconds: float = 0) -> object:
+    def status(self, job_id: Optional[str] = None, wait_seconds: float = 0,
+               days: float = 2, limit: int = 30) -> object:
         if not job_id:
-            return [self._brief(j) for j in self.store.all_jobs()
-                    if j["status"] in (BLOCKED, READY, IN_PROGRESS, REVIEW, FAILED)
-                    or j.get("notice")]
+            # Open work, then what needs attention from the last `days` only, newest first:
+            # with every review/failed job ever, this was a 90 KB answer (Gordon, 2026-10-24).
+            since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+            jobs = sorted(self.store.all_jobs(), reverse=True,
+                          key=lambda j: j.get("finished_at") or j.get("created_at") or "")
+            open_ = [self._brief(j) for j in jobs if j["status"] in (BLOCKED, READY, IN_PROGRESS)]
+            attention = [j for j in jobs if j["status"] in (REVIEW, FAILED) or j.get("notice")]
+            recent = [j for j in attention
+                      if (j.get("finished_at") or j.get("created_at") or "") >= since]
+            return {"open": open_, "needs_attention": [self._brief(j) for j in recent[:limit]],
+                    "older_not_shown": len(attention) - min(len(recent), limit),
+                    "hint": f"attention items from the last {days:g} days, newest first; "
+                            f"crew_inbox lists questions; pass a task_id for one job"}
         deadline = time.time() + max(0.0, min(float(wait_seconds or 0), 50.0))
         while True:
             job = self.store.load(job_id)
