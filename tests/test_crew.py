@@ -325,6 +325,23 @@ class GateTests(CrewTestCase):
         self.assertIn("never opened", first_feedback)
         self.assertEqual(c.status(job["task_id"])["status"], "review")
 
+    def test_file_names_and_rank_numbers_are_not_claims(self):
+        """Gordon's synthesis, 2026-10-26: '01' from a01-crush.md and the 11 of a
+        ranking row were graded as ungrounded claims. Real numbers still are."""
+        from crew import gates
+        from crew.tools import Evidence, Toolbox
+        tb = Toolbox(self.cfg, [self.vault], Evidence())
+        tb.read_file("wiki/lab/runs/RUN-a.md")
+        src = "[src: wiki/lab/runs/RUN-a.md]"
+        ok = ("## Ranked\n| # | feature | score | source |\n|---|---|---|---|\n"
+              f"| 11 | battery | 9/12 | {src} |\n\n"
+              f"## Sources\n- a01-crush.md and tcr-03-recurse.md {src}\n")
+        self.assertTrue(gates.grounded(ok, tb)["ok"], gates.grounded(ok, tb)["detail"])
+        for bad in (f"| # | feature | score | source |\n|---|---|---|---|\n| 11 | x | 7/12 | {src} |\n",
+                    f"| runs | verdict |\n|---|---|\n| 11 | x {src} |\n",
+                    f"- version v1.1.33 {src}\n"):
+            self.assertFalse(gates.grounded(bad, tb)["ok"], bad)
+
     def test_citation_leniency_where_it_is_safe(self):
         from crew import gates
         from crew.tools import Evidence, Toolbox

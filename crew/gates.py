@@ -74,8 +74,34 @@ LINE_LOCATOR = re.compile(r"\b(?:lines?|L)\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*(?:,|a
                           r"(?:\s*[-–]\s*\d+)?)*", re.IGNORECASE)
 
 
+# "a01-crush.md", "tcr-03-recurse.md": a file's name says where, like a line locator.
+# Its digits were read as claims (Gordon's synthesis, 2026-10-26; his handoff had
+# listed it as a trap to write around). Version strings like v1.1.29 stay claims.
+FILE_NAME = re.compile(r"[\w.-]*\d[\w.-]*\.(?:md|markdown|txt|jsonl?|py|m?js|ts|rs|toml|"
+                       r"ya?ml|html?|css|ahk|ps1|bat|log|csv)\b", re.IGNORECASE)
+# The first column of a ranking table numbers its rows; that number is not a claim.
+RANK_HEADERS = {"#", "no", "no.", "n", "rank"}
+
+
+def _rank_cells_blanked(lines: Iterable[str]) -> List[str]:
+    out, ranked = [], False
+    for line in lines:
+        s = line.strip()
+        if not s.startswith("|"):
+            ranked = False
+        elif re.match(r"^\|\s*:?-{3,}", s):
+            pass
+        elif ranked:
+            line = re.sub(r"^\s*\|\s*\d{1,3}\s*\|", "| |", line)
+        else:
+            ranked = s.strip("|").split("|")[0].strip().lower() in RANK_HEADERS
+        out.append(line)
+    return out
+
+
 def claims(line: str) -> List[str]:
     bare = LINE_LOCATOR.sub(" ", SRC_CITE.sub(" ", WIKILINK.sub(" ", line)))
+    bare = FILE_NAME.sub(" ", bare)
     nums = [n.rstrip(".,") for n in CLAIM_NUMBER.findall(bare)]
     words = [w for w in VERDICT_WORDS if re.search(rf"\b{w}\b", bare)]
     return [n for n in nums if len(n) >= 2] + words
@@ -203,7 +229,7 @@ def grounded(text: str, toolbox, file: str = "") -> dict:
     line's cited sources (or of anything observed, for an uncited line)."""
     everything = "\n".join(toolbox.evidence.seen.values())
     bad = []
-    for line in _body_lines(text):
+    for line in _rank_cells_blanked(_body_lines(text)):
         cl = claims(line)
         if not cl:
             continue
