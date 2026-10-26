@@ -148,6 +148,16 @@ def _default_chat(model: str, job_id: str, task_type: str, persona: str,
     return chat
 
 
+def _job_rules(spec: dict) -> str:
+    """The rules whose triggers match this job (crew/rules.py, Qwen), once in its prompt."""
+    try:
+        from . import rules
+        text = rules.for_job(spec)
+    except Exception:  # noqa: BLE001 - a bad rule file must not fail a job
+        return ""
+    return f"\n\n{text}" if text else ""
+
+
 class Crew:
     def __init__(self, cfg: Optional[Config] = None, chat_factory=None):
         self.cfg = cfg or load_config()
@@ -341,7 +351,8 @@ class Crew:
                 max_tokens=job["budget"]["max_tokens"],
                 fetch_enabled=bool(self.cfg.fetch_allowlist), log=log_event,
                 context_tokens=job["budget"].get("context_tokens"),
-                addenda=personnel.system_addenda(staff, job["assigned_to"]) if staff else "",
+                addenda=(personnel.system_addenda(staff, job["assigned_to"]) if staff else "")
+                + _job_rules(spec),
                 leash=personnel.leash(staff, job["assigned_to"]) if staff else None,
                 can_ask=can_ask)
         except Exception as e:  # noqa: BLE001 - a job failure, not a crash
@@ -701,6 +712,20 @@ class Crew:
         self.store.log(node, "system", job_id)
         return True
 
+    def _tick_schedule(self) -> None:
+        """Due reminders and timed jobs (crew/schedule.py, Kimi), at most once a minute.
+        Several workers may tick: schedule.fire_once lets exactly one fire an occurrence."""
+        if time.time() - getattr(self, "_schedule_at", 0.0) < 60:
+            return
+        self._schedule_at = time.time()
+        try:
+            from . import schedule
+            from .runners.night_shift import notify
+            schedule.tick(Path(self.cfg.state_home) / "schedule", dt.datetime.now(), notify,
+                          lambda spec: self.submit(spec, "schedule")["task_id"])
+        except Exception as exc:  # noqa: BLE001 - a reminder must never stop the worker
+            self._note_worker_error(exc)
+
     def work_forever(self, poll_seconds: float = 3.0, stop_file: Optional[Path] = None) -> None:
         """Run jobs until stopped. A job runs to its end inside tick(), so a
         `stop_file` seen between ticks stops the worker without cutting a job
@@ -714,6 +739,7 @@ class Crew:
                     pass
                 return
             self._hold = 0.0
+            self._tick_schedule()
             try:
                 ran = self.tick()
             except Exception as exc:  # noqa: BLE001 - keep the worker alive

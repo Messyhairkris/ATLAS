@@ -307,11 +307,15 @@ def render(pa: str, task: str = "", staff: Optional[dict] = None,
     tail = (["## This session's task", task.strip(), ""] if task.strip() else
             ["## This session's task", "- The PM's first message sets it.", ""])
 
-    parts = [head, rules, live, where, skill_part, tail]
+    # the crew's rules (crew/rules.py), rendered ONCE from the rules folder
+    from crew import rules as crew_rules
+    crew_rules_text = crew_rules.for_brief()
+    crew_rules_part = [crew_rules_text, ""] if crew_rules_text else []
+    parts = [head, rules, crew_rules_part, live, where, skill_part, tail]
     text = "\n".join(line for part in parts for line in part)
     if len(text) > cap:
         # drop the lowest-priority detail first: the skills list, then the roster's notes
-        parts[4] = ["## Skills", f"- Listed in {SKILL_DIRS[0]} and {CRUSH_SKILLS} "
+        parts[5] = ["## Skills", f"- Listed in {SKILL_DIRS[0]} and {CRUSH_SKILLS} "
                     f"(cut to keep this brief under {cap} characters).", ""]
         text = "\n".join(line for part in parts for line in part)
     if len(text) > cap:
