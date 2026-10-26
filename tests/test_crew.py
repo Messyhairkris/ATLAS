@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "v3-service"))
 from crew.config import Config, CrewError  # noqa: E402
 from crew.core import Crew  # noqa: E402
 from crew import playbook  # noqa: E402
+from crew.store import Store  # noqa: E402
 
 INDEX_OK = """SUBMIT
 ```INDEX.md
@@ -979,6 +980,186 @@ class SafetyTests(CrewTestCase):
         (c.store.claims_dir / "job-x.lock").write_text(
             json.dumps({"owner": "dead", "lease_until": time.time() - 1}))
         self.assertTrue(c.store.try_claim("job-x"))
+
+
+class SlowModel:
+    """The first model call is long and never renews the claim itself (a 15-minute
+    Synthetic call, or a gate's test run); later calls are quick. Every call returns a
+    passing index."""
+
+    def __init__(self, delay):
+        self.delay, self.calls = delay, 0
+
+    def factory(self, model, job_id, task_type, persona, renew):
+        def chat(messages, n):
+            self.calls += 1
+            if self.calls == 1:
+                time.sleep(self.delay)
+            return reply(INDEX_OK)
+        return chat
+
+
+class ClaimHeartbeatTests(CrewTestCase):
+    """2026-10-25 (Gordon, from a PA chat): a job ran twice. The claim's lease was
+    renewed only when a model call began; a call or gate run longer than the lease let
+    another worker reclaim the job and run it again while the first still worked."""
+
+    def setUp(self):
+        super().setUp()
+        # Reading a claim file just written can stall ~1.5 s on this machine (measured
+        # 2026-10-25, most likely the virus scanner), so a test lease under that flakes.
+        # The real lease is 180 s, renewed every 60 s.
+        self.cfg.defaults["lease_seconds"] = 2.0
+
+    def _race(self, slow):
+        """Worker A runs the job; worker B scans the queue all through A's long call.
+        Liveness is unknown (as without psutil), so only the lease can protect A."""
+        from unittest import mock
+        import threading
+        a = Crew(self.cfg, chat_factory=slow.factory)
+        b = Crew(self.cfg, chat_factory=slow.factory)
+        b.store.owner = "another-worker-1"
+        job = self.submit_index(a, exclude=["INDEX.md"])
+        ran_by_b, late_scans, beats = [], 0, []
+        real_renew = Store.renew
+
+        def renew(store, job_id):
+            ok = real_renew(store, job_id)
+            if store is a.store and ok:
+                beats.append(time.time())       # when A's lease was last pushed forward
+            return ok
+        with mock.patch("crew.store._process_started", return_value=None), \
+                mock.patch.object(Store, "renew", renew):
+            t = threading.Thread(target=a.tick)
+            t.start()
+            # A must hold the job before B looks (a slow start would let B take a READY job)
+            deadline = time.time() + 30
+            while a.store.load(job["task_id"])["status"] != "in_progress" and time.time() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(a.store.load(job["task_id"])["status"], "in_progress", "worker A never started the job")
+            start = time.time()
+            beats.append(start)
+            lapsed = start + self.cfg.defaults["lease_seconds"]      # an unrenewed lease is gone
+            # B scans for as long as A works (not a fixed window: a stalled scan must not
+            # end the race before it has looked)
+            while t.is_alive():
+                began = time.time()
+                ran = b.tick()
+                if ran or (began > lapsed and t.is_alive()):
+                    late_scans += 1        # B looked while A was still working, past the lease
+                if ran:
+                    ran_by_b.append(ran)
+                time.sleep(0.05)
+            t.join(timeout=15)
+        if late_scans == 0:
+            # without a scan after the lease would have lapsed, the race proves nothing
+            self.skipTest("worker B was stalled through the whole window: this run cannot tell")
+        return job, ran_by_b, a, beats
+
+    def _heartbeat_kept_up(self, beats):
+        """The longest stretch A's lease went without renewal. A file read can stall here
+        for seconds (the virus scanner); a stall longer than the lease leaves the race
+        inconclusive, not failed - the real lease is 180 s."""
+        gap = max((b - a for a, b in zip(beats, beats[1:])), default=0.0)
+        if gap >= self.cfg.defaults["lease_seconds"]:
+            self.skipTest(f"the machine stalled {gap:.1f} s, past the {self.cfg.defaults['lease_seconds']} s "
+                          f"test lease: this run cannot tell")
+
+    def test_a_job_that_outlasts_its_lease_is_not_run_twice(self):
+        slow = SlowModel(6.0)                            # three leases long
+        job, ran_by_b, a, beats = self._race(slow)
+        self._heartbeat_kept_up(beats)
+        self.assertGreaterEqual(len(beats), 4, "the heartbeat renewed the lease all through the call")
+        self.assertEqual(ran_by_b, [], "the other worker must not reclaim a running job")
+        self.assertEqual(slow.calls, 1)
+        final = a.store.load(job["task_id"])
+        self.assertEqual((final["status"], len(final["runs"])), ("review", 1))
+        types = [n["type"] for n in a.store.nodes_for(job["task_id"])]
+        self.assertNotIn("task_reclaimed", types)
+        self.assertNotIn("claim_lost", types)
+        self.assertFalse(a.store.claim_active(job["task_id"]), "released when the job ended")
+
+    def test_without_the_heartbeat_the_same_race_runs_the_job_twice(self):
+        """The control: proves the race above can catch the bug."""
+        import contextlib
+        import threading
+        from unittest import mock
+        slow = SlowModel(6.0)
+        with mock.patch("crew.store.Store.keep", lambda self, job_id: contextlib.nullcontext(threading.Event())):
+            job, ran_by_b, _, _ = self._race(slow)
+        self.assertEqual(ran_by_b, [job["task_id"]], "B reclaims the job and runs it again")
+        self.assertEqual(slow.calls, 2)
+
+    def test_the_heartbeat_keeps_moving_the_lease_and_stops_when_the_work_ends(self):
+        from unittest import mock
+        c = self.crew([])
+        self.assertTrue(c.store.try_claim("job-h"))
+        path = c.store.claims_dir / "job-h.lock"
+        first = json.loads(path.read_text())["lease_until"]
+        beats, real_renew = [], Store.renew
+
+        def renew(store, job_id):
+            ok = real_renew(store, job_id)
+            beats.append(time.time())
+            return ok
+        with mock.patch.object(Store, "renew", renew):
+            start = time.time()
+            with c.store.keep("job-h") as lost:
+                time.sleep(2.5)                  # beats at about 0.7, 1.3 and 2.0 s
+            ended, beats_at_end = time.time(), len(beats)
+            time.sleep(1.5)                      # two beats' worth after the work
+        self._heartbeat_kept_up([start] + beats[:beats_at_end] + [ended])
+        self.assertGreaterEqual(beats_at_end, 2)
+        self.assertGreater(json.loads(path.read_text())["lease_until"], first + 0.5, "the lease moved forward")
+        self.assertFalse(lost.is_set())
+        self.assertEqual(len(beats), beats_at_end, "no beat after the work ended")
+
+    def test_renew_and_release_leave_another_workers_claim_alone(self):
+        c = self.crew([])
+        theirs = {"owner": "another-worker-1", "pid": 0, "since": time.time(), "lease_until": time.time() + 60}
+        (c.store.claims_dir / "job-o.lock").write_text(json.dumps(theirs))
+        self.assertFalse(c.store.renew("job-o"))
+        c.store.release("job-o")
+        self.assertEqual(json.loads((c.store.claims_dir / "job-o.lock").read_text()), theirs)
+        with c.store.keep("job-o") as lost:
+            found = lost.wait(15)            # the first beat, however slow the disk is today
+        self.assertTrue(found, "a heartbeat that finds another owner says so")
+
+    def test_a_lapsed_lease_counts_while_its_owner_lives_and_not_after(self):
+        import subprocess
+        c = self.crew([])
+        path = c.store.claims_dir / "job-l.lock"
+        now = time.time()
+
+        def claim(pid, since):
+            path.write_text(json.dumps({"owner": "w", "pid": pid, "since": since, "lease_until": now - 1}))
+
+        claim(os.getpid(), now)                          # alive: a PC waking from sleep
+        self.assertTrue(c.store.claim_active("job-l"))
+        self.assertFalse(c.store.try_claim("job-l"))
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        claim(dead.pid, now - 5)                         # its worker exited
+        self.assertFalse(c.store.claim_active("job-l"))
+        import psutil
+        claim(os.getpid(), psutil.Process().create_time() - 60)   # the pid now belongs to a newer process
+        self.assertFalse(c.store.claim_active("job-l"))
+        self.cfg.defaults["claim_max_hours"] = 0.001     # 3.6 s
+        claim(os.getpid(), now - 10)                     # alive but held too long: hung
+        self.assertFalse(c.store.claim_active("job-l"))
+        self.assertTrue(c.store.try_claim("job-l"))
+
+    def test_an_unreadable_claim_is_judged_by_its_age_not_deleted(self):
+        self.cfg.defaults["lease_seconds"] = 60          # no clock race in this one
+        c = self.crew([])
+        path = c.store.claims_dir / "job-u.lock"
+        path.write_text("")                              # created, never filled
+        self.assertTrue(c.store.claim_active("job-u"), "fresh: it may be mid-write")
+        self.assertFalse(c.store.try_claim("job-u"))
+        old = time.time() - 120
+        os.utime(path, (old, old))
+        self.assertFalse(c.store.claim_active("job-u"))
+        self.assertTrue(c.store.try_claim("job-u"))
 
 
 class RosterTests(CrewTestCase):

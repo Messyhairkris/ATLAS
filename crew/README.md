@@ -130,6 +130,8 @@ Every stdio MCP server, `crew` included, starts behind
 
 Both clients share one queue (`runs/crew/`). Each server process runs a worker. Exclusive claims with leases decide who works which job, and a job whose worker died is reclaimed when its lease expires. `CREW_WORKER=0` starts a server without a worker.
 
+A running job's claim is renewed on a heartbeat of its own, every third of `lease_seconds` (180 s), whatever the job is doing (`Store.keep`). Until 2026-10-25 it was renewed only when a model call began, so a long call or gate run outlasted the lease, another worker reclaimed the job and ran it a second time (Gordon found it: t11's duplicate run). A claim records its owner's pid and start time: a lapsed lease whose owner process is still alive (a PC waking from sleep) is not reclaimed, and renew and release touch only a claim the process still owns. After `claim_max_hours` (6) the heartbeat stops, so a hung job is reclaimed in the end. Workers started before the fix run the old rules until restarted.
+
 ## MCP tools
 
 `crew_task_types` · `crew_submit` · `crew_status` (long-poll with `wait_seconds`) · `crew_result` · `crew_review` · `crew_inbox` · `crew_roster` · `crew_playbook` · `crew_budget`

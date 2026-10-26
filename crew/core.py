@@ -236,7 +236,19 @@ class Crew:
 
     # -- run -------------------------------------------------------------------------
     def run_job(self, job_id: str) -> dict:
-        """Run one job; the caller must hold its claim."""
+        """Run one job; the caller must hold its claim. The claim is renewed on a
+        heartbeat for as long as the job runs (store.keep): renewing it only when a
+        model call began let a long call or gate run outlast the lease, and another
+        worker ran the job a second time (2026-10-25)."""
+        with self.store.keep(job_id) as lost:
+            brief = self._run_job(job_id)
+        if lost.is_set():
+            # Only a worker frozen past its lease with its own liveness unknown
+            # (no psutil) gets here; say so rather than let it pass unseen.
+            self.store.log("claim_lost", "system", job_id, owner=self.store.owner)
+        return brief
+
+    def _run_job(self, job_id: str) -> dict:
         job = self.store.load(job_id)
         if job["status"] != READY:
             raise CrewError(f"{job_id} is {job['status']}, not ready")
@@ -548,9 +560,9 @@ class Crew:
                     jobs.get(d, {}).get("status") == COMPLETED for d in j["dependencies"]):
                 self._transition(j["task_id"], BLOCKED, READY, "task_unblocked")
             elif j["status"] == IN_PROGRESS and not self.store.claim_active(j["task_id"]):
-                # Worker died mid-job and its lease expired. The snapshot above
-                # may be stale (the worker may have just FINISHED and released
-                # its claim), so _transition re-reads before writing.
+                # Worker died mid-job: its lease ran out and its process is gone. The
+                # snapshot above may be stale (the worker may have just FINISHED and
+                # released its claim), so _transition re-reads before writing.
                 self._transition(j["task_id"], IN_PROGRESS, READY, "task_reclaimed")
         jobs = {j["task_id"]: j for j in self.store.all_jobs()}   # post-transition view
         for j in sorted(jobs.values(), key=lambda x: x["created_at"]):

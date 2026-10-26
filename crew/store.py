@@ -11,8 +11,18 @@ one queue on the same machine.
 Claims are the proto of CrossTalk's MAIN-arbitrated task_claim: O_EXCL file
 creation is the arbiter, and a lease (renewed while working) lets another
 process reclaim a job whose worker died.
+
+2026-10-25 (Gordon, from a PA chat): a job ran twice. The lease was renewed only
+when a model call began, and one call may take 15 minutes; a gate run renewed
+nothing. Another worker saw the lease run out, reclaimed the job and ran it again
+while the first was still working, and the first then renewed and released the
+claim it no longer owned. Now `keep()` renews the claim on a heartbeat of its own
+for as long as the job runs, renew and release touch only a claim this process
+owns, and a lapsed lease whose owner process is still alive (a PC waking from
+sleep before the heartbeat has run) is not taken for a dead worker.
 """
 
+import contextlib
 import datetime
 import json
 import os
@@ -35,6 +45,17 @@ _write_lock = threading.Lock()
 
 def now_iso() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _process_started(pid: int) -> Optional[float]:
+    """When process `pid` started (epoch seconds), or None if it is gone or we cannot
+    tell (psutil missing). The start time tells a live owner from a new process that
+    was given a dead owner's pid."""
+    try:
+        import psutil
+        return psutil.Process(int(pid)).create_time()
+    except Exception:  # noqa: BLE001 - no such process, no access, no psutil
+        return None
 
 
 def _atomic_write(path: Path, text: str, attempts: int = 20) -> None:
@@ -81,11 +102,21 @@ class Store:
             raise CrewError(f"bad job id: {job_id!r}")
         return self.jobs_dir / job_id
 
-    def load(self, job_id: str) -> dict:
+    def load(self, job_id: str, attempts: int = 20) -> dict:
+        """The job. A read can meet another process's write-then-rename of the same
+        file (Windows: PermissionError for those milliseconds); retry briefly, as
+        _atomic_write does, instead of failing the scan (2026-10-25, two workers)."""
         path = self.job_dir(job_id) / "job.json"
         if not path.exists():
             raise CrewError(f"no such job: {job_id}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        for i in range(attempts):
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except PermissionError:
+                if i == attempts - 1:
+                    raise
+                time.sleep(0.05 * (i + 1))
+        raise CrewError(f"cannot read {path}")
 
     def save(self, job: dict) -> None:
         job["updated_at"] = now_iso()
@@ -131,6 +162,40 @@ class Store:
     def _claim_path(self, job_id: str) -> Path:
         return self.claims_dir / f"{job_id}.lock"
 
+    def _read_claim(self, job_id: str) -> Optional[dict]:
+        """The claim, or None when there is none. One that cannot be read (being
+        replaced this instant, or left empty by a crash between creating and filling
+        it) is read again, then judged by its age: a lease taken to begin when the
+        file was last written, and no owner - it is never mistaken for a dead one
+        while it may still be live."""
+        path = self._claim_path(job_id)
+        for attempt in range(3):
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return None
+            except (OSError, json.JSONDecodeError):
+                time.sleep(0.02 * (attempt + 1))
+        try:
+            return {"lease_until": path.stat().st_mtime + self.cfg.defaults["lease_seconds"]}
+        except OSError:
+            return None
+
+    def _held(self, claim: dict) -> bool:
+        """Is this claim still somebody's? Its lease runs; or the lease lapsed but
+        the process that took it is alive (the same process: it started before the
+        claim was taken) and has held it for less than claim_max_hours. A claim with
+        no pid (written before 2026-10-25) lives by its lease alone."""
+        now = time.time()
+        if claim.get("lease_until", 0) > now:
+            return True
+        pid, since = claim.get("pid"), float(claim.get("since") or 0)
+        cap = float(self.cfg.defaults.get("claim_max_hours", 6)) * 3600
+        if not pid or now - since > cap:
+            return False
+        started = _process_started(pid)
+        return started is not None and started <= since + 1.0
+
     def try_claim(self, job_id: str) -> bool:
         path = self._claim_path(job_id)
         lease = self.cfg.defaults["lease_seconds"]
@@ -138,45 +203,79 @@ class Store:
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                try:
-                    held = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    held = {"lease_until": 0}
-                if held.get("lease_until", 0) > time.time():
+                held = self._read_claim(job_id) or {"lease_until": 0}
+                if self._held(held):
                     return False
                 try:
-                    path.unlink()          # expired lease: reclaim
+                    path.unlink()          # its worker is gone: reclaim
                 except OSError:
                     return False
                 continue
+            now = time.time()
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump({"owner": self.owner,
-                           "lease_until": time.time() + lease}, fh)
+                json.dump({"owner": self.owner, "pid": os.getpid(), "since": now,
+                           "lease_until": now + lease}, fh)
             return True
         return False
 
-    def renew(self, job_id: str) -> None:
-        """Extend the lease. Best-effort: the lease is minutes long and
-        renewed every model call, so one failed renewal must never kill the
-        job it protects (2026-09-19: it did, under parallel runs)."""
-        path = self._claim_path(job_id)
+    def renew(self, job_id: str) -> bool:
+        """Extend the lease of a claim this process owns; False when it is not
+        ours any more (gone, or another worker's). Best-effort: one failed write
+        must never kill the job it protects (2026-09-19: it did, under parallel
+        runs), and the heartbeat tries again within a third of the lease."""
+        held = self._read_claim(job_id)
+        if held is None:
+            return False
+        if "owner" not in held:
+            return True                    # unreadable just now: try at the next beat
+        if held["owner"] != self.owner:
+            return False
+        held["lease_until"] = time.time() + self.cfg.defaults["lease_seconds"]
         try:
-            _atomic_write(path, json.dumps({
-                "owner": self.owner,
-                "lease_until": time.time() + self.cfg.defaults["lease_seconds"]}))
+            _atomic_write(self._claim_path(job_id), json.dumps(held))
         except OSError:
             pass
+        return True
 
     def release(self, job_id: str) -> None:
+        """Give up a claim this process owns. Another worker's claim is left alone:
+        a worker that lost its claim must not free the job from under the new owner."""
+        held = self._read_claim(job_id)
+        if held is not None and held.get("owner") != self.owner and self._held(held):
+            return
         try:
             self._claim_path(job_id).unlink()
         except OSError:
             pass
 
     def claim_active(self, job_id: str) -> bool:
-        path = self._claim_path(job_id)
+        held = self._read_claim(job_id)
+        return held is not None and self._held(held)
+
+    @contextlib.contextmanager
+    def keep(self, job_id: str):
+        """Hold the claim for as long as the work inside runs: renewed every third
+        of the lease on a thread of its own, whatever the job is doing (a 15-minute
+        model call, a gate's test run). Yields an Event that is set if the claim
+        was found to be someone else's. Stops renewing after claim_max_hours, so a
+        hung job is reclaimed in the end."""
+        lease = float(self.cfg.defaults["lease_seconds"])
+        cap = float(self.cfg.defaults.get("claim_max_hours", 6)) * 3600
+        every, started = max(0.05, lease / 3), time.time()
+        stop, lost = threading.Event(), threading.Event()
+
+        def beat() -> None:
+            while not stop.wait(every):
+                if time.time() - started > cap:
+                    return
+                if not self.renew(job_id):
+                    lost.set()
+                    return
+
+        thread = threading.Thread(target=beat, name=f"claim-{job_id}", daemon=True)
+        thread.start()
         try:
-            held = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        return held.get("lease_until", 0) > time.time()
+            yield lost
+        finally:
+            stop.set()
+            thread.join(timeout=every + 1)
