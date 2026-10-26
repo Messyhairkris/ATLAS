@@ -19,7 +19,8 @@
     "D:/Splat Portfolio Flash drive",
     "D:/Touch_Up_Portable",
     "D:/Looking for work tool kit",
-    "C:/Users/user/MakerCAD"
+    "C:/Users/user/MakerCAD",
+    "C:/Users/user/.crush"
   ],
   "write_roots": [
     "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki",
@@ -64,7 +65,16 @@
     "**/.octofriend/backups/**",
     "**/.octofriend/logs/**",
     "**/.octofriend/bridge/**",
-    "**/.octofriend/memory/**"
+    "**/.octofriend/memory/**",
+    "**/.crush/crush.db*",
+    "**/.crush/*.log",
+    "**/.crush/logs/**",
+    "**/.crush/backups/**",
+    "**/.crush/yeti-compact/backups/**",
+    "**/.crush/yeti-compact/reports/**",
+    "**/.crush/oauth_shim*",
+    "**/.crush/*config*.json",
+    "**/.crush/memory/**"
   ],
   "fetch_allowlist": [
     "github.com",
