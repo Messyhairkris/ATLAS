@@ -162,6 +162,9 @@ def main(argv=None) -> int:
     if scope.get("builds") is False:
         raise SystemExit(f"{a.pa} is not a building PA (personnel.json pa.scopes.{a.pa}.builds)")
     a.rounds = min(a.rounds, int(scope.get("max_rounds", a.rounds)))
+    from crew import guard
+    lim = guard.limits(a.pa, "build")
+    a.rounds = min(a.rounds, int(lim.get("max_check_rounds", a.rounds)))
     repo = Path(a.repo).resolve()
     ws = worktree(repo, a.branch, a.base)
     home = Path(load_config().state_home) / "pa" / "builds" / ws.name
@@ -203,7 +206,7 @@ def main(argv=None) -> int:
             "worktree": str(ws), "started": started, **extra}, indent=1), encoding="utf-8")
 
     session, raw_all, err_all, checks_text = None, "", "", ""
-    message, rounds, passed, outside = feature, 0, False, []
+    message, rounds, passed, outside, stopped = feature, 0, False, [], ""
     t0 = time.time()
     while rounds < 1 + a.rounds:
         rounds += 1
@@ -211,22 +214,31 @@ def main(argv=None) -> int:
                "only inside its own worktree")
         argv = [OPENCODE, "run", message, "--agent", "pa-build", "--format", "json",
                 "--dir", str(ws)] + (["--session", session] if session else [])
-        p = subprocess.Popen(argv, cwd=str(ws), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, encoding="utf-8", errors="replace", env=env)
-        try:
-            out, err = p.communicate(timeout=a.timeout)
-        except subprocess.TimeoutExpired:          # kill the whole tree (opencode_trial)
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
-            out, err = "", "timeout"
+        # Output goes to files so the guard can poll the job's database while it runs.
+        out_f, err_f = home / f"round{rounds}.jsonl", home / f"round{rounds}.stderr.txt"
+        with open(out_f, "w", encoding="utf-8") as fo, open(err_f, "w", encoding="utf-8") as fe:
+            p = subprocess.Popen(argv, cwd=str(ws), stdout=fo, stderr=fe, env=env)
+            stopped = guard.run(p, Path(env["XDG_DATA_HOME"]) / "opencode" / "opencode.db",
+                                {**lim, "max_minutes": min(lim.get("max_minutes", 1e9),
+                                                           (time.time() - t0 + a.timeout) / 60)},
+                                t0, lambda c: status("running", round=rounds, guard=c,
+                                                     you_might_see="an opencode.exe process; "
+                                                     "it works only inside its own worktree"))
+        out = out_f.read_text(encoding="utf-8", errors="replace")
+        err = err_f.read_text(encoding="utf-8", errors="replace")
         raw_all, err_all = raw_all + (out or ""), err_all + (err or "")
         events = _events(out or "")
         session = session or next((e["sessionID"] for e in events if e.get("sessionID")), None)
         outside = _writes_outside(events, ws)
-        if outside:
+        if outside or stopped:
             break
+        previous = checks_text
         passed, checks_text = run_checks(ws, a.check, env, 1800)
         if passed or not session or not _actionable(checks_text):
             break                      # a failure with no output gives the PA nothing to fix
+        if checks_text == previous:
+            stopped = "the same check failure twice in a row"
+            break
         message = ("THE CHECKS FAILED. This is machine output, not an opinion. Fix the cause, "
                    "run the checks again, update PA_REPORT.md, then stop.\n\n" + checks_text)
     seconds = round(time.time() - t0, 1)
@@ -246,12 +258,13 @@ def main(argv=None) -> int:
     stat = subprocess.run(["git", "-C", str(ws), "status", "--short"], capture_output=True,
                           text=True).stdout
     result = {"pa": a.pa, "branch": a.branch, "worktree": str(ws), "passed": passed,
-              "rounds": rounds, "seconds": seconds, "usage": usage, "session": session,
+              "stopped_by_guard": stopped, "rounds": rounds, "seconds": seconds, "usage": usage, "session": session,
               "wrote_outside": outside, "changed": stat.splitlines(),
               "report": (ws / "PA_REPORT.md").is_file()}
     (home / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
-    status("finished", passed=passed, finished=dt.datetime.now().isoformat(timespec="seconds"))
-    print(json.dumps({k: result[k] for k in ("pa", "branch", "passed", "rounds", "seconds")}))
+    status("finished", passed=passed, stopped_by_guard=stopped, finished=dt.datetime.now().isoformat(timespec="seconds"))
+    print(json.dumps({k: result[k] for k in ("pa", "branch", "passed", "stopped_by_guard",
+                                              "rounds", "seconds")}))
     return 0 if passed else 1
 
 

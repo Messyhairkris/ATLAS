@@ -1,0 +1,25 @@
+{
+ "_about": "Limits the guard (crew/guard.py) enforces on every OpenCode job while it runs. No AI reads this: software counts and stops the job. For each limit the TIGHTEST of defaults, the job type and the member wins. tokens = fresh input + output + cached input re-read (every step re-sends the conversation, so cached input is most of the bill). Kris edits these; nothing else needs to change.",
+ "defaults": {
+  "max_steps": 40,
+  "max_tokens": 2000000,
+  "max_fresh_tokens": 300000,
+  "max_minutes": 45,
+  "max_tool_errors": 10,
+  "max_errors_in_a_row": 4,
+  "max_same_error": 3,
+  "max_check_rounds": 1,
+  "poll_seconds": 15
+ },
+ "jobs": {
+  "build": {},
+  "fix": {"max_steps": 15, "max_tokens": 800000, "max_check_rounds": 1},
+  "unify": {"max_steps": 20, "max_check_rounds": 0}
+ },
+ "members": {
+  "Kimi": {"max_steps": 20, "max_tokens": 600000, "max_fresh_tokens": 120000,
+           "max_tool_errors": 5, "max_check_rounds": 0},
+  "Qwen": {"max_steps": 40, "max_tokens": 2000000},
+  "Gordon": {"max_steps": 60, "max_tokens": 3000000}
+ }
+}
