@@ -63,7 +63,8 @@ def history(jobs_dir: Path) -> Dict[tuple, List[dict]]:
             continue
         out.setdefault((j.get("assigned_to"), j.get("task_type")), []).append(
             {"job": j.get("task_id"), "passed": bool(r["passed"]),
-             "requests": int(r.get("requests") or 0), "tokens": int(r.get("tokens") or 0)})
+             "requests": int(r.get("requests") or 0), "tokens": int(r.get("tokens") or 0),
+             "stop_reason": r.get("stop_reason")})
     return out
 
 
@@ -90,13 +91,24 @@ def budget_for(data: dict, name: str, task_type: str,
     trial = trial or {}
     runs = hist.get((name, task_type), [])
     passing = [r["requests"] for r in runs if r["passed"] and r["requests"]]
+    # A job that ran out of a resource is evidence of what this work costs, and
+    # counting only PASSING jobs lets a long tail of cheap local runs set the
+    # budget for fetch-heavy work of the same task type (Barry, scout, 2026-10-26:
+    # thirty one-request local scouts, then two fetch jobs at 5-8 requests and
+    # 110-120k tokens, both cut off). Half again above the worst run that ran out.
+    spent = [r for r in runs
+             if r.get("stop_reason") in ("budget_tokens", "budget_requests")]
+    cut_tok = sorted(r["tokens"] for r in spent if r["tokens"])
+    cut_req = sorted(r["requests"] for r in spent if r["requests"])
+    floor_tok = int(cut_tok[-1] * 1.5) if cut_tok else 0
+    floor_req = int(cut_req[-1] * 1.5) if cut_req else 0
     base = int((data.get("task_baselines") or {}).get(task_type, 12))
     if len(passing) >= MIN_SAMPLES:
         requests, source = _p75(passing) + HEADROOM, f"p75 of {len(passing)} passing jobs + {HEADROOM}"
     else:
         requests, source = base, f"task baseline ({len(passing)} passing jobs so far)"
     requests += int(trial.get("extra_requests", 0))
-    requests = max(MIN_REQUESTS, min(MAX_REQUESTS, requests))
+    requests = max(MIN_REQUESTS, min(MAX_REQUESTS, max(requests, floor_req)))
     ctx = working_context_tokens(data, name, trial.get("context_ceiling"))
     # Tokens: a runaway stop, not a diet - but tokens are credits, so the
     # member's own history sets it where there is one: twice what its 90th
@@ -110,13 +122,13 @@ def budget_for(data: dict, name: str, task_type: str,
     used = sorted(r["tokens"] for r in runs if r["passed"] and r["tokens"])
     if len(used) >= MIN_SAMPLES:
         p90 = used[min(len(used) - 1, math.ceil(0.9 * len(used)) - 1)]
-        max_tokens = min(upper, max(60000, int(2 * p90 * factor)))
+        max_tokens = min(upper, max(60000, int(2 * p90 * factor), floor_tok))
     else:
         # per request: 15% of the working context, but never more than 30k - with
         # full context (2026-09-26) a history-less 1M-window member would
         # otherwise get millions of tokens before its first measured job
         per_request = min(ctx * 0.15, 30000)
-        max_tokens = min(upper, max(60000, int(requests * per_request * factor)))
+        max_tokens = min(upper, max(60000, int(requests * per_request * factor), floor_tok))
     pol = data.get("context_policy") or {}
     obs_chars = int(min(24000, max(6000, ctx * float(pol.get("chars_per_token", 3.5)) / 12)))
     return {"max_requests": requests, "max_tokens": max_tokens,

@@ -15,3 +15,4 @@ Entries are rules learned from real runs; follow every one.
 - [sc-007] (from rd-020) Never write a URL you did not fetch this job.
 - [sc-008] (seed) When language-server tools are listed, use symbols(path) for a file's outline and definition/references(path, name) to follow a name - cheaper and more exact than reading whole files.
 - [sc-009] (review Claude job-20260925-004036-95d1) Give the answer paragraph and the findings you already have by request 8; the budget is spent on reading, and both 2026-09-25 runs submitted on their final request.
+- [sc-010] (review PA 2026-10-26, Barry jobs t17/t18) Cap the work, not the coverage: 8-10 findings, ONE line each, then submit. Counting every claim in the source is what exhausts the token ceiling before anything is written - five runs in a row stopped that way. Write the findings you have: a run the ceiling cuts off loses all of them.
