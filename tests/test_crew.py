@@ -77,6 +77,14 @@ class CrewTestCase(unittest.TestCase):
         os.environ["ATLAS_QUOTA_FILE"] = str(self.tmp / "no-quota-reading.json")
         os.environ["ATLAS_PROVIDER"] = "synthetic"
         os.environ.pop("ATLAS_DENY_MODELS", None)
+        # Config gives CREW_HOME precedence over the dict it is handed, and the
+        # engine sets CREW_HOME for the live chat. Left in place, every test below
+        # writes into the REAL runs/crew: that is how eight phantom Hoss jobs
+        # ("Index lab", "tidy") reached the live queue on 2026-10-26, where a live
+        # worker claimed one and spent six real requests on it. It is also why the
+        # write-roots tests fail: the state home resolved live while write_roots
+        # stayed in the temp dir. tearDown restores os.environ, so this is scoped.
+        os.environ.pop("CREW_HOME", None)
         self.cfg = Config({
             "state_home": str(self.tmp / "state"),
             "read_roots": [str(self.vault)],
