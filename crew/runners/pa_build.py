@@ -125,6 +125,15 @@ def run_checks(cwd: Path, checks: list, env: dict, timeout_s: int) -> tuple:
     return ok, "\n\n".join(report)
 
 
+def _actionable(report: str) -> bool:
+    """True when some failed check printed something the PA can act on."""
+    for block in report.split("\n\n$ "):
+        head, _, text = block.partition("\n-> FAILED")
+        if _ and text.strip():
+            return True
+    return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--pa", required=True)
@@ -147,6 +156,12 @@ def main(argv=None) -> int:
     scope = (pa_cfg.get("scopes") or {}).get(a.pa) or {}
     if a.pa not in (pa_cfg.get("approved") or []) or scope.get("runtime") != "opencode":
         raise SystemExit(f"{a.pa} is not an approved OpenCode PA")
+    # Kimi's Inbox build ran 3 rounds / 80 steps / 8.6M tokens on 2026-10-26 and
+    # drained the week's credit: a member marked builds=false is refused here, and
+    # max_rounds caps the feedback rounds whatever --rounds says.
+    if scope.get("builds") is False:
+        raise SystemExit(f"{a.pa} is not a building PA (personnel.json pa.scopes.{a.pa}.builds)")
+    a.rounds = min(a.rounds, int(scope.get("max_rounds", a.rounds)))
     repo = Path(a.repo).resolve()
     ws = worktree(repo, a.branch, a.base)
     home = Path(load_config().state_home) / "pa" / "builds" / ws.name
@@ -210,8 +225,8 @@ def main(argv=None) -> int:
         if outside:
             break
         passed, checks_text = run_checks(ws, a.check, env, 1800)
-        if passed or not session:
-            break
+        if passed or not session or not _actionable(checks_text):
+            break                      # a failure with no output gives the PA nothing to fix
         message = ("THE CHECKS FAILED. This is machine output, not an opinion. Fix the cause, "
                    "run the checks again, update PA_REPORT.md, then stop.\n\n" + checks_text)
     seconds = round(time.time() - t0, 1)
