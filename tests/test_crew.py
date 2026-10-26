@@ -654,6 +654,139 @@ class BlindFilesTests(CrewTestCase):
         self.assertEqual(c.status(job["task_id"])["status"], "review")
 
 
+class AskAndCompactTests(CrewTestCase):
+    """Kris's picks from the ATLAS study (2026-10-26): a stuck member asks ONE question
+    instead of looping, and a long job keeps its notes and sees its token budget coming.
+    Nothing here may add text to every reply (Kris: Crush's per-call hooks bloated it)."""
+
+    F = chr(96) * 3
+    READ = '{"tool": "read_file", "args": {"path": "wiki/lab/runs/RUN-a.md"}}'
+    ASK = ('{"tool": "ask", "args": {"question": "Which run counts?", '
+           '"options": ["RUN-a", "RUN-b"]}}')
+
+    def _digest(self, score="9/12"):
+        return (f"SUBMIT\n{self.F}d.md\n---\ntitle: D\ntags: [x]\n---\n"
+                f"- Battery scored {score} [src: wiki/lab/runs/RUN-a.md]\n{self.F}")
+
+    def _submit(self, c, **extra):
+        return c.submit({"task_type": "research_digest", "title": "Battery score",
+                         "instructions": "What did the battery score?",
+                         "output": {"files": ["d.md"]}, **extra}, "Claude")["task_id"]
+
+    def test_a_question_pauses_the_job_and_an_answer_reruns_it(self):
+        c = self.crew([self.ASK,
+                       '{"tool": "ask", "args": {"question": "And again?"}}',
+                       self.READ, self._digest()])
+        jid = self._submit(c)
+        c.tick()
+        st = c.status(jid)
+        self.assertEqual(st["status"], "review")
+        self.assertEqual(st["question"], {"question": "Which run counts?",
+                                          "options": ["RUN-a", "RUN-b"]})
+        with self.assertRaises(CrewError):
+            c.review(jid, "approve", "Claude")
+        self.assertEqual([q["task_id"] for q in c.inbox()["questions"]], [jid])
+        c.review(jid, "answer", "Claude", notes="1")
+        self.assertEqual(c.inbox()["questions"], [])
+        c.tick()
+        rerun_task = self.model.seen[1][1]["content"]
+        self.assertIn("ANSWER TO YOUR QUESTION", rerun_task)
+        self.assertIn("Answer: RUN-a", rerun_task)
+        self.assertNotIn("ask(question", self.model.seen[1][0]["content"])  # one per job
+        self.assertIn("TOOL ERROR", self.model.seen[2][-1]["content"])
+        self.assertEqual(c.status(jid)["status"], "review")
+        self.assertNotIn("question", c.status(jid))
+
+    def test_no_question_to_answer_is_refused(self):
+        c = self.crew([self.READ, self._digest()])
+        jid = self._submit(c)
+        c.tick()
+        with self.assertRaises(CrewError):
+            c.review(jid, "answer", "Claude", notes="yes")
+
+    def test_a_bad_question_is_a_tool_error_not_a_pause(self):
+        c = self.crew(['{"tool": "ask", "args": {"question": "Which?", "options": ["only"]}}',
+                       self.READ, self._digest()])
+        jid = self._submit(c)
+        c.tick()
+        self.assertIn("ask: give 2 to 4 options, or none", self.model.seen[1][-1]["content"])
+        self.assertEqual(c.status(jid)["status"], "review")
+        self.assertNotIn("question", c.status(jid))
+
+    def test_a_campaign_job_is_not_offered_ask(self):
+        c = self.crew([self.ASK, self.READ, self._digest()])
+        job = c.submit({"task_type": "research_digest", "title": "t",
+                        "instructions": "What did the battery score?",
+                        "output": {"files": ["d.md"]}}, "campaign:unit")
+        c.tick()
+        self.assertNotIn("ask(question", self.model.seen[0][0]["content"])
+        self.assertIn("TOOL ERROR", self.model.seen[1][-1]["content"])
+        self.assertNotIn("question", c.status(job["task_id"]))
+
+    def test_notes_ride_on_tool_calls_and_reach_a_rerun_once(self):
+        noted = self.READ[:-1] + ', "note": "RUN-a  says\\n 9/12"}'
+        c = self.crew([noted, self._digest("7/12"), self._digest()])
+        jid = self._submit(c, budget={"max_requests": 2})
+        c.tick()
+        self.assertEqual(c.status(jid)["status"], "failed")
+        self.assertNotIn("YOUR NOTES", self.model.seen[1][-1]["content"])  # never per reply
+        c.review(jid, "revise", "Claude", retry_constraint="Quote the score as written.")
+        c.tick()
+        rerun_task = self.model.seen[2][1]["content"]
+        self.assertIn("YOUR NOTES FROM THE EARLIER RUN", rerun_task)
+        self.assertIn("- RUN-a says 9/12", rerun_task)
+
+    def test_the_ask_hint_comes_once_when_a_member_repeats_itself(self):
+        c = self.crew([self.READ, self.READ, self.READ, self._digest()])
+        self._submit(c)
+        c.tick()
+        first_repeat = self.model.seen[2][-1]["content"]
+        second_repeat = self.model.seen[3][-1]["content"]
+        self.assertIn("REPEATED CALL", first_repeat)
+        self.assertIn("STUCK?", first_repeat)
+        self.assertNotIn("STUCK?", second_repeat)
+
+    def _run(self, script, max_tokens, max_requests=8):
+        from crew.agent import run_member
+        from crew.tools import Evidence, Toolbox
+        tb = Toolbox(self.cfg, [self.vault], Evidence())
+        seen = []
+
+        def chat(messages, n):
+            seen.append(messages)
+            return reply(script.pop(0) if script else "...")
+        out = run_member(persona="Hoss", task_type="research_digest", playbook="",
+                         task_text="TASK t", expected_files=["d.md"], toolbox=tb,
+                         grade=lambda files: [{"rung": "x", "ok": True, "detail": "ok"}],
+                         chat=chat, max_requests=max_requests, max_tokens=max_tokens,
+                         fetch_enabled=False)
+        return out, seen
+
+    def test_the_budget_line_leads_the_message_only_when_it_matters(self):
+        # every FakeModel reply costs 100 tokens
+        out, seen = self._run([self.READ, '{"tool": "list_dir", "args": {}}',
+                               self._digest()], max_tokens=250)
+        self.assertFalse(seen[1][-1]["content"].startswith(("TOKENS", "LAST REPLY")))
+        self.assertTrue(seen[2][-1]["content"].startswith("LAST REPLY: 80% of this job's"))
+        self.assertTrue(out["passed"])
+
+    def test_the_last_request_is_announced_first_not_last(self):
+        out, seen = self._run([self.READ, self._digest()], max_tokens=10**9, max_requests=2)
+        self.assertTrue(seen[1][-1]["content"].startswith("LAST REPLY: this is your last reply."))
+        self.assertNotIn("you must SUBMIT now", seen[1][-1]["content"])
+
+    def test_a_trimmed_result_names_its_call_and_drops_its_budget_line(self):
+        from crew.agent import _trim_old_results
+        long = "x" * 2000
+        msgs = [{"role": "user", "content": "TOKENS: 80%\n\n" + long, "_body": long,
+                 "_result": True, "_call": ("read_file", {"path": "a.md"})}]
+        msgs += [{"role": "user", "content": "y" * 2000, "_result": True} for _ in range(3)]
+        _trim_old_results(msgs)
+        self.assertTrue(msgs[0]["content"].startswith("x" * 400 + "\n...[trimmed: read_file("))
+        self.assertNotIn("TOKENS", msgs[0]["content"])
+        self.assertEqual(msgs[3]["content"], "y" * 2000)
+
+
 class CodeTaskTests(CrewTestCase):
     """The only task types whose output is executed. These tests are the reason
     that is not reckless."""

@@ -23,6 +23,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
 from attempts import AttemptTracker  # noqa: E402
 
+from . import ask as asking  # noqa: E402
+from . import compact  # noqa: E402
 from .tools import ToolError  # noqa: E402
 
 FENCE = re.compile(r"^```([^\s`]*)[^\n]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
@@ -48,6 +50,7 @@ SYSTEM_TEMPLATE = """You are {persona}, a crew member on a human+AI team. You wo
 EVERY REPLY IS EXACTLY ONE OF:
 1. A tool call, as a single JSON object and nothing else, e.g.
    {{"tool": "search", "args": {{"pattern": "orbit", "path": "."}}}}
+   It may also carry "note": one short finding from what you read last. Old results get trimmed; your notes stay.
 2. Your submission: the word SUBMIT on its own line, then one fenced block per output file whose info string is the file name, e.g.
    SUBMIT
    ```{example_file}
@@ -59,7 +62,7 @@ TOOLS
 - list_dir(path=".")
 - read_file(path, start=1, lines=200)
 - search(pattern, path=".", max_hits=30)  (regex, case-insensitive, searches file contents)
-- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}{lsp_tools}
+- fetch_url(url, start=1, lines=120, pattern="")  (a web page as numbered lines; page with start, or give a regex pattern to list only matching lines){fetch_note}{lsp_tools}{ask_tool}
 Relative paths resolve against the first read root.
 
 BUDGET: {max_requests} replies in total for this task, tool calls and submissions included. Submit before you run out.
@@ -177,8 +180,19 @@ def _find_tool_json_at(text: str) -> Optional[Tuple[int, str, dict]]:
             except json.JSONDecodeError:
                 args = {}
         if isinstance(name, str) and isinstance(args, dict):
-            return m.start(), name, args
+            return m.start(), name, {k: v for k, v in args.items() if k != "note"}
     return None
+
+
+def call_note(text: str) -> Optional[str]:
+    """The finding a member put on its tool call ("note" beside or inside "args")."""
+    call = _find_tool_json_at(text or "")
+    if call is None:
+        return None
+    obj, _ = json.JSONDecoder().raw_decode(text[call[0]:])
+    args = obj.get("args", obj.get("arguments"))
+    note = obj.get("note", args.get("note") if isinstance(args, dict) else None)
+    return compact.clean_note(note)
 
 
 # gpt-oss was trained with a built-in "repo_browser" tool namespace. Even when
@@ -259,26 +273,30 @@ def _trim_old_results(messages: List[dict], context_tokens: Optional[int] = None
     member re-reading a file it was shown three turns ago was our trimming,
     not its memory."""
     results = [m for m in messages if m.get("_result")]
-    if context_tokens:
-        limit = int(context_tokens * CHARS_PER_TOKEN)
-        total = sum(len(m["content"]) for m in messages)
-        for m in results[:-KEEP_FULL_RESULTS]:
-            if total <= limit:
-                break
-            if not m.get("_trimmed") and len(m["content"]) > TRIMMED_CHARS:
-                total -= len(m["content"]) - TRIMMED_CHARS
-                m["content"] = (m["content"][:TRIMMED_CHARS]
-                                + "\n...[older result trimmed; call the tool again "
-                                  "if you need it]")
-                m["_trimmed"] = True
-        return
+    total = sum(len(m["content"]) for m in messages)
+    limit = int(context_tokens * CHARS_PER_TOKEN) if context_tokens else 0
     for m in results[:-KEEP_FULL_RESULTS]:
+        if context_tokens and total <= limit:
+            break
         if not m.get("_trimmed") and len(m["content"]) > TRIMMED_CHARS:
-            m["content"] = (m["content"][:TRIMMED_CHARS]
-                            + "\n...[older result trimmed; call the tool again "
-                              "if you need it]")
+            before = len(m["content"])
+            m["content"] = _trimmed(m)
             m["_trimmed"] = True
+            total -= before - len(m["content"])
 
+
+def _trimmed(m: dict) -> str:
+    """The stub an old result leaves; it names the call so the member can re-read a part.
+    The budget line that led the message is dropped with the rest (it is out of date)."""
+    if m.get("_call"):
+        return compact.stub(m["_call"][0], m["_call"][1], m.get("_body", m["content"]),
+                            TRIMMED_CHARS)
+    return (m["content"][:TRIMMED_CHARS]
+            + "\n...[older result trimmed; call the tool again if you need it]")
+
+
+ASK_TOOL = """
+- ask(question, options=[])  (ONE question per job, only when you cannot see how to go on; 0 or 2-4 short options; the job pauses until it is answered)"""
 
 LSP_TOOLS = """
 - symbols(path)  (a language server's outline of a code file: classes, functions, methods with line numbers)
@@ -293,7 +311,7 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                max_tokens: int, fetch_enabled: bool,
                log: Callable[[dict], None] = lambda e: None,
                context_tokens: Optional[int] = None, addenda: str = "",
-               leash: Optional[dict] = None) -> dict:
+               leash: Optional[dict] = None, can_ask: bool = False) -> dict:
     leash = leash or {}
     max_repeats = int(leash.get("max_repeats", MAX_REPEATS))
     max_invalid = int(leash.get("max_invalid_in_a_row", MAX_INVALID_IN_A_ROW))
@@ -302,7 +320,8 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
         persona=persona, task_type=task_type, playbook=playbook.strip(),
         max_requests=max_requests, example_file=expected_files[0],
         fetch_note="" if fetch_enabled else "  (disabled for this task)",
-        lsp_tools=LSP_TOOLS if getattr(toolbox, "lsp", None) else "") + addenda
+        lsp_tools=LSP_TOOLS if getattr(toolbox, "lsp", None) else "",
+        ask_tool=ASK_TOOL if can_ask else "") + addenda
     messages: List[dict] = [{"role": "system", "content": system},
                             {"role": "user", "content": task_text}]
     tracker = AttemptTracker()
@@ -311,8 +330,20 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
     truncations = 0
     stop_reason = None
     submissions = 0
+    last_tokens = 0
+    findings: List[str] = []     # the member's notes, kept for a re-run (compact.py)
+    question: Optional[dict] = None
+    hinted = not can_ask         # the ask hint is offered once, and only where ask exists
 
     while True:
+        # The budget line leads the message it belongs to; empty until it matters.
+        newest = messages[-1]
+        if requests and newest["role"] == "user" and not newest.get("_led"):
+            line, _last = compact.budget_line(tokens, max_tokens, last_tokens,
+                                              max_requests - requests)
+            newest["_body"] = newest["content"]
+            newest["content"] = compact.lead_with(line, newest["content"])
+            newest["_led"] = True
         if requests >= max_requests:
             stop_reason = stop_reason or "budget_requests"
             break
@@ -324,7 +355,8 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
         res = chat(wire, requests)
         requests += 1
         usage = (res.get("raw") or {}).get("usage") or {}
-        tokens += usage.get("total_tokens", 0) or 0
+        last_tokens = usage.get("total_tokens", 0) or 0
+        tokens += last_tokens
         reply = res.get("content") or ""
         left = max_requests - requests
         if _thinking_cut_off(res):
@@ -408,6 +440,17 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
         invalid_run = 0
 
         if kind == "tool":
+            if compact.add_note(findings, call_note(reply)):
+                log({"event": "note", "note": findings[-1]})
+            if a == "ask" and can_ask:
+                question, err = asking.parse_question(b)
+                if question:
+                    log({"event": "question", **question})
+                    stop_reason = "question"
+                    break
+                messages.append({"role": "user", "content":
+                                 f"TOOL ERROR {err} ({left} replies left)"})
+                continue
             key = json.dumps([a, b], sort_keys=True)
             calls[key] += 1
             if calls[key] > 1:
@@ -416,10 +459,12 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                 if repeats >= max_repeats:
                     stop_reason = "loop_repeat"
                     break
+                hint = "" if hinted else "\n" + asking.stuck_hint(False)
+                hinted = True
                 messages.append({"role": "user", "content":
                                  f"REPEATED CALL {a}: you already have that result "
                                  f"above. Take a different step or SUBMIT. "
-                                 f"({left} replies left)"})
+                                 f"({left} replies left){hint}"})
                 continue
             try:
                 out = toolbox.call(a, b)
@@ -434,10 +479,9 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                             "before a result arrives cannot use it. One tool call per "
                             "reply; SUBMIT once you have read the real result above.")
                 log({"event": "blind_files_discarded", "tool": a})
-            if left == 1:
-                content += "\nLAST REPLY: you must SUBMIT now."
             log({"event": "tool", "tool": a, "args": b, "result_chars": len(content)})
-            messages.append({"role": "user", "content": content, "_result": True})
+            messages.append({"role": "user", "content": content, "_result": True,
+                             "_call": (a, b)})
             continue
 
         # submission
@@ -453,13 +497,17 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
             break
         failed = "\n".join(f"- [{s['rung']}] {s.get('file', '')}: {s['detail']}"
                            for s in steps if not s["ok"])
+        hint = ""
+        if submissions >= 2 and not hinted:      # failing again: offer the way out, once
+            hint, hinted = "\n" + asking.stuck_hint(False), True
         messages.append({"role": "user", "content":
                          f"SUBMISSION FAILED THESE CHECKS:\n{failed}\n"
                          f"Fix only these. You may use tools, then SUBMIT the "
-                         f"complete file(s) again. ({left} replies left)"})
+                         f"complete file(s) again. ({left} replies left){hint}"})
 
     best = tracker.best
     return {"stop_reason": stop_reason, "requests": requests, "tokens": tokens,
+            "question": question, "findings": findings,
             "submissions": submissions, "repeats": repeats, "empty_replies": empties,
             "native_tool_calls": natives,
             "passed": bool(best and best["passed"]),

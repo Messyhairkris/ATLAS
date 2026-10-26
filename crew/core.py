@@ -14,7 +14,8 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from . import autofix, inspector, personnel, playbook, quirklint, task_types
+from . import ask as asking
+from . import autofix, compact, inspector, personnel, playbook, quirklint, task_types
 from .agent import run_member
 from .config import REPO_ROOT, Config, CrewError, load_config
 from .ratelimit import RateWindow
@@ -26,7 +27,7 @@ from .tools import Evidence, Toolbox
 sys.path.insert(0, str(REPO_ROOT / "v3-service"))
 
 RESULT_CHARS = 20000
-DECISIONS = ("approve", "revise", "reject", "acknowledge")
+DECISIONS = ("approve", "revise", "answer", "reject", "acknowledge")
 
 
 def _env_setup(cfg: Config) -> None:
@@ -296,8 +297,14 @@ class Crew:
             preload = ttdef["preload"](spec, self.cfg, toolbox)
             constraints = "".join(f"\nREVIEWER CONSTRAINT {i + 1}: {c}"
                                   for i, c in enumerate(job["constraints"]))
+            # A re-run sees the notes its earlier run took, once, so it does not redo them.
+            earlier = compact.render_notes((job.get("result") or {}).get("findings") or [])
             task_text = (f"TASK {job_id}: {job['title']}\n"
-                         f"{job['description'] or ''}{constraints}\n\n{preload}")
+                         f"{job['description'] or ''}{constraints}\n\n"
+                         f"{earlier + chr(10) + chr(10) if earlier else ''}{preload}")
+            # One question per job, and never in a campaign: nobody is there to answer.
+            can_ask = not (str(job.get("submitted_by", "")).startswith("campaign:")
+                           or job.get("asked"))
             try:
                 chat = self.chat_factory(
                     job["model"], job_id, job["task_type"], job["assigned_to"],
@@ -334,7 +341,8 @@ class Crew:
                 fetch_enabled=bool(self.cfg.fetch_allowlist), log=log_event,
                 context_tokens=job["budget"].get("context_tokens"),
                 addenda=personnel.system_addenda(staff, job["assigned_to"]) if staff else "",
-                leash=personnel.leash(staff, job["assigned_to"]) if staff else None)
+                leash=personnel.leash(staff, job["assigned_to"]) if staff else None,
+                can_ask=can_ask)
         except Exception as e:  # noqa: BLE001 - a job failure, not a crash
             log_event({"event": "error", "error": traceback.format_exc()[-2000:]})
             job = self.store.load(job_id)
@@ -370,17 +378,26 @@ class Crew:
                                              "steps", "notes", "evidence")}
         job["result"]["files"] = sorted(out["files"])
         job["result"]["autofixes"] = fixes
+        job["result"]["findings"] = out.get("findings") or []
+        asked = out.get("question")
+        if asked:
+            job["question"] = asked
         job["runs"].append({"at": now_iso(), "passed": out["passed"],
                             "requests": out["requests"], "tokens": out["tokens"],
                             "stop_reason": out["stop_reason"]})
-        self.roster.record_run(job["assigned_to"], job["task_type"], job_id,
-                               out["passed"], first_try, out["requests"], out["tokens"])
+        if not asked:   # a question is neither a pass nor a failure; the answered run counts
+            self.roster.record_run(job["assigned_to"], job["task_type"], job_id,
+                                   out["passed"], first_try, out["requests"], out["tokens"])
         graded = self.store.log("output_staged", job["assigned_to"], job_id,
                                 parent=claim_node, passed=out["passed"],
                                 stop_reason=out["stop_reason"],
                                 requests=out["requests"], tokens=out["tokens"],
                                 failed_gates=[s["rung"] for s in out["steps"] if not s["ok"]])
-        if not out["passed"]:
+        if asked:
+            job["status"] = REVIEW     # waits for an answer (review decision "answer")
+            self.store.log("question_asked", job["assigned_to"], job_id, parent=graded,
+                           question=asked["question"], options=asked["options"])
+        elif not out["passed"]:
             job["status"] = FAILED
         elif self.roster.stage(job["assigned_to"], job["task_type"]) in AUTO_APPLY:
             self._apply(job, actor="system:auto", parent=graded)
@@ -399,7 +416,7 @@ class Crew:
                 inspector.inspect_job(self.cfg, job, transcript)
             except Exception as e:  # noqa: BLE001 - the Inspector must never fail a job
                 log_event({"event": "inspector_error", "error": str(e)[:300]})
-        if not out["passed"] and self.cfg.defaults.get("rescue_on_failure"):
+        if not out["passed"] and not asked and self.cfg.defaults.get("rescue_on_failure"):
             self._queue_rescue(job, log_event)
         return self._brief(job)
 
@@ -462,9 +479,13 @@ class Crew:
         node = self.store.log("review_submitted", reviewer, job_id,
                               decision=decision, notes=notes[:1000],
                               retry_constraint=retry_constraint[:1000])
+        pending = job.get("question") if not job.get("asked") else None
         if decision == "approve":
             if st != REVIEW:
                 raise CrewError(f"only jobs in review can be approved ({job_id} is {st})")
+            if pending:
+                raise CrewError(f"{job_id} asked a question and has no output to approve: "
+                                f"answer it (decision 'answer', the answer in notes) or reject it")
             self._apply(job, actor=reviewer, parent=node)
             job["status"] = COMPLETED
         elif decision == "revise":
@@ -477,6 +498,18 @@ class Crew:
                 raise CrewError(f"{job_id} hit max revisions; reject it or submit a new task")
             job["constraints"].append(constraint)
             job["revisions"] += 1
+            job["status"] = READY
+            job["notice"] = False
+        elif decision == "answer":
+            if not pending or st != REVIEW:
+                raise CrewError(f"{job_id} has no question waiting for an answer")
+            reply = (notes or retry_constraint).strip()
+            if not reply:
+                raise CrewError("answer needs the answer in notes (an option's number works)")
+            job["constraints"].append(asking.answer_constraint(pending, reply))
+            pending["answer"] = asking.pick_answer(pending, reply)
+            pending["answered_by"] = reviewer
+            job["asked"] = True          # one question per job
             job["status"] = READY
             job["notice"] = False
         elif decision == "reject":
@@ -517,7 +550,9 @@ class Crew:
                 "failed_gates": [f"{s['rung']}: {s['detail']}" for s in r.get("steps", [])
                                  if not s["ok"]][:6],
                 "error": r.get("error"),
-                "notice": job.get("notice", False)}
+                "notice": job.get("notice", False),
+                **({"question": job["question"]}
+                   if job.get("question") and not job.get("asked") else {})}
 
     def status(self, job_id: Optional[str] = None, wait_seconds: float = 0) -> object:
         if not job_id:
@@ -554,7 +589,9 @@ class Crew:
 
     def inbox(self) -> dict:
         jobs = list(self.store.all_jobs())
-        return {"needs_review": [self._brief(j) for j in jobs if j["status"] == REVIEW],
+        return {"questions": [self._brief(j) for j in jobs if j["status"] == REVIEW
+                              and j.get("question") and not j.get("asked")],
+                "needs_review": [self._brief(j) for j in jobs if j["status"] == REVIEW],
                 "failed": [self._brief(j) for j in jobs if j["status"] == FAILED],
                 "auto_applied_notices": [self._brief(j) for j in jobs if j.get("notice")]}
 

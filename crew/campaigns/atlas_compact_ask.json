@@ -1,0 +1,40 @@
+{
+  "name": "atlas-compact-ask",
+  "goal": "Two pure modules for the crew harness itself, from the ATLAS strengthening study (Kris, 2026-10-26): compact.py keeps a long job's findings and warns before the token budget runs out (33 runs ended on it), ask.py lets a stuck member ask one question instead of looping (66 runs ended stuck). The PA wires both into crew/agent.py and crew/core.py.",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_requests": 100,
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 12,
+  "teams": {
+    "Compact": {"author": "Hoss", "tester": "Qwen"},
+    "Ask":     {"author": "Nemotron", "tester": "Gordon"}
+  },
+  "tasks": [
+    {
+      "id": "compact",
+      "team": "Compact",
+      "module": "compact.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/compact.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_compact.py"],
+      "api": ["NOTE_MAX_CHARS", "NOTES_MAX_CHARS", "WARN_AT", "NOTES_HEADER", "clean_note", "add_note", "render_notes", "stub", "budget_line", "lead_with"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. Copy every message string character for character from the contract - the hidden tests compare whole strings. budget_line's rules apply in order, and the requests rule comes first. render_notes keeps a run of the NEWEST lines, never a best fit.",
+      "test_instructions": "Cover every table row, the newest-run rule of render_notes (a short old note is dropped when a newer long one does not fit), the floor in the budget percentage, max_tokens of 0, the requests rule winning over the tokens rule, and stub leaving content of exactly keep_chars unchanged."
+    },
+    {
+      "id": "ask",
+      "team": "Ask",
+      "module": "ask.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/ask.md",
+      "hidden_tests": ["C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_ask.py"],
+      "api": ["QUESTION_MAX_CHARS", "OPTION_MAX_CHARS", "USAGE", "HINT", "parse_question", "pick_answer", "answer_constraint", "stuck_hint"],
+      "depends": [],
+      "min_tests": 10,
+      "instructions": "Walk every worked-example row. parse_question's rules apply in order and the first failure decides the message; lengths are judged AFTER cleaning. Copy USAGE and HINT character for character. Do not change the args dict you are given.",
+      "test_instructions": "Cover every table row, the inclusive limits (400 and 80 characters, 4 options), the rule order (an empty question is reported before bad options), numbered answers out of range, and that parse_question leaves its input unchanged."
+    }
+  ]
+}

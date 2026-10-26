@@ -100,6 +100,25 @@ Any task can also carry **acceptance gates**: `must_mention`, `must_read` (the m
 - **No self-promotion.** No MCP tool can change an Autonomy Stage. `python -m crew promote` is Kris-only. It refuses to skip stages and refuses to promote right after a failure.
 - **Deny list available, currently empty.** `deny_models` in `config.json` is enforced by the provider layer; it was used to measure roster-only spend and is now off. Big models are not crew members by default: `defaults.assigned_to` is Hoss, and naming a large model in `assigned_to` usually means the task was mis-scoped.
 
+## Long jobs and stuck members (2026-10-26)
+
+From the ATLAS study (`runs/crew/pa/studies/atlas-2026-10-26/report.md`): 33 runs had ended on
+the token budget, many with nothing submitted, and 66 ended stuck. Nothing below adds text to
+every reply - Kris's rule after Crush's per-call hooks bloated every request.
+
+- **Notes.** Any tool call may carry `"note"`: one finding from what the member read. Notes stay
+  in the member's own replies, which are never trimmed; a trimmed result's stub names the call
+  so it can be re-read in part (`crew/compact.py`). A re-run (after revise or answer) is shown
+  the earlier run's notes once, in its task text.
+- **Budget line.** The message after a reply leads with a line only when it matters: `TOKENS:`
+  from 75% of the job's token budget, and `LAST REPLY:` when one more reply that size would
+  spend it (or one request is left). At the top, because trailing advice is ignored.
+- **Ask.** A member that cannot see how to go on may ask ONE question per job (`ask`, 0 or 2-4
+  options; `crew/ask.py`). The job pauses in review with the question (`crew_inbox` lists it
+  under `questions`); `crew_review` decision `answer` (the answer, or an option's number, in
+  notes) re-queues it with the answer. The hint is offered once, when it repeats a call or fails
+  a second submission. Campaign jobs are not offered `ask`: nobody is there to answer.
+
 ## Cold starts (2026-10-23)
 
 Every stdio MCP server, `crew` included, starts behind

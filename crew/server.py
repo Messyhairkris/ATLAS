@@ -174,8 +174,10 @@ def crew_review(task_id: str, decision: str, reviewer: str, notes: str = "",
     """Review a task.
     decision: approve (review-state only; writes the staged output to its
       target), revise (re-queue with retry_constraint = what to do differently;
-      the member sees it verbatim), reject, or acknowledge (clear an
-      auto-applied notice).
+      the member sees it verbatim), answer (a stuck member asked ONE question -
+      crew_status shows it under "question"; put the answer, or an option's
+      number, in notes and the job re-runs with it), reject, or acknowledge
+      (clear an auto-applied notice).
     must_read / ascii_only (revise only): make your constraint ENFORCEABLE —
       the next submission fails unless the member actually opened each
       must_read file (paths relative to the task's read root) / wrote plain
@@ -193,8 +195,10 @@ def crew_review(task_id: str, decision: str, reviewer: str, notes: str = "",
 
 @mcp.tool()
 def crew_inbox() -> str:
-    """Everything waiting on a reviewer: outputs in review, failed tasks
-    (revise or reject them), and auto-applied notices to acknowledge."""
+    """Everything waiting on a reviewer: questions a stuck member asked (answer
+    them with crew_review decision "answer", or put them on Kris's Review Desk),
+    outputs in review, failed tasks (revise or reject them), and auto-applied
+    notices to acknowledge."""
     return _ok(crew().inbox())
 
 
