@@ -69,7 +69,12 @@ class CrewTestCase(unittest.TestCase):
             "# Run a\nBattery result 9/12. Verdict: PASS\n")
         (self.vault / ".git").mkdir()
         (self.vault / ".git" / "config").write_text("secret")
-        self._pb_backup = {t: playbook.load(t) for t in playbook.PREFIX}
+        # Tests add playbook entries, so they get a copy of the playbooks, never the live
+        # ones. Backing the live files up and writing them back emptied three of them on
+        # 2026-10-26: two test runs at once, one read a file the other had just truncated.
+        self._pb_dir = playbook.PLAYBOOK_DIR
+        playbook.PLAYBOOK_DIR = self.tmp / "playbooks"
+        shutil.copytree(self._pb_dir, playbook.PLAYBOOK_DIR)
         self._env = dict(os.environ)
         # The governor prefers the provider's own quota reading over its own
         # model. Point that at a path with no reading, so the tests below
@@ -96,8 +101,7 @@ class CrewTestCase(unittest.TestCase):
         })
 
     def tearDown(self):
-        for t, text in self._pb_backup.items():
-            playbook._path(t).write_text(text, encoding="utf-8")
+        playbook.PLAYBOOK_DIR = self._pb_dir
         os.environ.clear()
         os.environ.update(self._env)
         shutil.rmtree(self.tmp, ignore_errors=True)
