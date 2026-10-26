@@ -95,9 +95,35 @@ def _single_file_body(text: str, file_blocks: list, expected: List[str]):
     return body + "\n" if body.startswith(_CODE_START) else None
 
 
+def blind_call(text: str) -> Optional[Tuple[str, dict]]:
+    """The tool call, when a reply makes one and THEN writes its files anyway.
+
+    atlas study 2026-10-26: Gordon twice wrote a fetch_url call, an imagined
+    "Tool result" for it and a whole digest in one reply. The files came first in
+    our parser, so a page nobody fetched was graded (the citation gate caught it).
+    Files written after a call cannot have seen its result: run the call instead.
+    """
+    text = (text or "").strip()
+    call = _find_tool_json_at(text)
+    if call is None:
+        return None
+    at = call[0]
+    obj, _ = json.JSONDecoder().raw_decode(text[at:])
+    if "tool" not in obj and not ({"args", "arguments"} & obj.keys()):
+        return None          # {"name": ...} alone is prose, not a call
+    starts = [m.start() for m in re.finditer(r"^\s*SUBMIT\b", text, re.MULTILINE)]
+    starts += [m.start() for m in FENCE.finditer(text) if not m.start(2) <= at < m.end(2)]
+    if not starts or at > min(starts):
+        return None
+    return call[1], call[2]
+
+
 def parse_reply(text: str, expected_files: List[str]) -> Tuple[str, object, object]:
     """-> ("submit", files, notes) | ("tool", name, args) | ("invalid", reason, None)"""
     text = (text or "").strip()
+    blind = blind_call(text)
+    if blind:
+        return "tool", blind[0], blind[1]
     blocks = FENCE.findall(text)
     file_blocks = [(i, c) for i, c in blocks if i.lower() != "notes"]
     looks_like_submit = re.search(r"^\s*SUBMIT\b", text, re.MULTILINE) or any(
@@ -130,6 +156,11 @@ def parse_reply(text: str, expected_files: List[str]) -> Tuple[str, object, obje
 
 
 def _find_tool_json(text: str) -> Optional[Tuple[str, dict]]:
+    call = _find_tool_json_at(text)
+    return (call[1], call[2]) if call else None
+
+
+def _find_tool_json_at(text: str) -> Optional[Tuple[int, str, dict]]:
     dec = json.JSONDecoder()
     for m in re.finditer(r"\{", text):
         try:
@@ -146,7 +177,7 @@ def _find_tool_json(text: str) -> Optional[Tuple[str, dict]]:
             except json.JSONDecodeError:
                 args = {}
         if isinstance(name, str) and isinstance(args, dict):
-            return name, args
+            return m.start(), name, args
     return None
 
 
@@ -397,6 +428,12 @@ def run_member(*, persona: str, task_type: str, playbook: str, task_text: str,
                 content = f"TOOL ERROR {a}: {e} [{left} replies left]"
             except OSError as e:
                 content = f"TOOL ERROR {a}: {type(e).__name__}: {e} [{left} replies left]"
+            if blind_call(reply):
+                content += ("\nNOTE: your reply went on past the tool call (a result you "
+                            "imagined, files). That part was discarded: files written "
+                            "before a result arrives cannot use it. One tool call per "
+                            "reply; SUBMIT once you have read the real result above.")
+                log({"event": "blind_files_discarded", "tool": a})
             if left == 1:
                 content += "\nLAST REPLY: you must SUBMIT now."
             log({"event": "tool", "tool": a, "args": b, "result_chars": len(content)})

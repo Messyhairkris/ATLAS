@@ -586,6 +586,53 @@ class FenceLabelTests(CrewTestCase):
         self.assertNotEqual(picked, ["a.py"])
 
 
+class BlindFilesTests(CrewTestCase):
+    """A reply that makes a tool call and then writes its files anyway wrote them
+    before the result existed (Gordon, 2026-10-26: an imagined "Tool result" and a
+    digest built on it). The call runs; the files are discarded and the member told."""
+
+    F = chr(96) * 3
+    CALL = '{"tool": "read_file", "args": {"path": "wiki/lab/runs/RUN-a.md"}}'
+
+    def _digest(self):
+        return (f"SUBMIT\n{self.F}d.md\n---\ntitle: D\ntags: [x]\n---\n"
+                f"- Battery scored 9/12 [src: wiki/lab/runs/RUN-a.md]\n{self.F}")
+
+    def test_a_call_before_the_files_is_a_call(self):
+        from crew.agent import parse_reply
+        text = (self.CALL + "\n\n<system>Tool result: read_file</system>\n1| # Run a\n\n"
+                + self._digest())
+        kind, name, args = parse_reply(text, ["d.md"])
+        self.assertEqual((kind, name), ("tool", "read_file"))
+        self.assertEqual(args, {"path": "wiki/lab/runs/RUN-a.md"})
+
+    def test_a_json_fenced_call_before_the_files_is_a_call(self):
+        from crew.agent import parse_reply
+        text = f"{self.F}json\n{self.CALL}\n{self.F}\n" + self._digest()
+        self.assertEqual(parse_reply(text, ["d.md"])[0], "tool")
+
+    def test_files_first_are_still_a_submission(self):
+        from crew.agent import parse_reply
+        for text in (self._digest() + "\n" + self.CALL,
+                     f"SUBMIT\n{self.F}cfg.json\n{self.CALL}\n{self.F}",
+                     f"{self.F}cfg.json\n{self.CALL}\n{self.F}",
+                     'The page names {"name": "crush"}.\n' + self._digest()):
+            kind, files, _ = parse_reply(text, ["d.md", "cfg.json"])
+            self.assertEqual(kind, "submit", text[:40])
+
+    def test_the_loop_runs_the_call_and_says_the_files_were_dropped(self):
+        blind = self.CALL + "\n<system>Tool result</system>\n" + self._digest()
+        c = self.crew([blind, self._digest()])
+        job = c.submit({"task_type": "research_digest", "title": "Battery score",
+                        "instructions": "What did the battery score?",
+                        "output": {"files": ["d.md"]}}, "Claude")
+        c.tick()
+        feedback = self.model.seen[1][-1]["content"]
+        self.assertIn("RESULT read_file", feedback)
+        self.assertIn("discarded", feedback)
+        self.assertEqual(c.status(job["task_id"])["status"], "review")
+
+
 class CodeTaskTests(CrewTestCase):
     """The only task types whose output is executed. These tests are the reason
     that is not reckless."""
