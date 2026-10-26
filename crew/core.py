@@ -42,6 +42,12 @@ def _env_setup(cfg: Config) -> None:
 # and returned three EMPTY replies in a row (2026-09-20).
 DEFAULT_REPLY_TOKENS = 16384
 
+# How often a crashing worker may say so in the action log. A worker that raises
+# on every tick used to look exactly like an idle queue (2026-10-24: nine hours
+# lost to a format crash nothing was logged for), so it now says so - throttled,
+# because the loop is every three seconds.
+WORKER_ERROR_LOG_EVERY = 300.0
+
 
 def _reply_tokens(cfg: Config, persona: str) -> int:
     table = (cfg.defaults.get("max_tokens_by_member") or {})
@@ -149,6 +155,7 @@ class Crew:
         self.rate = RateWindow(self.cfg)
         self._hold_logged = 0.0
         self._hold = 0.0
+        self._worker_error_logged = 0.0
         self.chat_factory = chat_factory or _default_chat
         self._stop = threading.Event()
 
@@ -626,16 +633,42 @@ class Crew:
             self._hold = 0.0
             try:
                 ran = self.tick()
-            except Exception:  # noqa: BLE001 - keep the worker alive
+            except Exception as exc:  # noqa: BLE001 - keep the worker alive
                 traceback.print_exc(file=sys.stderr)
+                self._note_worker_error(exc)
                 ran = None
             if not ran:
                 # When the request window is full, sleep until it has room
                 # (capped so a new job or a config change is still noticed).
                 self._stop.wait(min(max(poll_seconds, self._hold), 600.0))
 
-    def start_worker(self) -> threading.Thread:
-        t = threading.Thread(target=self.work_forever, name="crew-worker", daemon=True)
+    def _note_worker_error(self, exc: BaseException) -> None:
+        """Say in the action log that the worker is crashing.
+
+        2026-10-26, from the research round of 2026-10-25: `provider_gate` raised
+        `TypeError` on every tick for nine hours because the provider's quota
+        header carried no numbers. `work_forever` caught it, printed to stderr and
+        carried on, so the queue looked idle and the budget looked healthy - no job
+        error, no `rate_hold`, nothing on the Desk. A crash the worker survives
+        silently is worse than one that kills it.
+        """
+        now = time.time()
+        if now - self._worker_error_logged < WORKER_ERROR_LOG_EVERY:
+            return
+        self._worker_error_logged = now
+        try:
+            self.store.log("worker_error", "system", "",
+                           detail=f"{type(exc).__name__}: {exc}"[:300])
+        except Exception:                    # noqa: BLE001 - never kill the worker reporting
+            pass
+
+    def start_worker(self, poll_seconds: float = 3.0) -> threading.Thread:
+        """Start this server's worker, and register it so a worker running code
+        older than the checkout can be spotted (it will happily claim jobs with
+        rules that were fixed two commits ago)."""
+        self.store.register_worker()
+        t = threading.Thread(target=self.work_forever, args=(poll_seconds,),
+                             name="crew-worker", daemon=True)
         t.start()
         return t
 

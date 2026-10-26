@@ -27,6 +27,7 @@ import datetime
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -45,6 +46,47 @@ _write_lock = threading.Lock()
 
 def now_iso() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _alive(pid: int) -> Optional[bool]:
+    """True/False, or None when we cannot tell. Deliberately NOT os.kill(pid, 0):
+    on Windows that kills the process instead of testing it."""
+    try:
+        import psutil
+    except Exception:                    # noqa: BLE001 - no psutil, no opinion
+        return None
+    try:
+        psutil.Process(int(pid))
+        return True
+    except Exception:                    # noqa: BLE001 - no such process
+        return False
+
+
+_REVISION: Optional[str] = None
+
+
+def code_revision() -> str:
+    """The short git revision of this working tree, or "unknown".
+
+    Cached for the life of the process on purpose: it answers "which code is THIS
+    worker running?", which is fixed at startup, not "what is checked out now".
+    2026-10-26 (from a PA chat's research round): the claim-heartbeat fix landed
+    while two workers started two days earlier were still running the code it
+    replaced - they reclaimed a live job and ran it a second time. A worker that
+    outlives its code does not just miss features.
+    """
+    global _REVISION
+    if _REVISION is None:
+        _REVISION = "unknown"
+        try:
+            out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                 cwd=Path(__file__).resolve().parents[1],
+                                 capture_output=True, text=True, timeout=10)
+            if out.returncode == 0 and out.stdout.strip():
+                _REVISION = out.stdout.strip()
+        except Exception:                # noqa: BLE001 - no git, no repo, not fatal
+            pass
+    return _REVISION
 
 
 def _process_started(pid: int) -> Optional[float]:
@@ -90,6 +132,8 @@ class Store:
         for d in (self.jobs_dir, self.claims_dir, self.outbox):
             d.mkdir(parents=True, exist_ok=True)
         self.action_log = self.home / "action_log.jsonl"
+        self.workers_dir = self.home / "workers"
+        self.workers_dir.mkdir(parents=True, exist_ok=True)
         self.owner = f"{os.environ.get('CREW_CLIENT', 'crew')}-{os.getpid()}"
 
     # -- jobs ----------------------------------------------------------------
@@ -214,9 +258,63 @@ class Store:
             now = time.time()
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"owner": self.owner, "pid": os.getpid(), "since": now,
-                           "lease_until": now + lease}, fh)
+                           "lease_until": now + lease,
+                           "revision": code_revision()}, fh)
             return True
         return False
+
+    def register_worker(self) -> None:
+        """Record this server's worker, so a check can tell a current worker from
+        one running code older than the checkout. Best-effort: a worker that
+        cannot write its own name still works."""
+        try:
+            _atomic_write(self.workers_dir / f"{os.getpid()}.json", json.dumps({
+                "pid": os.getpid(), "owner": self.owner,
+                "client": os.environ.get("CREW_CLIENT", "crew"),
+                "started": now_iso(), "revision": code_revision(),
+                "cwd": str(Path.cwd())}, indent=2))
+        except OSError:
+            pass
+
+    def live_workers(self) -> List[dict]:
+        """Registered workers whose process is still alive, newest last. A dead
+        pid's file is removed; if we cannot tell (no psutil) it is kept."""
+        out = []
+        for f in sorted(self.workers_dir.glob("*.json")):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            alive = _alive(d.get("pid") or 0)
+            if alive is False:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+                continue
+            out.append(d)
+        return out
+
+    def claim_workers(self) -> List[dict]:
+        """The distinct workers holding a live claim, read from the claim files.
+
+        This is how a worker that started before the registry existed still shows
+        up: its claim carries owner, pid and the revision it is running."""
+        out = {}
+        for f in sorted(self.claims_dir.glob("*.lock")):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            owner = d.get("owner")
+            if not owner or owner in out or not self._held(d):
+                continue
+            out[owner] = {"owner": owner, "pid": d.get("pid"),
+                          "client": owner.rsplit("-", 1)[0],
+                          "revision": d.get("revision") or "unknown",
+                          "job": f.stem, "since": d.get("since"),
+                          "source": "claim"}
+        return list(out.values())
 
     def renew(self, job_id: str) -> bool:
         """Extend the lease of a claim this process owns; False when it is not

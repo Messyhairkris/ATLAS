@@ -24,6 +24,20 @@ TEXT_SUFFIXES = {".md", ".txt", ".json", ".jsonl", ".py", ".gd", ".tscn",
 MAX_FILE_BYTES = 2_000_000
 MAX_SEARCH_FILES = 4000
 GITHUB_REPO = re.compile(r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+GITHUB_COMMITS = re.compile(r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)/commits/?$")
+
+
+def _with_scheme(url: str) -> str:
+    """A bare host is meant as https.
+
+    Contract bug wearing a harness error message: a job was handed
+    `raw.githubusercontent.com/.../Cargo.toml` with no scheme, urlparse found no
+    hostname, and the member was told the fetch was "not in the crew fetch
+    allowlist" (a 2026-10-25 research round, digest t10). The message now says
+    which spelling works.
+    """
+    u = (url or "").strip()
+    return u if not u or "://" in u else "https://" + u
 
 
 class ToolError(Exception):
@@ -184,12 +198,14 @@ class Toolbox:
         cache = self.__dict__.setdefault("_pages", {})
         if url in cache:
             return cache[url]
-        host = urllib.parse.urlparse(url or "").hostname or ""
+        cited = url                       # the string the member wrote and will cite
+        url = _with_scheme(url)
+        host = urllib.parse.urlparse(url).hostname or ""
         allowed = any(host == d or host.endswith("." + d)
                       for d in self.cfg.fetch_allowlist)
         if not allowed:
             raise ToolError(f"fetch disabled for {host or url!r}: not in the "
-                            f"crew fetch allowlist")
+                            f"crew fetch allowlist (pass the full url, https://)")
         fetch, headers = url, {"User-Agent": "atlas-crew/0.1"}
         m = GITHUB_REPO.match(url)
         if m:
@@ -197,13 +213,24 @@ class Toolbox:
             # content. GitHub's API serves it raw whatever the branch/filename.
             fetch = f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}/readme"
             headers["Accept"] = "application/vnd.github.raw"
+        elif GITHUB_COMMITS.match(url):
+            # .../commits is HTML chrome and the first thing GitHub rate-limits
+            # (HTTP 429, 2026-10-25 study). The API gives the same commit dates
+            # as JSON, so "last activity" can be read and quoted verbatim.
+            m = GITHUB_COMMITS.match(url)
+            fetch = (f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}"
+                     f"/commits?per_page=5")
+            headers["Accept"] = "application/vnd.github+json"
         req = urllib.request.Request(fetch, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read(1_000_000).decode("utf-8", errors="replace")
         text = html.unescape(re.sub(r"<[^>]+>", " ",
                                     re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)))
         text = re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text)).strip()
-        self.evidence.add(url, text)
+        self.evidence.add(cited, text)
+        if url != cited:
+            self.evidence.add(url, text)   # either spelling of the url resolves
+        cache[cited] = text
         cache[url] = text
         return text
 
@@ -332,6 +359,16 @@ class Toolbox:
         cited = cited.strip()
         if cited.startswith(("http://", "https://")):
             return cited if cited in self.evidence.seen else None
+        # A member may cite a url it was given without its scheme ("the fetch
+        # worked, so cite what I was told to fetch"). The fetch stores that
+        # spelling too, so resolve it here before the file-path rules below can
+        # mistake it for a relative path. A filename on its own ("README.md") has
+        # no "/" and is left to them.
+        head, _, rest = cited.partition("/")
+        if rest and "." in head:
+            for key in (cited, "https://" + cited, "http://" + cited):
+                if key in self.evidence.seen:
+                    return key
         candidates = [cited, cited + ".md"] if not cited.endswith(".md") else [cited]
         for c in candidates:
             p = Path(c)

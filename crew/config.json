@@ -68,6 +68,7 @@
   ],
   "fetch_allowlist": [
     "github.com",
+    "api.github.com",
     "raw.githubusercontent.com",
     "nvaccess.org",
     "learn.microsoft.com",

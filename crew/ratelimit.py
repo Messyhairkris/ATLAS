@@ -180,7 +180,20 @@ class RateWindow:
 
     def provider_gate(self, want: int):
         """(ok, wait_seconds, detail) from the provider's numbers, or None when it
-        has never answered us."""
+        has never answered us.
+
+        Never raises. A header of a shape we did not expect must fall through to
+        the bucket, not abort the worker loop: on 2026-10-24 a `None` formatted
+        with `:.1f` raised on every tick and the crew looked idle for nine hours
+        while its budget read healthy.
+        """
+        try:
+            return self._provider_gate(want)
+        except Exception:                                # noqa: BLE001
+            return None
+
+    def _provider_gate(self, want: int):
+        """The provider's own numbers; `provider_gate` is the safe entry point."""
         view, quotas = self.provider_view()
         if not view:
             return None

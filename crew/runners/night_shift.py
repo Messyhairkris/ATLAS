@@ -101,6 +101,39 @@ def guard_hits(cutoff: float) -> dict:
     return {k: dict(v) for k, v in hits.items()}
 
 
+def worker_health(cutoff: float) -> dict:
+    """{"errors": n, "stale": [worker, ...], "running": n} for the window.
+
+    `errors` counts the action-log nodes a worker writes when its loop raises - a
+    worker that survives a crash silently looks exactly like an idle queue
+    (2026-10-24: nine hours of that, and nothing anywhere said so). `stale` is a
+    worker still running code older than the checkout."""
+    errors, running = 0, 0
+    try:
+        from crew.config import load_config
+        log = Path(load_config().state_home) / "action_log.jsonl"
+        if log.is_file():
+            for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    node = json.loads(line)
+                    if node.get("type") != "worker_error":
+                        continue
+                    if float(node.get("ts", 0)) >= cutoff:
+                        errors += 1
+                except (ValueError, TypeError):
+                    continue
+    except Exception:                        # noqa: BLE001 - never fail the report
+        pass
+    stale = []
+    try:
+        from crew.runners.worker_health import stale as stale_workers, workers
+        running = len(workers())
+        stale = stale_workers()
+    except Exception:                        # noqa: BLE001
+        pass
+    return {"errors": errors, "stale": stale, "running": running}
+
+
 def keeper_events(cutoff: float) -> dict:
     """{server: {"restarts", "recovered", "gave_up"}} from mcp-keeper's log (Kris,
     2026-10-23: every MCP server is started again when its first, cold start fails)."""
@@ -132,8 +165,10 @@ def _table(rows: list, header: list) -> list:
 
 
 def report(groups: list, camps: list, guard: dict, signatures, hours: int,
-           threshold: int, now: dt.datetime, keeper: dict = None) -> tuple:
+           threshold: int, now: dt.datetime, keeper: dict = None,
+           workers: dict = None) -> tuple:
     keeper = keeper or {}
+    workers = workers or {}
     failed_jobs_n = len({j for g in groups for j in g["job_ids"]})
     candidates = [g for g in groups if g["candidate"]]
     relays = [r for c in camps for r in c["relays"]]
@@ -144,11 +179,24 @@ def report(groups: list, camps: list, guard: dict, signatures, hours: int,
                 f"{len(candidates)} fixer candidate(s); {len(relays)} relay(s); "
                 f"guard: {rewrites} rewrite(s), {blocks} block(s); "
                 f"MCP: {sum(k['restarts'] for k in keeper.values())} restart(s)"
-                + (f", {gave_up} server(s) never came up" if gave_up else ""))
+                + (f", {gave_up} server(s) never came up" if gave_up else "")
+                + (f", worker crashes: {workers['errors']}" if workers.get("errors") else "")
+                + (f", {len(workers['stale'])} STALE worker(s)" if workers.get("stale") else ""))
     md = [f"# Night report - {now:%Y-%m-%d %H:%M}", "",
           f"Window: the last {hours} h. Zero tokens: sorted by night_signatures.py from what "
           f"the harness wrote.", "", f"**{headline}**", "",
           f"## Fixer candidates (mechanical, seen {threshold}+ times)", ""]
+    if workers.get("errors") or workers.get("stale"):
+        md += ["## Worker health", "",
+               f"- workers running now: {workers.get('running', 0)}"]
+        if workers.get("errors"):
+            md += [f"- worker crashes logged (worker_error): {workers['errors']} - a worker "
+                   f"that survives a crash silently looks like an idle queue"]
+        for w in workers.get("stale") or []:
+            md += [f"- STALE worker pid {w.get('pid')} ({w.get('client', '?')}) on revision "
+                   f"{w.get('revision') or 'unknown'} - it claims jobs with the rules it "
+                   f"started with; restart it"]
+        md += [""]
     md += _table([[g["count"], g["signature"], ", ".join(g["members"]), g["job_ids"][0]]
                   for g in candidates], ["count", "signature", "members", "example job"])
     md += ["", "## Failures by category"]
@@ -231,7 +279,7 @@ def main(argv=None) -> int:
         groups = signatures.group(failed_jobs(state, cutoff), args.threshold)
         headline, md, data = report(groups, campaigns(state, cutoff), guard_hits(cutoff),
                                     signatures, args.hours, args.threshold, now,
-                                    keeper_events(cutoff))
+                                    keeper_events(cutoff), worker_health(cutoff))
         stamp = f"{now:%Y-%m-%d}"
         (out / f"NIGHT_REPORT-{stamp}.md").write_text(md, encoding="utf-8")
         (out / "NIGHT_REPORT.md").write_text(md, encoding="utf-8")

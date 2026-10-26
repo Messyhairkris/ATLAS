@@ -394,6 +394,61 @@ class GateTests(CrewTestCase):
         self.assertIn("does not exist", detail)
 
 
+class FetchUrlTests(CrewTestCase):
+    """Two harness fixes from the 2026-10-25 research round: a bare host is https,
+    and a github /commits page is read from the API."""
+
+    def _tb(self):
+        from crew.tools import Evidence, Toolbox
+        self.cfg.fetch_allowlist = ["github.com", "raw.githubusercontent.com", "api.github.com"]
+        return Toolbox(self.cfg, [self.vault], Evidence())
+
+    def test_a_bare_host_is_fetched_over_https_and_is_citable_either_way(self):
+        from unittest import mock
+        tb = self._tb()
+        seen = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n): return b'egui = "^0.28"'
+
+        def fake(req, timeout):
+            seen["url"] = req.full_url
+            return Resp()
+
+        bare = "raw.githubusercontent.com/mythitorium/egui-grid/HEAD/Cargo.toml"
+        with mock.patch("crew.tools.urllib.request.urlopen", side_effect=fake):
+            out = tb.fetch_url(bare)
+        self.assertEqual(seen["url"], "https://" + bare)
+        self.assertIn("0.28", out)
+        self.assertIsNotNone(tb.evidence_key(bare))
+        self.assertIsNotNone(tb.evidence_key("https://" + bare))
+
+    def test_a_github_commits_page_is_read_from_the_api(self):
+        from unittest import mock
+        tb = self._tb()
+        seen = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n):
+                return b'[{"commit": {"author": {"date": "2024-07-26T12:00:00Z"}}}]'
+
+        def fake(req, timeout):
+            seen["url"], seen["accept"] = req.full_url, req.get_header("Accept")
+            return Resp()
+
+        url = "https://github.com/mythitorium/egui-grid/commits"
+        with mock.patch("crew.tools.urllib.request.urlopen", side_effect=fake):
+            out = tb.fetch_url(url)
+        self.assertEqual(seen["url"],
+                         "https://api.github.com/repos/mythitorium/egui-grid/commits?per_page=5")
+        self.assertIn("2024-07-26", out)
+        self.assertIsNotNone(tb.evidence_key(url))
+
+
 class TestTriageTests(CrewTestCase):
     """The harness runs the suite; the member may not invent what it said."""
 
