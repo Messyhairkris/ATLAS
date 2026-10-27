@@ -129,7 +129,7 @@ def test_no_runner_starts_opencode_without_the_guard():
 
 
 def test_the_opening_read_gets_its_own_allowance():
-    lim = {**LIM, "stall_steps_opening": 8}
+    lim = {**LIM, "stall_steps_opening": 8, "budget_tokens": 10 ** 9}   # stay under budget
     assert guard.replay([STEP, READ] * 7, lim) == (None, "")          # 7 reads, no change yet
     assert "no progress" in guard.replay([STEP, READ] * 9, lim)[1]
     after = [STEP, EDIT] + [STEP, READ] * 6                              # after a change: 5 again
