@@ -1,0 +1,17 @@
+{
+  "_how": "Kris edits this. One entry per fixable chat-engine error: a name, a pattern (a regex searched in the engine's error text, whitespace collapsed and lowercased), a fixer (a function in crew/runners/chat_repair.py) and a _why. The window runs the first entry whose pattern matches, once per failed message, never on a good one. An entry that matches but changes nothing is reported as no-match, so a wrong pattern can never break a chat.",
+  "repairs": [
+    {
+      "name": "bmp-mime",
+      "pattern": "Image type image/x-ms-bmp not supported",
+      "fixer": "rewrite_bmp_mime",
+      "_why": "OpenCode labels a .bmp screenshot image/x-ms-bmp; Synthetic refuses that label, so the model call answers 400 and the same 400 comes back on every later message of that chat. The stored part is rewritten to image/bmp (the mime field and the data: URL prefix), then the window sends the message again."
+    },
+    {
+      "name": "bmp-mime-raw",
+      "pattern": "image/x-ms-bmp",
+      "fixer": "rewrite_bmp_mime",
+      "_why": "The same fix for a caller that only has the provider's raw response body (which names the type but not the sentence above). It comes second so the full sentence wins when both match; it can only ever rewrite this one type."
+    }
+  ]
+}
