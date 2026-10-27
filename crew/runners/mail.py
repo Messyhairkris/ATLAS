@@ -27,6 +27,8 @@ CHANNEL = "direct_disk"
 
 
 def _body(a) -> str:
+    if a.body_file == "-":                 # standard input (Windows has no /dev/stdin)
+        return sys.stdin.buffer.read().decode("utf-8")
     if a.body_file:
         return Path(a.body_file).read_text(encoding="utf-8")
     if a.body:
