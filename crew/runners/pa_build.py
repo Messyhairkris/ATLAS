@@ -168,6 +168,10 @@ def main(argv=None) -> int:
     repo = Path(a.repo).resolve()
     ws = worktree(repo, a.branch, a.base)
     home = Path(load_config().state_home) / "pa" / "builds" / ws.name
+    if (home / "status.json").is_file() and not a.dry_run:
+        # A rerun gets a clean folder, so the guard counts THIS run only (a rerun in place
+        # counted the first attempt's 13 steps against the second, 2026-10-26).
+        home.rename(home.with_name(f"{home.name}-{dt.datetime.now():%Y%m%d-%H%M%S}"))
     home.mkdir(parents=True, exist_ok=True)
     feature = Path(a.brief).read_text(encoding="utf-8")
     cargo = bool(a.cargo_target)
