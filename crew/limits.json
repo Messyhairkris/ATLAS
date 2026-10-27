@@ -3,6 +3,7 @@
  "defaults": {
   "budget_tokens": 1500000,
   "stall_steps": 12,
+  "stall_steps_opening": 20,
   "stall_steps_over_budget": 4,
   "ceiling_tokens": 4000000,
   "ceiling_fresh_tokens": 500000,

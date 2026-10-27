@@ -10,7 +10,8 @@ The difference is PROGRESS, which software can see in the job's own OpenCode dat
 a code edit that went through, or a test/build command (limits.json progress_commands)
 that exited 0. Reading and searching are not progress. So:
 
-- under budget_tokens a job may go stall_steps steps without progress;
+- under budget_tokens a job may go stall_steps steps without progress (stall_steps_opening
+  for the opening read, before its first change: a new pane needs one, 2026-10-26);
 - past budget_tokens it may go only stall_steps_over_budget: it carries on while it is
   still producing, and stops as soon as it is only spending;
 - failures stop it whatever its progress: failed tool calls, failures in a row, the same
@@ -132,6 +133,8 @@ def verdict(c: dict, lim: dict, seconds: float = 0) -> str:
             return f"failing: {c[key]:,} {label}, limit {lim[limit]:,} (last: {c['last_error']})"
     over = c["tokens"] >= lim.get("budget_tokens", float("inf"))
     stall = lim.get("stall_steps_over_budget" if over else "stall_steps")
+    if not c["progress"] and not over:      # the opening read, before the first change
+        stall = lim.get("stall_steps_opening", stall)
     if stall is not None and c["since_progress"] >= stall:
         return (f"no progress: {c['since_progress']} steps without a code change or a passing "
                 f"test/build{', past the token budget' if over else ''} (limit {stall})")

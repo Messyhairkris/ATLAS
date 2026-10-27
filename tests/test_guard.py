@@ -126,3 +126,11 @@ def test_no_runner_starts_opencode_without_the_guard():
             if re.search(rf"subprocess\.\w+\(\s*{name}\b", src):
                 offenders.append(f"{f.relative_to(REPO)}: launches {name} directly")
     assert not offenders, "start OpenCode with crew.guard.launch():\n" + "\n".join(offenders)
+
+
+def test_the_opening_read_gets_its_own_allowance():
+    lim = {**LIM, "stall_steps_opening": 8}
+    assert guard.replay([STEP, READ] * 7, lim) == (None, "")          # 7 reads, no change yet
+    assert "no progress" in guard.replay([STEP, READ] * 9, lim)[1]
+    after = [STEP, EDIT] + [STEP, READ] * 6                              # after a change: 5 again
+    assert "no progress" in guard.replay(after, lim)[1]
