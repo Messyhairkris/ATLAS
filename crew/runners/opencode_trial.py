@@ -63,6 +63,7 @@ def opencode_config(model_id: str, output_tokens: int, context_tokens: int) -> d
     # wall the crew hit - his measured need is 65,536). Give each member its real limits.
     return {
         "$schema": "https://opencode.ai/config.json",
+        "formatter": False,                # see pa_session.base_config
         "provider": {"synthetic": {
             "npm": "@ai-sdk/openai-compatible", "name": "Synthetic",
             "options": {"baseURL": "https://api.synthetic.new/v1",

@@ -97,6 +97,7 @@ def config(pa: str, scope: dict, staff: dict, brief: Path, cargo: bool) -> dict:
               "context": int(member.get("context_window") or 131072)}
     perm = permissions(cargo)
     return {"$schema": "https://opencode.ai/config.json",
+            "formatter": False,            # see pa_session.base_config
             "provider": {"synthetic": {
                 "npm": "@ai-sdk/openai-compatible", "name": "Synthetic",
                 "options": {"baseURL": "https://api.synthetic.new/v1",

@@ -146,6 +146,10 @@ def base_config(models: dict, agents: dict, default_agent: str, client: str,
                              "extensions": [".ahk"]}
     return {
         "$schema": "https://opencode.ai/config.json",
+        # OpenCode runs rustfmt/black/prettier after every edit: whole files reformatted
+        # (Kimi's Inbox 280 lines for 43 real, Gordon's layout.rs 66 for 2), and a file changed
+        # under the model so its next edit was refused 4 times (2026-10-27). Never format.
+        "formatter": False,
         "provider": {"synthetic": {
             "npm": "@ai-sdk/openai-compatible", "name": "Synthetic",
             "options": {"baseURL": "https://api.synthetic.new/v1",
