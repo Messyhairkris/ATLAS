@@ -307,9 +307,15 @@ def render(pa: str, task: str = "", staff: Optional[dict] = None,
     tail = (["## This session's task", task.strip(), ""] if task.strip() else
             ["## This session's task", "- The PM's first message sets it.", ""])
 
-    # the crew's rules (crew/rules.py), rendered ONCE from the rules folder
+    # the crew's rules (crew/rules.py), rendered ONCE from the rules folder. A claude-code PA
+    # already carries the always-on rules in CLAUDE.md (they are not repeated), so it is given
+    # no inlined rule - only the "read this when it applies" pointers to the rule files.
     from crew import rules as crew_rules
-    crew_rules_text = crew_rules.for_brief()
+    if runtime == "claude-code":
+        _, listed = crew_rules.select(crew_rules.load_rules())
+        crew_rules_text = crew_rules.render([], listed)
+    else:
+        crew_rules_text = crew_rules.for_brief()
     crew_rules_part = [crew_rules_text, ""] if crew_rules_text else []
     parts = [head, rules, crew_rules_part, live, where, skill_part, tail]
     text = "\n".join(line for part in parts for line in part)

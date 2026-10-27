@@ -372,9 +372,12 @@ def test_the_seed_brief_gets_the_always_on_rule_and_the_listed_one():
 
 
 def test_the_pa_brief_contains_the_rules_section_when_the_seed_folder_has_always_on():
-    brief = pa_brief.render("Claude")
+    brief = pa_brief.render("Gordon")        # a non-claude-code PA: the always-on rule is inlined
     assert "## Rules" in brief
     assert "### powershell-not-bash" in brief
+    claude = pa_brief.render("Claude")       # CLAUDE.md carries it, so it is not repeated
+    assert "## Rules" in claude              # ...but Claude is still pointed at the rule files
+    assert "### powershell-not-bash" not in claude
 
 
 if __name__ == "__main__":
