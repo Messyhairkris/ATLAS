@@ -20,8 +20,8 @@ that exited 0. Reading and searching are not progress. So:
 - between check rounds, next_round() allows another round only if the last one passed
   MORE checks than the one before - repeating a failure is not working through it.
 
-Limits live in crew/limits.json: defaults, then the job type, then the member; for a number
-the tightest wins. tests/test_guard.py fails if any runner starts opencode.exe without
+Limits live in crew/limits.json: defaults, then the job type, then the member; a ceiling
+is the tightest of all three, any other setting the most specific one's. tests/test_guard.py fails if any runner starts opencode.exe without
 launch(), so the guard cannot be forgotten.
 
   python -m crew.guard <job dir>             counts vs limits for a running or finished job
@@ -43,21 +43,28 @@ LIMITS = Path(__file__).resolve().parent / "limits.json"
 FLOORS = ("min_free_gb",)     # a floor, not a ceiling: the HIGHEST wins (the tightest)
 
 
+# Safety limits: the tightest of defaults, job type and member always wins, so no layer can
+# loosen them. Every other number (budget_tokens, stall_*, max_* error counts, check rounds)
+# is a working setting: the most specific layer wins, so each member can be tuned from its
+# own replays - looser as well as tighter (Kris 2026-10-26: different models react
+# differently; Gordon's cheap tokens needed a larger budget than the default, 2026-10-27).
+CEILING_KEYS = ("ceiling_tokens", "ceiling_fresh_tokens", "ceiling_steps", "max_minutes")
+
+
 def limits(member: str, job: str = "build", path: Path = LIMITS) -> dict:
-    """The effective limits for one member on one job type: for a number the tightest wins,
-    anything else (progress_commands) is replaced by the later layer. A floor (min_free_gb)
-    is the opposite: the HIGHEST is the tightest."""
+    """The effective limits for one member on one job type: a ceiling the lowest of all
+    layers, a floor (min_free_gb) the highest, anything else the most specific layer's."""
     cfg = json.loads(Path(path).read_text(encoding="utf-8"))
     out = dict(cfg.get("defaults") or {})
     for layer in ((cfg.get("jobs") or {}).get(job) or {}, (cfg.get("members") or {}).get(member) or {}):
         for k, v in layer.items():
-            tight = isinstance(v, (int, float)) and isinstance(out.get(k), (int, float))
-            if not tight or k == "poll_seconds":
-                out[k] = v                 # a non-number, or poll_seconds: the later layer
-            elif k in FLOORS:
-                out[k] = max(out[k], v)    # a floor: the highest is the tightest
+            both = isinstance(v, (int, float)) and isinstance(out.get(k), (int, float))
+            if both and k in CEILING_KEYS:
+                out[k] = min(out[k], v)
+            elif both and k in FLOORS:
+                out[k] = max(out[k], v)
             else:
-                out[k] = min(out[k], v)    # a ceiling or a stall: the lowest is the tightest
+                out[k] = v
     return out
 
 
@@ -133,11 +140,22 @@ FAILURES = (("tool_errors", "max_tool_errors", "failed tool calls"),
             ("same_error", "max_same_error", "repeats of the same error"))
 
 
+def weighed(c: dict, lim: dict) -> dict:
+    """Token counts in Kimi-equivalent tokens: a member's tokens x its cost_weight (limits.json,
+    1.0 = Kimi). Budgets and token ceilings are set in these units, so a cheap member (Gordon,
+    Barry, Larry) gets proportionally more room (Kris 2026-10-27). Steps, minutes and the
+    no-progress and failure rules are not weighed: wasted steps are waste on any model."""
+    w = float(lim.get("cost_weight", 1.0))
+    return {**c, "tokens": int(c["tokens"] * w), "fresh_tokens": int(c["fresh_tokens"] * w)}
+
+
 def verdict(c: dict, lim: dict, seconds: float = 0) -> str:
     """'' while the job may go on, else the reason it is stopped."""
+    c = weighed(c, lim)
     for key, limit, label in CEILINGS:
         if limit in lim and c[key] >= lim[limit]:
-            return f"ceiling: {c[key]:,} {label}, ceiling {lim[limit]:,}"
+            unit = " (weighed)" if "tokens" in key and lim.get("cost_weight", 1) != 1 else ""
+            return f"ceiling: {c[key]:,} {label}{unit}, ceiling {lim[limit]:,}"
     for key, limit, label in FAILURES:
         if limit in lim and c[key] >= lim[limit]:
             return f"failing: {c[key]:,} {label}, limit {lim[limit]:,} (last: {c['last_error']})"
@@ -256,22 +274,28 @@ def main(argv=None) -> int:
     ap.add_argument("--replay", action="store_true")
     a = ap.parse_args(argv)
     d = Path(a.job_dir)
-    st = json.loads((d / "status.json").read_text(encoding="utf-8")) if (d / "status.json").is_file() else {}
+    try:
+        st = json.loads((d / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}                            # missing, or cut short (a full disk, 2026-10-26)
     member = a.member or st.get("pa") or st.get("member") or ""
     job = a.job or ("build" if st.get("pa") else "module")
     lim = limits(member, job)
     parts = _parts(db_path(d))
     c = count(parts, lim.get("progress_commands") or ())
-    print(f"{d.name} ({member or '?'}, {job})")
+    print(f"{d.name} ({member or '?'}, {job}, cost weight {lim.get('cost_weight', 1.0)})")
+    raw, c = c, weighed(c, lim)
     for key, limit, label in CEILINGS + FAILURES:
         print(f"  {label:28} {c[key]:>12,} / {lim.get(limit, '-'):,}")
     print(f"  {'progress events':28} {c['progress']:>12,}   steps since: {c['since_progress']}")
+    if raw["tokens"] != c["tokens"]:
+        print(f"  {'(raw tokens)':28} {raw['tokens']:>12,}")
     if a.replay:
         i, why = replay(parts, lim)
         n = count(parts[:i])["steps"] if i else c["steps"]
         print(f"  replay: {'stopped at step ' + str(n) + ': ' + why if i else 'never stopped'}")
     else:
-        print(f"  {verdict(c, lim) or 'may go on'}")
+        print(f"  {verdict(raw, lim) or 'may go on'}")
     return 0
 
 

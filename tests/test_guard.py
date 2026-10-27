@@ -45,6 +45,14 @@ def test_tightest_limit_wins(tmp_path):
     assert guard.limits("Gordon", "build", f)["ceiling_steps"] == 40
 
 
+def test_a_member_may_loosen_a_working_setting_but_never_a_ceiling(tmp_path):
+    f = tmp_path / "limits.json"
+    f.write_text(json.dumps({"defaults": {"budget_tokens": 100, "ceiling_tokens": 500},
+                             "members": {"Gordon": {"budget_tokens": 300, "ceiling_tokens": 900}}}))
+    lim = guard.limits("Gordon", "build", f)
+    assert (lim["budget_tokens"], lim["ceiling_tokens"]) == (300, 500)
+
+
 def test_the_real_limits_file_loads():
     lim = guard.limits("Kimi", "build")
     assert lim["stall_steps"] > 0 and lim["budget_tokens"] < lim["ceiling_tokens"]
@@ -182,3 +190,10 @@ def test_the_opening_read_gets_its_own_allowance():
     assert "no progress" in guard.replay([STEP, READ] * 9, lim)[1]
     after = [STEP, EDIT] + [STEP, READ] * 6                              # after a change: 5 again
     assert "no progress" in guard.replay(after, lim)[1]
+
+
+def test_a_cheap_member_gets_proportionally_more_tokens():
+    parts = [STEP, EDIT] * 4                                 # 204,400 raw tokens
+    lim = {"budget_tokens": 10 ** 9, "ceiling_tokens": 150000}
+    assert "ceiling" in guard.verdict(guard.count(parts), lim)
+    assert guard.verdict(guard.count(parts), {**lim, "cost_weight": 0.5}) == ""
