@@ -223,8 +223,13 @@ def main(argv=None) -> int:
                 "--dir", str(ws)] + (["--session", session] if session else [])
         out, err, _, stopped = guard.launch(
             argv, ws, env, home, f"round{rounds}", lim, t0, a.timeout,
-            lambda c: status("running", round=rounds, guard=c, you_might_see="an opencode.exe "
-                             "process; it works only inside its own worktree"))
+            lambda c: (status("running", round=rounds, guard=c, you_might_see="an opencode.exe "
+                              "process; it works only inside its own worktree"),
+                       # one line per guard poll, so the terminal never looks idle
+                       print(f"{dt.datetime.now():%H:%M:%S} {a.pa} round {rounds}: "
+                             f"{c['steps']} steps, {c['tokens'] / 1e6:.2f}M tokens, "
+                             f"{c['progress']} changes, {c['tool_errors']} errors",
+                             flush=True)))
         raw_all, err_all = raw_all + (out or ""), err_all + (err or "")
         events = _events(out or "")
         session = session or next((e["sessionID"] for e in events if e.get("sessionID")), None)
