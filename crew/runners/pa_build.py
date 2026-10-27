@@ -144,7 +144,7 @@ def main(argv=None) -> int:
     ap.add_argument("--check", action="append", default=[], help="a command that must pass")
     ap.add_argument("--rounds", type=int, default=2, help="feedback rounds after the first")
     ap.add_argument("--timeout", type=int, default=3600, help="seconds per round")
-    ap.add_argument("--cargo-target", default="", help="CARGO_TARGET_DIR; also allows cargo")
+    ap.add_argument("--cargo-target", default="", help="parent of each build's own CARGO_TARGET_DIR; also allows cargo")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
@@ -192,7 +192,10 @@ def main(argv=None) -> int:
     env["XDG_DATA_HOME"] = str(home / "data")      # guard.launch sets the same
     env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(scope.get("reply_tokens") or 32768))
     if cargo:
-        env["CARGO_TARGET_DIR"] = a.cargo_target
+        # One folder PER BUILD under --cargo-target: with one shared folder, two worktrees of
+        # the same crate overwrote each other's binaries, and a check ran the OTHER PA's
+        # tests ("running 0 tests" for a worktree with 44, 2026-10-26).
+        env["CARGO_TARGET_DIR"] = str(Path(a.cargo_target) / ws.name)
     if not env.get("SYNTHETIC_API_KEY"):
         key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
         if key:
