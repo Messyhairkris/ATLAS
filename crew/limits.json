@@ -1,5 +1,5 @@
 {
- "_about": "Limits the guard (crew/guard.py) enforces on EVERY OpenCode job while it runs. Software counts and stops the job; no AI reads this. For a number the TIGHTEST of defaults, job type and member wins. PROGRESS = a code edit that went through, or a progress_command that exited 0; reading and searching are not progress. A job that keeps making progress may pass budget_tokens and go on up to the ceilings; one that stops making progress, or keeps failing, is stopped. tokens = fresh input + output + cached input re-read (every step re-sends the conversation). Set from today's jobs (2026-10-26): the passing builds never went more than 9 steps without progress or repeated an error more than twice; the two failed ones went 18 and 23 steps and repeated an error 4 times.",
+ "_about": "Members differ (Kris 2026-10-26: different models react differently): tune each member from ITS replays (python -m crew.guard <job> --replay), keyed _seen notes record why. Limits the guard (crew/guard.py) enforces on EVERY OpenCode job while it runs. Software counts and stops the job; no AI reads this. For a number the TIGHTEST of defaults, job type and member wins. PROGRESS = a code edit that went through, or a progress_command that exited 0; reading and searching are not progress. A job that keeps making progress may pass budget_tokens and go on up to the ceilings; one that stops making progress, or keeps failing, is stopped. tokens = fresh input + output + cached input re-read (every step re-sends the conversation). Set from today's jobs (2026-10-26): the passing builds never went more than 9 steps without progress or repeated an error more than twice; the two failed ones went 18 and 23 steps and repeated an error 4 times.",
  "defaults": {
   "budget_tokens": 1500000,
   "stall_steps": 12,
@@ -26,9 +26,11 @@
   "unify": {"ceiling_steps": 30, "max_check_rounds": 0}
  },
  "members": {
-  "Kimi": {"budget_tokens": 1200000, "ceiling_tokens": 2500000,
+  "Kimi": {"_seen": "2026-10-26: reads widely; Inbox build 80 steps, 23 without progress. Passing builds 22-23 steps.",
+           "budget_tokens": 1200000, "ceiling_tokens": 2500000,
            "stall_steps_over_budget": 3, "max_tool_errors": 6},
-  "Qwen": {},
-  "Gordon": {"ceiling_steps": 100}
+  "Qwen": {"_seen": "2026-10-26: retries refused commands (7 in a row on the Changes pane) and wiped files while writing."},
+  "Gordon": {"_seen": "2026-10-26: reads only what the brief names (13 steps, then writes); cheapest per step.",
+             "ceiling_steps": 100}
  }
 }
