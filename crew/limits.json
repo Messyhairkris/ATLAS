@@ -1,25 +1,33 @@
 {
- "_about": "Limits the guard (crew/guard.py) enforces on every OpenCode job while it runs. No AI reads this: software counts and stops the job. For each limit the TIGHTEST of defaults, the job type and the member wins. tokens = fresh input + output + cached input re-read (every step re-sends the conversation, so cached input is most of the bill). Kris edits these; nothing else needs to change.",
+ "_about": "Limits the guard (crew/guard.py) enforces on EVERY OpenCode job while it runs. Software counts and stops the job; no AI reads this. For a number the TIGHTEST of defaults, job type and member wins. PROGRESS = a code edit that went through, or a progress_command that exited 0; reading and searching are not progress. A job that keeps making progress may pass budget_tokens and go on up to the ceilings; one that stops making progress, or keeps failing, is stopped. tokens = fresh input + output + cached input re-read (every step re-sends the conversation). Set from today's jobs (2026-10-26): the passing builds never went more than 9 steps without progress or repeated an error more than twice; the two failed ones went 18 and 23 steps and repeated an error 4 times.",
  "defaults": {
-  "max_steps": 40,
-  "max_tokens": 2000000,
-  "max_fresh_tokens": 300000,
-  "max_minutes": 45,
+  "budget_tokens": 1500000,
+  "stall_steps": 12,
+  "stall_steps_over_budget": 4,
+  "ceiling_tokens": 4000000,
+  "ceiling_fresh_tokens": 500000,
+  "ceiling_steps": 80,
+  "max_minutes": 60,
   "max_tool_errors": 10,
   "max_errors_in_a_row": 4,
   "max_same_error": 3,
-  "max_check_rounds": 1,
-  "poll_seconds": 15
+  "max_check_rounds": 2,
+  "poll_seconds": 15,
+  "progress_commands": ["cargo test", "cargo build", "cargo check", "pytest", "node --test",
+                        "npm test", "python -m unittest"]
  },
  "jobs": {
   "build": {},
-  "fix": {"max_steps": 15, "max_tokens": 800000, "max_check_rounds": 1},
-  "unify": {"max_steps": 20, "max_check_rounds": 0}
+  "module": {"budget_tokens": 800000, "ceiling_tokens": 2000000, "ceiling_steps": 40,
+             "stall_steps": 10},
+  "fix": {"budget_tokens": 600000, "ceiling_tokens": 1500000, "ceiling_steps": 30,
+          "stall_steps": 8, "max_check_rounds": 1},
+  "unify": {"ceiling_steps": 30, "max_check_rounds": 0}
  },
  "members": {
-  "Kimi": {"max_steps": 20, "max_tokens": 600000, "max_fresh_tokens": 120000,
-           "max_tool_errors": 5, "max_check_rounds": 0},
-  "Qwen": {"max_steps": 40, "max_tokens": 2000000},
-  "Gordon": {"max_steps": 60, "max_tokens": 3000000}
+  "Kimi": {"budget_tokens": 1200000, "ceiling_tokens": 2500000,
+           "stall_steps_over_budget": 3, "max_tool_errors": 6},
+  "Qwen": {},
+  "Gordon": {"ceiling_steps": 100}
  }
 }

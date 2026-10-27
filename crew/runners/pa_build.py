@@ -189,7 +189,7 @@ def main(argv=None) -> int:
     # Its own OpenCode database: three PAs started at once on the shared
     # ~/.local/share/opencode/opencode.db, and two stopped on "database is locked"
     # before their first request (2026-10-26). Also keeps them out of the window's engine.
-    env["XDG_DATA_HOME"] = str(home / "data")
+    env["XDG_DATA_HOME"] = str(home / "data")      # guard.launch sets the same
     env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(scope.get("reply_tokens") or 32768))
     if cargo:
         env["CARGO_TARGET_DIR"] = a.cargo_target
@@ -206,7 +206,7 @@ def main(argv=None) -> int:
             "worktree": str(ws), "started": started, **extra}, indent=1), encoding="utf-8")
 
     session, raw_all, err_all, checks_text = None, "", "", ""
-    message, rounds, passed, outside, stopped = feature, 0, False, [], ""
+    message, rounds, passed, outside, stopped, passing = feature, 0, False, [], "", []
     t0 = time.time()
     while rounds < 1 + a.rounds:
         rounds += 1
@@ -214,30 +214,22 @@ def main(argv=None) -> int:
                "only inside its own worktree")
         argv = [OPENCODE, "run", message, "--agent", "pa-build", "--format", "json",
                 "--dir", str(ws)] + (["--session", session] if session else [])
-        # Output goes to files so the guard can poll the job's database while it runs.
-        out_f, err_f = home / f"round{rounds}.jsonl", home / f"round{rounds}.stderr.txt"
-        with open(out_f, "w", encoding="utf-8") as fo, open(err_f, "w", encoding="utf-8") as fe:
-            p = subprocess.Popen(argv, cwd=str(ws), stdout=fo, stderr=fe, env=env)
-            stopped = guard.run(p, Path(env["XDG_DATA_HOME"]) / "opencode" / "opencode.db",
-                                {**lim, "max_minutes": min(lim.get("max_minutes", 1e9),
-                                                           (time.time() - t0 + a.timeout) / 60)},
-                                t0, lambda c: status("running", round=rounds, guard=c,
-                                                     you_might_see="an opencode.exe process; "
-                                                     "it works only inside its own worktree"))
-        out = out_f.read_text(encoding="utf-8", errors="replace")
-        err = err_f.read_text(encoding="utf-8", errors="replace")
+        out, err, _, stopped = guard.launch(
+            argv, ws, env, home, f"round{rounds}", lim, t0, a.timeout,
+            lambda c: status("running", round=rounds, guard=c, you_might_see="an opencode.exe "
+                             "process; it works only inside its own worktree"))
         raw_all, err_all = raw_all + (out or ""), err_all + (err or "")
         events = _events(out or "")
         session = session or next((e["sessionID"] for e in events if e.get("sessionID")), None)
         outside = _writes_outside(events, ws)
         if outside or stopped:
             break
-        previous = checks_text
         passed, checks_text = run_checks(ws, a.check, env, 1800)
+        passing.append(checks_text.count("-> passed"))
         if passed or not session or not _actionable(checks_text):
             break                      # a failure with no output gives the PA nothing to fix
-        if checks_text == previous:
-            stopped = "the same check failure twice in a row"
+        if not guard.next_round(passing):
+            stopped = f"no improvement: checks passing per round {passing}"
             break
         message = ("THE CHECKS FAILED. This is machine output, not an opinion. Fix the cause, "
                    "run the checks again, update PA_REPORT.md, then stop.\n\n" + checks_text)

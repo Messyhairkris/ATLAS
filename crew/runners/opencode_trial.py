@@ -234,7 +234,9 @@ def run(member: str, task: dict, label: str, timeout_s: int, seed: dict = None,
         key = _resolve_secret((_get_provider("synthetic").get("auth") or {}))
         if key:
             env["SYNTHETIC_API_KEY"] = key
-    session = {"id": None}
+    session, stopped = {"id": None}, {"why": ""}
+    from crew import guard
+    lim = guard.limits(member, "fix" if seed else "module")
 
     def opencode(message: str, first: bool):
         # Round 1 ATTACHES the contract (-f), the way the crew preloads it: Nemotron,
@@ -248,27 +250,19 @@ def run(member: str, task: dict, label: str, timeout_s: int, seed: dict = None,
         argv = [OPENCODE, "run", message, "-m", f"synthetic/{model_id}", "--format", "json",
                 "--dir", str(ws)] + (["-f", str(ws / "CONTRACT.md")] if first
                                      else ["--session", session["id"]])
-        # Not subprocess.run(timeout=): on Windows it kills only the direct child, the
-        # opencode.exe grandchild keeps the pipes open, and the wait never ends (Nemotron
-        # v3 hung 3 h past a 30 min timeout, 2026-09-26). On timeout, kill the whole tree.
-        p = subprocess.Popen(argv, cwd=str(ws), stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                             errors="replace", env=env)
-        try:
-            out, err = p.communicate(timeout=timeout_s)
-            return out, err, p.returncode
-        except subprocess.TimeoutExpired:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
-            try:
-                out, _ = p.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                out = ""
-            return out or "", "timeout", -1
+        # The guard runs it (its own database, output to files, the whole tree killed on
+        # a limit or the timeout - subprocess.run(timeout=) left the opencode.exe
+        # grandchild running, Nemotron v3 hung 3 h past a 30 min timeout, 2026-09-26).
+        out, err, code, why = guard.launch(argv, ws, env, home, f"round{rounds}", lim, t0,
+                                           timeout_s)
+        stopped["why"] = why
+        return out, err, code
 
     t0 = time.time()
     raw_all, err_all, rounds, steps, code = "", "", 0, [], 0
     message, first = prompt, True
-    while rounds < 1 + int(task.get("feedback_rounds", 2)):
+    passing = []
+    while rounds < 1 + min(int(task.get("feedback_rounds", 2)), int(lim["max_check_rounds"])):
         rounds += 1
         raw, err, code = opencode(message, first)
         raw_all += raw
@@ -281,8 +275,16 @@ def run(member: str, task: dict, label: str, timeout_s: int, seed: dict = None,
             steps = [{"rung": "fence", "ok": False,
                       "detail": "wrote outside its folder: " + ", ".join(outside)}]
             break
+        if stopped["why"]:
+            steps = [{"rung": "guard", "ok": False, "detail": "stopped by the guard: " + stopped["why"]}]
+            break
         steps = _grade(ws, task, deps)
         if all(s["ok"] for s in steps):
+            break
+        passing.append(sum(1 for s in steps if s["ok"]))
+        if not guard.next_round(passing):
+            steps.append({"rung": "guard", "ok": False,
+                          "detail": f"no improvement: grader rungs passing per round {passing}"})
             break
         if not session["id"]:
             steps.append({"rung": "session", "ok": False,

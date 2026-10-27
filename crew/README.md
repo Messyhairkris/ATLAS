@@ -254,3 +254,19 @@ language: `HARNESS_BUILDING.md`.
 - Web fetch covers only `fetch_allowlist`; pages are read in windows (`start`, `lines`) or searched (`pattern`). Fetched pages are untrusted input.
 - AutoHotkey runs only in Windows Sandbox (Kris, 2026-09-21). One sandbox at a time; runs queue behind a lock.
 - Vision is probed, not wired: no task type carries an image yet (`VISION.md`).
+
+## The guard: limits on every OpenCode job (software, no AI)
+
+Every OpenCode job (PA builds, crew modules, rescues) starts through `crew.guard.launch()`,
+which reads the job's own database every 15 s and stops it when the job stops earning its
+tokens. A test (`tests/test_guard.py`) fails if any runner starts OpenCode another way.
+
+- **Progress** = a code edit that went through, or a test/build command that exited 0.
+  A job making progress may run past its token budget, up to the ceilings.
+- **Stopped** when: too many steps with no progress (fewer once past the budget), too many
+  failed tool calls / in a row / the same error repeated, a ceiling (tokens, steps,
+  minutes), or a check round that passed no more checks than the round before.
+- **Change the numbers** in `crew/limits.json` (defaults, job type, member; the tightest
+  wins). Nothing else needs editing.
+- **See a job**: `python -m crew.guard <job dir>`; `--replay` shows where a finished job
+  would have been stopped. A stopped job leaves `guard.json` with the reason.
