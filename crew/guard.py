@@ -30,6 +30,7 @@ launch(), so the guard cannot be forgotten.
 
 import argparse
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -39,15 +40,24 @@ from pathlib import Path
 LIMITS = Path(__file__).resolve().parent / "limits.json"
 
 
+FLOORS = ("min_free_gb",)     # a floor, not a ceiling: the HIGHEST wins (the tightest)
+
+
 def limits(member: str, job: str = "build", path: Path = LIMITS) -> dict:
     """The effective limits for one member on one job type: for a number the tightest wins,
-    anything else (progress_commands) is replaced by the later layer."""
+    anything else (progress_commands) is replaced by the later layer. A floor (min_free_gb)
+    is the opposite: the HIGHEST is the tightest."""
     cfg = json.loads(Path(path).read_text(encoding="utf-8"))
     out = dict(cfg.get("defaults") or {})
     for layer in ((cfg.get("jobs") or {}).get(job) or {}, (cfg.get("members") or {}).get(member) or {}):
         for k, v in layer.items():
             tight = isinstance(v, (int, float)) and isinstance(out.get(k), (int, float))
-            out[k] = min(out[k], v) if tight and k != "poll_seconds" else v
+            if not tight or k == "poll_seconds":
+                out[k] = v                 # a non-number, or poll_seconds: the later layer
+            elif k in FLOORS:
+                out[k] = max(out[k], v)    # a floor: the highest is the tightest
+            else:
+                out[k] = min(out[k], v)    # a ceiling or a stall: the lowest is the tightest
     return out
 
 
@@ -153,7 +163,30 @@ def kill_tree(pid: int) -> None:
     subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
 
 
-def watch(proc, db: Path, lim: dict, started: float, on_poll=None) -> str:
+def free_gb(path) -> float:
+    """Free space in GB on the drive that holds path; walks up to the nearest existing parent
+    (a job's home may not exist yet, but its drive does)."""
+    p = Path(path).resolve()
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return shutil.disk_usage(p).free / (1024 ** 3)
+
+
+def disk_reason(lim: dict, path) -> str:
+    """'' unless the drive holding path has less free space than min_free_gb, else the reason.
+    Software checks it before launch() and on every poll of watch(): a full disk is what made
+    Kimi's Inbox build fail (2026-10-26)."""
+    floor = lim.get("min_free_gb")
+    if not floor:
+        return ""
+    free = free_gb(path)
+    if free < floor:
+        root = Path(path).resolve().anchor or str(path)
+        return f"disk: {free:.1f} GB free on {root}, below min_free_gb {floor}"
+    return ""
+
+
+def watch(proc, db: Path, lim: dict, started: float, on_poll=None, disk=None) -> str:
     """Wait for proc, checking the limits every poll_seconds; kill it the moment one trips.
     started is when the whole job began, so minutes count across rounds."""
     poll = max(2, int(lim.get("poll_seconds", 15)))
@@ -166,6 +199,8 @@ def watch(proc, db: Path, lim: dict, started: float, on_poll=None) -> str:
             done = False
         c = count(_parts(db), commands)
         why = verdict(c, lim, time.time() - started)
+        if not why and not done and disk:
+            why = disk_reason(lim, disk)
         if on_poll:
             on_poll(c)
         if why and not done:
@@ -179,8 +214,14 @@ def launch(argv: list, cwd: Path, env: dict, home: Path, name: str, lim: dict, s
            timeout_s: float = None, on_poll=None) -> tuple:
     """THE way to run opencode.exe: its own database under home/data (the guard reads it,
     and parallel jobs never lock each other), output to home/<name>.jsonl, watched.
-    -> (stdout, stderr, returncode, stopped reason or '')."""
+    -> (stdout, stderr, returncode, stopped reason or ''); returncode is None when the
+    disk check refuses the job before it starts."""
     home.mkdir(parents=True, exist_ok=True)
+    refused = disk_reason(lim, home)     # a full disk: refuse before the job writes anything
+    if refused:
+        (home / "guard.json").write_text(json.dumps({"stopped": refused, "counts": count(
+            _parts(db_path(home)), lim.get("progress_commands") or ())}, indent=1), encoding="utf-8")
+        return "", "", None, refused
     env = {**env, "XDG_DATA_HOME": str(home / "data")}
     if timeout_s:                          # the caller's own timeout, counted from started
         lim = {**lim, "max_minutes": min(lim.get("max_minutes", float("inf")),
@@ -189,7 +230,7 @@ def launch(argv: list, cwd: Path, env: dict, home: Path, name: str, lim: dict, s
     with open(out_f, "w", encoding="utf-8") as fo, open(err_f, "w", encoding="utf-8") as fe:
         p = subprocess.Popen(argv, cwd=str(cwd), stdout=fo, stderr=fe, env=env)
         stopped = watch(p, Path(env["XDG_DATA_HOME"]) / "opencode" / "opencode.db", lim,
-                        started, on_poll)
+                        started, on_poll, disk=home)
     if stopped:
         (home / "guard.json").write_text(json.dumps({"stopped": stopped, "counts": count(
             _parts(db_path(home)), lim.get("progress_commands") or ())}, indent=1), encoding="utf-8")

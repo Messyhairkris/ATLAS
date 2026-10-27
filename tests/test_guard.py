@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from crew import guard
 
@@ -97,6 +98,53 @@ def test_job_inside_limits_runs_to_the_end(tmp_path):
                                        tmp_path, "r1", {**LIM, "poll_seconds": 2}, time.time())
     assert (why, code, out.strip()) == ("", 0, "hi")
 
+
+def test_min_free_gb_is_a_floor_the_highest_wins(tmp_path):
+    f = tmp_path / "limits.json"
+    f.write_text(json.dumps({"defaults": {"min_free_gb": 5},
+                             "jobs": {"build": {"min_free_gb": 10}},
+                             "members": {"Kimi": {"min_free_gb": 2}}}))
+    assert guard.limits("Kimi", "build", f)["min_free_gb"] == 10   # job 10 > default 5 > member 2
+    assert guard.limits("Hoss", "build", f)["min_free_gb"] == 10   # a looser member cannot lower it
+    assert guard.limits("Kimi", "fix", f)["min_free_gb"] == 5      # no job override: default stands
+
+
+def test_free_gb_reads_the_drive_of_the_nearest_existing_parent(tmp_path):
+    assert guard.free_gb(tmp_path / "not" / "there" / "yet") > 0
+
+
+def test_disk_reason_only_when_below_the_floor(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard.shutil, "disk_usage", lambda p: SimpleNamespace(free=3 * 1024 ** 3))
+    assert guard.disk_reason({"min_free_gb": 5}, tmp_path).startswith("disk: 3.0 GB free")
+    assert guard.disk_reason({"min_free_gb": 2}, tmp_path) == ""
+    assert guard.disk_reason({}, tmp_path) == ""                   # unset: never refuses
+
+
+def test_launch_refuses_when_the_drive_is_too_full(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard.shutil, "disk_usage", lambda p: SimpleNamespace(free=1024 ** 3))
+    marker = tmp_path / "ran.txt"
+    out, err, code, why = guard.launch(
+        [sys.executable, "-c", f"open(r'{marker}', 'w').write('x')"],
+        tmp_path, {}, tmp_path, "r1", {**LIM, "min_free_gb": 5}, time.time())
+    assert why.startswith("disk:") and code is None
+    assert not marker.exists()                     # the job never started
+    assert json.loads((tmp_path / "guard.json").read_text())["stopped"] == why
+
+
+def test_watch_stops_a_running_job_when_the_drive_fills(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def fake(path):
+        calls["n"] += 1
+        return SimpleNamespace(free=(100 if calls["n"] == 1 else 1) * 1024 ** 3)
+
+    monkeypatch.setattr(guard.shutil, "disk_usage", fake)
+    _db(guard.db_path(tmp_path), [STEP, EDIT])     # otherwise a perfectly healthy, progressing job
+    t0 = time.time()
+    out, err, code, why = guard.launch(
+        [sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, {}, tmp_path, "r1",
+        {**LIM, "min_free_gb": 5, "poll_seconds": 2}, t0)
+    assert why.startswith("disk:") and time.time() - t0 < 20
 
 # Starts OpenCode without launch(), on purpose, with the reason. Anything not listed fails.
 KNOWN_UNGUARDED = {
