@@ -10,6 +10,7 @@ Covers:
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -411,7 +412,8 @@ def test_lens_artifact_dir_for_uses_default_when_unset(tmp_path):
     """Default resolution: <atlas_root>/geometric-lens/geometric_lens/models"""
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     d = model_registry.lens_artifact_dir_for(m, str(tmp_path))
-    assert d.endswith("geometric-lens/geometric_lens/models")
+    assert Path(d).parts[-3:] == ("geometric-lens", "geometric_lens",
+                                   "models")
 
 
 def test_lens_artifact_dir_for_returns_none_for_unsupported_model():

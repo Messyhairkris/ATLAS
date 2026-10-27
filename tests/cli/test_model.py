@@ -35,6 +35,18 @@ from atlas.commands import model, model_registry, tier
 # wrote ~37 GB a run that way and filled the disk (2026-10-26). Nothing here
 # ever reads those bytes, only the size, so write one byte and report the size.
 _FAKE_SIZES = {}
+_FAKE_DIRS = {}
+
+
+def _fake_big(tmp_path, size_bytes=101 * 1024 * 1024):
+    """Every .gguf/.part under tmp_path reports size_bytes, built from nothing.
+
+    model.py refuses a download under 100 MB (its size sanity check), so these
+    tests used to build a 101 MB body of bytes to clear it. Only the stat is
+    read and the SHA is taken over the same small body, so the bytes are not
+    needed - and building them cost ~1 GB of RAM per run.
+    """
+    _FAKE_DIRS[_key(tmp_path)] = size_bytes
 
 
 def _key(path):
@@ -54,7 +66,13 @@ def _sized_files(monkeypatch):
 
     def fake_stat(target, *a, **kw):
         st = real_stat(target, *a, **kw)
-        size = _FAKE_SIZES.get(_key(target))
+        key = _key(target)
+        size = _FAKE_SIZES.get(key)
+        if size is None and str(target).endswith((".gguf", ".part")):
+            for d, s in _FAKE_DIRS.items():
+                if key.startswith(d):
+                    size = s
+                    break
         if size is None:
             return st
         t = tuple(st)
@@ -63,8 +81,10 @@ def _sized_files(monkeypatch):
 
     monkeypatch.setattr(os, "stat", fake_stat)
     _FAKE_SIZES.clear()
+    _FAKE_DIRS.clear()
     yield
     _FAKE_SIZES.clear()
+    _FAKE_DIRS.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -636,7 +656,9 @@ def test_download_fresh_install_succeeds_with_correct_sha(tmp_path, monkeypatch,
     """End-to-end happy path: 200 GB body of zeros (mocked as 101 MB to
     pass the size sanity threshold), SHA matches, file is renamed into
     place."""
-    body = b"\0" * (101 * 1024 * 1024)  # 101 MB
+    body = b"\0" * (64 * 1024)
+    _fake_big(tmp_path)
+
     expected_sha = hashlib.sha256(body).hexdigest()
 
     # Patch the registry temporarily so the 9B's expected sha matches our body.
@@ -670,7 +692,9 @@ def test_download_fresh_install_succeeds_with_correct_sha(tmp_path, monkeypatch,
 
 def test_download_sha_mismatch_deletes_part(tmp_path, monkeypatch, capsys):
     """If the body's SHA doesn't match registry — delete .part, exit 1."""
-    body = b"\0" * (101 * 1024 * 1024)
+    body = b"\0" * (64 * 1024)
+    _fake_big(tmp_path)
+
     wrong_sha = "f" * 64  # definitely not the SHA of zero bytes
 
     import atlas.commands.model_registry as reg
@@ -704,7 +728,9 @@ def test_download_sha_mismatch_deletes_part(tmp_path, monkeypatch, capsys):
 def test_download_resume_continues_hash_correctly(tmp_path, monkeypatch, capsys):
     """Existing .part contains the first half of the body; mocked server
     returns the second half via 206. Final SHA should match the WHOLE body."""
-    full_body = b"x" * (101 * 1024 * 1024)
+    full_body = b"x" * (64 * 1024)
+    _fake_big(tmp_path)
+
     half = len(full_body) // 2
     expected_sha = hashlib.sha256(full_body).hexdigest()
 
@@ -748,7 +774,9 @@ def test_download_server_ignores_range_restarts_cleanly(tmp_path,
     """If we send Range but server returns 200 (ignoring the range), we
     should restart from byte 0, NOT corrupt the hash by counting the
     .part bytes twice."""
-    full_body = b"y" * (101 * 1024 * 1024)
+    full_body = b"y" * (64 * 1024)
+    _fake_big(tmp_path)
+
     expected_sha = hashlib.sha256(full_body).hexdigest()
 
     # Pre-populate .part with junk that would make the hash wrong if
@@ -793,7 +821,9 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
     """When HF_TOKEN is set, the Request must carry an Authorization header
     with Bearer <token>."""
     monkeypatch.setenv("HF_TOKEN", "hf_test_xyz")
-    body = b"z" * (101 * 1024 * 1024)
+    body = b"z" * (64 * 1024)
+    _fake_big(tmp_path)
+
     expected_sha = hashlib.sha256(body).hexdigest()
 
     import atlas.commands.model_registry as reg
@@ -1009,7 +1039,9 @@ def test_install_no_artifacts_flag_skips_artifact_download(tmp_path, monkeypatch
                                                               capsys):
     """`--no-artifacts` on the main `install` command skips lens + ASA
     fetch. Useful for air-gapped installs or when training Lens locally."""
-    body = b"\0" * (101 * 1024 * 1024)
+    body = b"\0" * (64 * 1024)
+    _fake_big(tmp_path)
+
     expected_sha = hashlib.sha256(body).hexdigest()
     import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
@@ -1112,7 +1144,9 @@ def test_resume_416_with_verified_part_finalizes(tmp_path, monkeypatch,
                                                    capsys):
     """HTTP 416 on resume + .part hash matches the registry: promote the
     .part into place instead of erroring."""
-    body = b"z" * (101 * 1024 * 1024)
+    body = b"z" * (64 * 1024)
+    _fake_big(tmp_path)
+
     _patched_9b(monkeypatch, hashlib.sha256(body).hexdigest())
 
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
@@ -1138,7 +1172,9 @@ def test_resume_416_with_corrupt_part_deletes_and_reports(tmp_path,
                                                             capsys):
     """HTTP 416 on resume + .part hash does NOT match: delete the .part
     and tell the user to retry from scratch."""
-    body = b"z" * (101 * 1024 * 1024)
+    body = b"z" * (64 * 1024)
+    _fake_big(tmp_path)
+
     _patched_9b(monkeypatch, "f" * 64)  # never matches
 
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
@@ -1167,7 +1203,9 @@ def test_resume_416_no_sha_no_content_range_deletes(tmp_path, monkeypatch,
     blindly) with fresh-download guidance. Guards against finalizing a
     corrupt/mismatched part left by a different --url/--file."""
     _stub_ample_disk(monkeypatch)
-    body = b"z" * (101 * 1024 * 1024)
+    body = b"z" * (64 * 1024)
+    _fake_big(tmp_path)
+
     _patched_9b(monkeypatch, None)  # registry has no expected sha256
 
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"

@@ -48,6 +48,7 @@ atlas = "atlas.__main__:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
+tmp_path_retention_policy = "failed"
 
 [build-system]
 # >=77 because the SPDX-string `license` form (PEP 639) fails the build
