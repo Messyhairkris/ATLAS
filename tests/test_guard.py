@@ -98,17 +98,30 @@ def test_job_inside_limits_runs_to_the_end(tmp_path):
     assert (why, code, out.strip()) == ("", 0, "hi")
 
 
+# Starts OpenCode without launch(), on purpose, with the reason. Anything not listed fails.
+KNOWN_UNGUARDED = {
+    # The window's chat server: one long-lived `opencode serve` for every chat, so killing
+    # it would end all chats. Chats are capped per message by personnel steps; a per-session
+    # guard (abort one session over the server's API) is still to be built (2026-10-26).
+    "pa_engine.py": "chat server, per-message steps only",
+    # The interactive OpenCode window Kris opens and drives himself, message by message.
+    "pa_session.py": "interactive, driven by Kris",
+}
+
+
 def test_no_runner_starts_opencode_without_the_guard():
     """The guard cannot be forgotten: only crew/guard.py may Popen/run the opencode binary."""
     offenders = []
     for f in (REPO / "crew").rglob("*.py"):
-        if f.name == "guard.py":
+        if f.name == "guard.py" or f.name in KNOWN_UNGUARDED:
             continue
         src = f.read_text(encoding="utf-8", errors="replace")
+        if "_opencode_exe(" in src and "def _opencode_exe" not in src:
+            offenders.append(f"{f.relative_to(REPO)}: finds the opencode binary itself")
         for m in re.finditer(r"subprocess\.(Popen|run|call|check_output)\((?P<arg>[^)\n]{0,80})", src):
             if "OPENCODE" in m.group("arg") or "opencode" in m.group("arg").lower():
                 offenders.append(f"{f.relative_to(REPO)}: {m.group(0)}")
-        for m in re.finditer(r"(\w+)\s*=\s*\[OPENCODE\b", src):
+        for m in re.finditer(r"(\w+)\s*=\s*\[(?:OPENCODE|exe)\b", src):
             name = m.group(1)
             if re.search(rf"subprocess\.\w+\(\s*{name}\b", src):
                 offenders.append(f"{f.relative_to(REPO)}: launches {name} directly")
