@@ -9,7 +9,52 @@ Covers:
   - stable public field names on the Model record
 """
 
+import os
+
+import pytest
+
 from atlas.commands import model_registry
+
+
+# ---------------------------------------------------------------------------
+# Files that have a size but occupy no disk
+# ---------------------------------------------------------------------------
+# The idiom this file used to use - f.seek(N); f.write(b"\0"), commented
+# "sparse file" - is NOT sparse on Windows: writing past EOF in a non-sparse
+# file allocates the gap, so a "7 GB" stand-in really occupied 7 GB. The suite
+# wrote ~37 GB a run that way and filled the disk (2026-10-26). Nothing here
+# ever reads those bytes, only the size, so write one byte and report the size.
+_FAKE_SIZES = {}
+
+
+def _key(path):
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _make_big(path, size_bytes):
+    """Create `path` for real, but let it report `size_bytes`."""
+    path.write_bytes(b"\0")
+    _FAKE_SIZES[_key(path)] = size_bytes
+
+
+@pytest.fixture(autouse=True)
+def _sized_files(monkeypatch):
+    """Report the sizes _make_big was told, for this test only."""
+    real_stat = os.stat
+
+    def fake_stat(target, *a, **kw):
+        st = real_stat(target, *a, **kw)
+        size = _FAKE_SIZES.get(_key(target))
+        if size is None:
+            return st
+        t = tuple(st)
+        return os.stat_result((t[0], t[1], t[2], t[3], t[4], t[5], size,
+                               t[7], t[8], t[9]))
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    _FAKE_SIZES.clear()
+    yield
+    _FAKE_SIZES.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -195,18 +240,14 @@ def test_is_installed_true_for_large_enough_file(tmp_path):
     p = tmp_path / m.model_file
     # Use sparse-file trick: seek + write 1 byte → file appears as
     # whatever offset we picked, without actually consuming disk.
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)  # just past 100 MB
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)  # just past 100 MB
     assert model_registry.is_installed(m, str(tmp_path)) is True
 
 
 def test_installed_size_gb_returns_size_when_present(tmp_path):
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     p = tmp_path / m.model_file
-    with open(p, "wb") as f:
-        f.seek(2 * 1024 ** 3 - 1)  # 2 GB - 1 byte
-        f.write(b"\0")
+    _make_big(p, 2 * 1024 ** 3 - 1)  # 2 GB - 1 byte
     sz = model_registry.installed_size_gb(m, str(tmp_path))
     assert sz is not None
     assert 1.9 < sz < 2.1
@@ -345,9 +386,7 @@ def test_verify_installed_no_expected_returns_no_expected(tmp_path):
     can't be verified end-to-end. Status should be 'no-expected'."""
     m = model_registry.by_name("Qwen3.5-7B-Q4_K_M")
     p = tmp_path / m.model_file
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     r = model_registry.verify_installed(m, str(tmp_path))
     assert r["match"] == "no-expected"
     assert r["installed"] is True
@@ -357,9 +396,7 @@ def test_verify_installed_mismatch_detects_corruption(tmp_path):
     """A file with unexpected contents must report mismatch."""
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     p = tmp_path / m.model_file
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     r = model_registry.verify_installed(m, str(tmp_path))
     assert r["match"] == "mismatch"
     assert r["actual_sha256"] is not None

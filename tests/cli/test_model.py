@@ -18,9 +18,53 @@ mocked filesystem state:
 """
 
 import json
+import os
 from typing import Optional
 
+import pytest
+
 from atlas.commands import model, model_registry, tier
+
+
+# ---------------------------------------------------------------------------
+# Files that have a size but occupy no disk
+# ---------------------------------------------------------------------------
+# The idiom this file used to use - f.seek(N); f.write(b"\0"), commented
+# "sparse file" - is NOT sparse on Windows: writing past EOF in a non-sparse
+# file allocates the gap, so a "7 GB" stand-in really occupied 7 GB. The suite
+# wrote ~37 GB a run that way and filled the disk (2026-10-26). Nothing here
+# ever reads those bytes, only the size, so write one byte and report the size.
+_FAKE_SIZES = {}
+
+
+def _key(path):
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _make_big(path, size_bytes):
+    """Create `path` for real, but let it report `size_bytes`."""
+    path.write_bytes(b"\0")
+    _FAKE_SIZES[_key(path)] = size_bytes
+
+
+@pytest.fixture(autouse=True)
+def _sized_files(monkeypatch):
+    """Report the sizes _make_big was told, for this test only."""
+    real_stat = os.stat
+
+    def fake_stat(target, *a, **kw):
+        st = real_stat(target, *a, **kw)
+        size = _FAKE_SIZES.get(_key(target))
+        if size is None:
+            return st
+        t = tuple(st)
+        return os.stat_result((t[0], t[1], t[2], t[3], t[4], t[5], size,
+                               t[7], t[8], t[9]))
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    _FAKE_SIZES.clear()
+    yield
+    _FAKE_SIZES.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +108,7 @@ def test_list_installed_filter_returns_empty_on_missing_dir(tmp_path, capsys):
 def test_list_installed_picks_up_present_file(tmp_path, capsys):
     """is_installed sees the gguf file → list --installed shows it."""
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)  # > 100 MB sanity threshold
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)  # > 100 MB sanity threshold
     rc = model.main(["list", "--installed", "--models-dir", str(tmp_path),
                      "--no-color"])
     assert rc == 0
@@ -213,9 +255,7 @@ def test_install_dry_run_for_supported_model_prints_url(tmp_path, capsys):
 def test_install_refuses_overwrite_without_yes(tmp_path, capsys):
     """If the target file already exists, refuse without --yes."""
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(7 * 1024 ** 3)  # 7 GB sparse file
-        f.write(b"\0")
+    _make_big(p, 7 * 1024 ** 3)  # only has to exist
     rc = model.main(["install", "Qwen3.5-9B-Q6_K",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
@@ -242,9 +282,7 @@ def test_remove_missing_file_is_idempotent_zero(tmp_path, capsys):
 
 def test_remove_without_yes_refuses(tmp_path, capsys):
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     rc = model.main(["remove", "Qwen3.5-9B-Q6_K",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
@@ -253,9 +291,7 @@ def test_remove_without_yes_refuses(tmp_path, capsys):
 
 def test_remove_with_yes_deletes(tmp_path, capsys):
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     rc = model.main(["remove", "Qwen3.5-9B-Q6_K", "--yes",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0
@@ -365,9 +401,7 @@ def test_verify_corrupted_file_detects_mismatch(tmp_path, capsys):
     """Sparse file with wrong contents → SHA mismatch → exit 1 + helpful
     message about re-installing."""
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     rc = model.main(["verify", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
                      "--no-color"])
     assert rc == 1
@@ -380,9 +414,7 @@ def test_verify_no_expected_sha_reports_skipped(tmp_path, capsys):
     """A file that's installed but registry has no expected SHA → status
     'no-expected', exit 0 (we can't tell if it's corrupt or not)."""
     p = tmp_path / "Qwen3.5-7B-Q4_K_M.gguf"  # registry sha256=None
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     rc = model.main(["verify", "Qwen3.5-7B-Q4_K_M", "--models-dir",
                      str(tmp_path), "--no-color"])
     assert rc == 0
@@ -392,9 +424,7 @@ def test_verify_no_expected_sha_reports_skipped(tmp_path, capsys):
 
 def test_verify_json_includes_per_model_results(tmp_path, capsys):
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
-    with open(p, "wb") as f:
-        f.seek(101 * 1024 * 1024)
-        f.write(b"\0")
+    _make_big(p, 101 * 1024 * 1024)
     rc = model.main(["verify", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
                      "--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -498,9 +528,7 @@ def test_install_oversized_part_refused(tmp_path, monkeypatch, capsys):
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
     # Registered size is 6.94 GB. Make a sparse .part of 20 GB —
     # well over the 5% slack threshold.
-    with open(p, "wb") as f:
-        f.seek(20 * 1024 ** 3)
-        f.write(b"\0")
+    _make_big(p, 20 * 1024 ** 3)
     rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir",
                      str(tmp_path), "--no-color"])
     assert rc == 1
@@ -522,9 +550,7 @@ def test_install_oversized_part_within_slack_does_not_refuse(tmp_path,
     _stub_ample_disk(monkeypatch)
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
     # ~7.0 GB — within 5% of the registered 6.94 GB
-    with open(p, "wb") as f:
-        f.seek(int(7.0 * 1024 ** 3))
-        f.write(b"\0")
+    _make_big(p, int(7.0 * 1024 ** 3))
 
     def fake_urlopen(*a, **kw):
         raise urllib.error.URLError("network disabled in test")
