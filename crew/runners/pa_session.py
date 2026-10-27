@@ -84,6 +84,9 @@ READ_ONLY_COMMANDS = (
     "Join-Path", "Select-Object", "Select-String", "Where-Object", "Sort-Object",
     "Measure-Object", "Format-Table", "Format-List", "Out-String", "Write-Output",
     "ConvertFrom-Json",
+    # Kris 2026-10-27: PAs hand off and reply through vault mail. Not read-only, but it only
+    # ever creates new message files and moves the PA's own inbox pointers (create-only).
+    "python crew/runners/mail.py",
 )
 
 
