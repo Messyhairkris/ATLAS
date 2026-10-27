@@ -686,7 +686,13 @@ def _pid_alive(pid: int) -> bool:
     """POSIX trick: kill(pid, 0) raises ProcessLookupError if no such PID,
     PermissionError if PID exists but we can't signal it (other user).
     Both 'exists' cases return True — a PID owned by another user is
-    still a real running process from our perspective."""
+    still a real running process from our perspective.
+
+    NOT on Windows: there os.kill(pid, 0) is TerminateProcess(pid, 0) - it
+    KILLS the process (it took down the test runner's shell and The Crew's
+    chat engine, 2026-10-26). Windows asks OpenProcess instead."""
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
         return True
@@ -697,6 +703,31 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         # Unknown — be conservative, assume alive.
         return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Open the process for query only and read its exit code; never signals it."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    if pid <= 0:
+        return False
+    handle = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        # 5 = access denied: it exists but belongs to someone else. Anything else
+        # (87 = invalid parameter) means there is no such process.
+        return ctypes.get_last_error() == 5
+    try:
+        code = wintypes.DWORD()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True                              # unknown: assume alive, as above
+        return code.value == 259                     # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(handle)
 
 
 def _acquire_install_lock(target: str, color: bool) -> Optional[str]:

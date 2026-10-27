@@ -243,6 +243,9 @@ def _kill_stale_proxy() -> None:
 
 def _pid_alive(pid: int) -> bool:
     """True if the given pid currently exists."""
+    if os.name == "nt":      # os.kill(pid, 0) KILLS the process on Windows
+        from atlas.commands.model import _pid_alive_windows
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
         return True
