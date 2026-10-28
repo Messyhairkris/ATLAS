@@ -24,6 +24,7 @@ import datetime as dt
 import json
 import os
 import re
+import re
 import subprocess
 import sys
 import time
@@ -124,6 +125,24 @@ def run_checks(cwd: Path, checks: list, env: dict, timeout_s: int) -> tuple:
         ok &= passed
         report.append(f"$ {command}\n-> {'passed' if passed else 'FAILED'}\n{text[-3000:]}")
     return ok, "\n\n".join(report)
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def no_session_reason(err: str) -> str:
+    """The stop reason when a round produced no session: the engine never started.
+
+    The engine's own last error line is worth more than our summary of it: opencode
+    prints its reason on stderr ("service=server error= failed", then "Error: Session
+    not found"). A preflight, so a broken engine fails in seconds with its words.
+    """
+    lines = [l.strip() for l in (err or "").splitlines() if l.strip()]
+    engine = next((l for l in reversed(lines) if "error" in l.lower()),
+                  lines[-1] if lines else "")
+    engine = _ANSI.sub("", engine).strip()
+    base = "no session: the engine did not start, so nothing was built"
+    return f"{base} (engine said: {engine})" if engine else base
 
 
 def _actionable(report: str) -> bool:
@@ -235,10 +254,10 @@ def main(argv=None) -> int:
         events = _events(out or "")
         session = session or next((e["sessionID"] for e in events if e.get("sessionID")), None)
         if not session:
-            # The engine never started (opencode's local server failed: "Session not found").
-            # No work happened, so run_checks would grade an UNTOUCHED worktree and "pass" -
-            # a run that did not happen must never be reported as a pass.
-            stopped = "no session: the engine did not start, so nothing was built"
+            # The engine never started (its local server failed): no work happened, so
+            # run_checks would grade an UNTOUCHED worktree and "pass" - a run that did not
+            # happen must never be reported as a pass. Report the engine's own words.
+            stopped = no_session_reason(err)
             break
         outside = _writes_outside(events, ws)
         if outside or stopped:
