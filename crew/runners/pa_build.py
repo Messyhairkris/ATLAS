@@ -234,6 +234,12 @@ def main(argv=None) -> int:
         raw_all, err_all = raw_all + (out or ""), err_all + (err or "")
         events = _events(out or "")
         session = session or next((e["sessionID"] for e in events if e.get("sessionID")), None)
+        if not session:
+            # The engine never started (opencode's local server failed: "Session not found").
+            # No work happened, so run_checks would grade an UNTOUCHED worktree and "pass" -
+            # a run that did not happen must never be reported as a pass.
+            stopped = "no session: the engine did not start, so nothing was built"
+            break
         outside = _writes_outside(events, ws)
         if outside or stopped:
             break
