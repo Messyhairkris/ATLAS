@@ -197,3 +197,21 @@ def test_a_cheap_member_gets_proportionally_more_tokens():
     lim = {"budget_tokens": 10 ** 9, "ceiling_tokens": 150000}
     assert "ceiling" in guard.verdict(guard.count(parts), lim)
     assert guard.verdict(guard.count(parts), {**lim, "cost_weight": 0.5}) == ""
+
+
+def test_a_job_never_inherits_the_chat_engines_password(tmp_path, monkeypatch):
+    seen = {}
+
+    class Done:
+        returncode, pid = 0, 1
+        def poll(self): return 0
+        def wait(self, timeout=None): return 0
+
+    def popen(argv, **kw):
+        seen.update(kw["env"])
+        return Done()
+    monkeypatch.setattr(guard.subprocess, "Popen", popen)
+    env = {"PATH": "x", "OPENCODE_SERVER_PASSWORD": "s", "OPENCODE_PERMISSION": "{}"}
+    guard.launch(["opencode"], tmp_path, env, tmp_path / "job", "r", {"min_free_gb": 0}, 0)
+    assert "OPENCODE_SERVER_PASSWORD" not in seen and "OPENCODE_PERMISSION" not in seen
+    assert seen["PATH"] == "x" and seen["XDG_DATA_HOME"].endswith("data")

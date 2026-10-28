@@ -228,6 +228,15 @@ def watch(proc, db: Path, lim: dict, started: float, on_poll=None, disk=None) ->
             return why                     # tripped on the last step: still stop the job
 
 
+# Variables a job must never inherit from the chat engine it may be started from. The window
+# runs the engine with OPENCODE_SERVER_PASSWORD (engine.rs); a job started from a PA's chat
+# shell inherited it, and `opencode run`'s in-process server then refused its own client:
+# "service=server error= failed", "Session not found", every build (2026-10-28, first
+# blamed on sleep). OPENCODE_PERMISSION / _CONFIG_CONTENT would override the job's config.
+ENGINE_ONLY_ENV = ("OPENCODE_SERVER_PASSWORD", "OPENCODE_SERVER_USERNAME",
+                   "OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT")
+
+
 def launch(argv: list, cwd: Path, env: dict, home: Path, name: str, lim: dict, started: float,
            timeout_s: float = None, on_poll=None) -> tuple:
     """THE way to run opencode.exe: its own database under home/data (the guard reads it,
@@ -240,7 +249,8 @@ def launch(argv: list, cwd: Path, env: dict, home: Path, name: str, lim: dict, s
         (home / "guard.json").write_text(json.dumps({"stopped": refused, "counts": count(
             _parts(db_path(home)), lim.get("progress_commands") or ())}, indent=1), encoding="utf-8")
         return "", "", None, refused
-    env = {**env, "XDG_DATA_HOME": str(home / "data")}
+    env = {k: v for k, v in env.items() if k not in ENGINE_ONLY_ENV}
+    env["XDG_DATA_HOME"] = str(home / "data")
     if timeout_s:                          # the caller's own timeout, counted from started
         lim = {**lim, "max_minutes": min(lim.get("max_minutes", float("inf")),
                                          (time.time() - started + timeout_s) / 60)}
