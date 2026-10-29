@@ -1,42 +1,84 @@
 {
- "_about": "Members differ (Kris 2026-10-26: different models react differently): tune each member from ITS replays (python -m crew.guard <job> --replay), keyed _seen notes record why. Limits the guard (crew/guard.py) enforces on EVERY OpenCode job while it runs. Software counts and stops the job; no AI reads this. For a number the TIGHTEST of defaults, job type and member wins. PROGRESS = a code edit that went through, or a progress_command that exited 0; reading and searching are not progress. A job that keeps making progress may pass budget_tokens and go on up to the ceilings; one that stops making progress, or keeps failing, is stopped. tokens = fresh input + output + cached input re-read (every step re-sends the conversation). Set from today's jobs (2026-10-26): the passing builds never went more than 9 steps without progress or repeated an error more than twice; the two failed ones went 18 and 23 steps and repeated an error 4 times. min_free_gb: a floor of free disk space (GB) on the job's drive - launch() refuses a job below it and watch() stops a running one (a full disk failed Kimi's Inbox build, 2026-10-26).",
- "defaults": {
-  "budget_tokens": 1500000,
-  "stall_steps": 12,
-  "stall_steps_opening": 20,
-  "stall_steps_over_budget": 4,
-  "ceiling_tokens": 4000000,
-  "ceiling_fresh_tokens": 500000,
-  "ceiling_steps": 80,
-  "max_minutes": 60,
-  "max_tool_errors": 10,
-  "max_errors_in_a_row": 4,
-  "max_same_error": 3,
-  "max_check_rounds": 2,
-  "min_free_gb": 5,
-  "poll_seconds": 15,
-  "progress_commands": ["cargo test", "cargo build", "cargo check", "pytest", "node --test",
-                        "npm test", "python -m unittest"]
- },
- "jobs": {
-  "build": {},
-  "module": {"budget_tokens": 800000, "ceiling_tokens": 2000000, "ceiling_steps": 40,
-             "stall_steps": 10},
-  "fix": {"budget_tokens": 600000, "ceiling_tokens": 1500000, "ceiling_steps": 30,
-          "stall_steps": 8, "max_check_rounds": 1},
-  "unify": {"ceiling_steps": 30, "max_check_rounds": 0}
- },
- "members": {
-  "_cost_weight": "Price per token relative to Kimi-K3 (1.0). ESTIMATES from the 2026-10-26 note (Kimi ~1, others ~0.1-0.3): correct them from Synthetic's price list. Budgets and token ceilings are in Kimi-equivalent tokens, so a cheaper member gets proportionally more raw tokens.",
-  "Kimi": {"cost_weight": 1.0, "_seen": "2026-10-26: reads widely; Inbox build 80 steps, 23 without progress. Passing builds 22-23 steps.",
-           "budget_tokens": 1200000, "ceiling_tokens": 2500000,
-           "stall_steps_over_budget": 3, "max_tool_errors": 6},
-  "Qwen": {"cost_weight": 0.3, "_seen": "2026-10-26: retries refused commands (7 in a row on the Changes pane) and wiped files while writing."},
-  "Gordon": {"_seen": "2026-10-26: reads only what the brief names (13 steps, then writes); cheapest per step. 2026-10-27: stopped at 1.57M tokens / 20 steps while checking his own diff - tokens are cheap on his model, so a larger budget.",
-             "cost_weight": 0.15, "ceiling_steps": 100},
-  "Barry": {"cost_weight": 0.1},
-  "Larry": {"cost_weight": 0.1},
-  "Nemotron": {"cost_weight": 0.1},
-  "Hoss": {"cost_weight": 0.1}
- }
+  "_about": "Members differ (Kris 2026-10-26: different models react differently): tune each member from ITS replays (python -m crew.guard <job> --replay), keyed _seen notes record why. Limits the guard (crew/guard.py) enforces on EVERY OpenCode job while it runs. Software counts and stops the job; no AI reads this. For a number the TIGHTEST of defaults, job type and member wins. PROGRESS = a code edit that went through, or a progress_command that exited 0; reading and searching are not progress. A job that keeps making progress may pass budget_tokens and go on up to the ceilings; one that stops making progress, or keeps failing, is stopped. tokens = fresh input + output + cached input re-read (every step re-sends the conversation). Set from today's jobs (2026-10-26): the passing builds never went more than 9 steps without progress or repeated an error more than twice; the two failed ones went 18 and 23 steps and repeated an error 4 times. min_free_gb: a floor of free disk space (GB) on the job's drive - launch() refuses a job below it and watch() stops a running one (a full disk failed Kimi's Inbox build, 2026-10-26).",
+  "defaults": {
+    "budget_tokens": 1500000,
+    "stall_steps": 12,
+    "stall_steps_opening": 20,
+    "stall_steps_over_budget": 4,
+    "ceiling_tokens": 4000000,
+    "ceiling_fresh_tokens": 500000,
+    "ceiling_steps": 80,
+    "max_minutes": 60,
+    "max_tool_errors": 10,
+    "max_errors_in_a_row": 4,
+    "max_same_error": 3,
+    "max_check_rounds": 2,
+    "min_free_gb": 5,
+    "poll_seconds": 15,
+    "progress_commands": [
+      "cargo test",
+      "cargo build",
+      "cargo check",
+      "pytest",
+      "node --test",
+      "npm test",
+      "python -m unittest"
+    ]
+  },
+  "jobs": {
+    "build": {},
+    "module": {
+      "budget_tokens": 800000,
+      "ceiling_tokens": 2000000,
+      "ceiling_steps": 40,
+      "stall_steps": 10
+    },
+    "fix": {
+      "budget_tokens": 600000,
+      "ceiling_tokens": 1500000,
+      "ceiling_steps": 30,
+      "stall_steps": 8,
+      "max_check_rounds": 1
+    },
+    "unify": {
+      "ceiling_steps": 30,
+      "max_check_rounds": 0
+    }
+  },
+  "members": {
+    "_cost_weight": "Price per token relative to Kimi-K3 (1.0). ESTIMATES from the 2026-10-26 note (Kimi ~1, others ~0.1-0.3): correct them from Synthetic's price list. Budgets and token ceilings are in Kimi-equivalent tokens, so a cheaper member gets proportionally more raw tokens.",
+    "Kimi": {
+      "cost_weight": 1.0,
+      "_seen": "2026-10-26: reads widely; Inbox build 80 steps, 23 without progress. Passing builds 22-23 steps.",
+      "budget_tokens": 1200000,
+      "ceiling_tokens": 2500000,
+      "stall_steps_over_budget": 3,
+      "max_tool_errors": 6
+    },
+    "Qwen": {
+      "cost_weight": 0.3,
+      "_seen": "2026-10-26: retries refused commands (7 in a row on the Changes pane) and wiped files while writing."
+    },
+    "Gordon": {
+      "_seen": "2026-10-26: reads only what the brief names (13 steps, then writes); cheapest per step. 2026-10-27: stopped at 1.57M tokens / 20 steps while checking his own diff - tokens are cheap on his model, so a larger budget.",
+      "cost_weight": 0.15,
+      "ceiling_steps": 100
+    },
+    "Barry": {
+      "cost_weight": 0.1
+    },
+    "Larry": {
+      "cost_weight": 0.1
+    },
+    "Nemotron": {
+      "cost_weight": 0.1
+    },
+    "Hoss": {
+      "cost_weight": 0.1
+    }
+  },
+  "alive": {
+    "comment": "How long a chat turn or a build may be silent and still count as WORKING (Kris 2026-10-28, after the crash: 'there is no way for me to tell if it's still processing or just appears to be'). Under this many seconds since the newest part, or the newest build log line, the header says WORKING; past it, QUIET if the process is alive, DEAD if it is gone or the turn began before the engine now running. crew/runners/alive.py reads this; the window shows what it prints.",
+    "quiet_s": 120
+  }
 }
