@@ -35,6 +35,8 @@ SKILL_DIRS = [HOME / ".claude" / "skills", REPO / ".claude" / "skills"]
 CRUSH_SKILLS = HOME / ".crush" / "skills"
 VAULT = HOME / "Documents" / "Obsidian" / "Knowledge_Base"
 THE_CREW = HOME / "TheCrew"
+FIXES = REPO / "crew" / "fixes.json"      # the fix catalogue: this member's own learned rules
+
 
 RULES = [
     "This machine is Windows 10 and PowerShell is the default shell: no Unix commands "
@@ -181,6 +183,27 @@ def roster(staff: dict) -> List[str]:
     return rows
 
 
+def member_rules(pa: str, catalogue: Optional[dict] = None) -> List[str]:
+    """The standing rules the fix catalogue has learned about THIS member, as plain lines.
+
+    Only entries that are `kind: "brief_rule"`, `status: "active"`, and list this member in
+    `members`. Generated from the catalogue (crew/fixes.json), so one member's habits never
+    clutter another member's brief - a rule learned from Gordon's refusals is not shown to
+    Hoss. Empty when the catalogue has nothing to say about this member. Never raises: a
+    broken or missing catalogue gives no rules, the way a clean brief does.
+    """
+    data = catalogue if catalogue is not None else _read_json(FIXES)
+    lines = []
+    for entry in ((data or {}).get("entries") or []):
+        if (isinstance(entry, dict) and entry.get("kind") == "brief_rule"
+                and entry.get("status") == "active" and pa in (entry.get("members") or [])):
+            rule = " ".join(str(entry.get("rule") or "").split())
+            if rule:
+                lines.append(rule)
+    return lines
+
+
+
 def work_in_flight(state: Path, hours: int = 48) -> List[str]:
     out = []
     cutoff = dt.datetime.now().timestamp() - hours * 3600
@@ -317,11 +340,18 @@ def render(pa: str, task: str = "", staff: Optional[dict] = None,
     else:
         crew_rules_text = crew_rules.for_brief()
     crew_rules_part = [crew_rules_text, ""] if crew_rules_text else []
-    parts = [head, rules, crew_rules_part, live, where, skill_part, tail]
+    # This member's OWN learned rules (fix catalogue, kind: brief_rule) - only the entries that
+    # name this member, so one member's habits never clutter another's brief. Placed with the
+    # standing rules, where it is read and where a size cut cannot reach it.
+    mine = member_rules(pa)
+    mine_part = (["## Your own habits (learned from real failures; crew/fixes.json)",
+                  *[f"- {r}" for r in mine], ""] if mine else [])
+    # `mine_part` is always present, even when empty, so the indices below never shift.
+    parts = [head, rules, mine_part, crew_rules_part, live, where, skill_part, tail]
     text = "\n".join(line for part in parts for line in part)
     if len(text) > cap:
         # drop the lowest-priority detail first: the skills list, then the roster's notes
-        parts[5] = ["## Skills", f"- Listed in {SKILL_DIRS[0]} and {CRUSH_SKILLS} "
+        parts[6] = ["## Skills", f"- Listed in {SKILL_DIRS[0]} and {CRUSH_SKILLS} "
                     f"(cut to keep this brief under {cap} characters).", ""]
         text = "\n".join(line for part in parts for line in part)
     if len(text) > cap:
