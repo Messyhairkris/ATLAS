@@ -87,6 +87,72 @@ def _eta_times(eta: dict):
     return _at_today(eta["likely_by"]), _at_today(eta["worst_by"])
 
 
+CREW_EXE_NAMES = ("the-crew.exe", "the_crew.exe")
+CREW_TITLE = "the crew"
+
+
+def is_crew_window(name: str = "", title: str = "") -> bool:
+    """Is this the foreground window of TheCrew itself?
+
+    Kris, 2026-10-29: "we don't need to see the overlay if the main window is active". The
+    overlay is for when he is looking at something else - the build output, the editor, the
+    desktop - not for when the window it duplicates is already in front of him. Pure, so the
+    decision is tested without a desktop: the process image name is the reliable signal, the
+    window title the fallback (his window is titled "The Crew").
+    """
+    name, title = (name or "").lower(), (title or "").lower()
+    return name in CREW_EXE_NAMES or (not name and CREW_TITLE in title)
+
+
+def foreground_is_crew() -> bool:
+    """Whether TheCrew's own window is in front right now. False when it cannot be told."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        name = ""
+        if pid.value:
+            try:
+                import psutil
+                name = psutil.Process(pid.value).name()
+            except Exception:                    # noqa: BLE001 - an unknown name is not a fault
+                name = ""
+    except Exception:                            # noqa: BLE001 - never break the overlay over this
+        return False
+    return is_crew_window(name, buf.value)
+
+
+def build_alive_note(folder: Path, silent_s: float = 120.0, now: float = None) -> str:
+    """`silent for 8m` when nothing in a build folder has changed - the `QUIET` signal, cheaply.
+
+    The same idea as `crew/runners/alive.py` (a build that has stopped writing for minutes is not
+    progressing), but read from file times instead of a subprocess, because the overlay refreshes
+    every few seconds and must not spawn one process per row.
+    """
+    newest = None
+    try:
+        for path in folder.iterdir():
+            if path.is_file():
+                stamp = path.stat().st_mtime
+                newest = stamp if newest is None else max(newest, stamp)
+    except OSError:
+        return ""
+    if newest is None:
+        return ""
+    silent = (time.time() if now is None else now) - newest
+    if silent < silent_s:
+        return ""
+    minutes = int(silent // 60)
+    return f"quiet for {minutes}m" if minutes < 60 else f"quiet for {minutes // 60}h{minutes % 60:02d}"
+
+
 def gather():
     """-> list of steps: {what, group, likely, worst, queued_minutes, desktop}"""
     from crew import eta as eta_mod
@@ -106,6 +172,19 @@ def gather():
                       "worst": worst, "queued_minutes": 0,
                       "desktop": s.get("task_type") in DESKTOP_TASKS,
                       "started": s.get("started", "")[11:16], "note": s.get("you_might_see", "")})
+    # PA builds (crew/runners/pa_build.py writes one status.json per build): these were the one
+    # kind of work this overlay never showed, which is exactly why a build could be quietly dead
+    # for twenty minutes without anything on screen saying so (Kris, 2026-10-29).
+    for p in RUNS.glob("pa/builds/*/status.json"):
+        s = _read(p)
+        if not s or s.get("state") != "running" or not _fresh(p, s):
+            continue
+        likely, worst = _eta_times(s.get("eta"))
+        steps.append({"what": f"{s.get('pa')}: {s.get('branch') or 'build'}",
+                      "group": "one feature, in its own worktree",
+                      "likely": likely, "worst": worst, "queued_minutes": 0,
+                      "desktop": False, "started": s.get("started", "")[11:16],
+                      "note": build_alive_note(p.parent) or s.get("you_might_see", "")})
     # campaigns: the running task(s), plus the waiting ones queued after
     for p in RUNS.glob("campaigns/*/status.json"):
         s = _read(p)
@@ -334,6 +413,19 @@ def main():
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
     def poll():
+        # Hidden while TheCrew's own window is in front: the overlay repeats what that window
+        # already shows, and Kris asked for it only when something else is on screen
+        # (2026-10-29). Checked twice a second - GetForegroundWindow is cheap, but not free.
+        if time.time() - state.get("last_crew_check", 0.0) > 0.5:
+            state["last_crew_check"] = time.time()
+            hidden = foreground_is_crew()
+            if hidden != state.get("hidden"):
+                state["hidden"] = hidden
+                if hidden:
+                    root.withdraw()
+                else:
+                    root.deiconify()
+                    root.attributes("-topmost", True)   # withdraw/deiconify forgets it
         pt = POINT()
         user32.GetCursorPos(ctypes.byref(pt))
         x0, y0 = root.winfo_rootx(), root.winfo_rooty()
