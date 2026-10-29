@@ -56,21 +56,21 @@
   "posts": {
     "comment": "assigned_to: \"@post\" resolves to the first holder that is not denied. Order = who we send first. Built from the measured table in PERSONNEL.md.",
     "clerk": ["Larry", "Hoss"],
-    "auditor": ["Larry", "Gordon"],
-    "scout": ["Gordon", "Qwen"],
-    "researcher": ["Gordon", "Qwen", "Hoss"],
+    "auditor": ["Larry", "Gordon", "Deepak"],
+    "scout": ["Gordon", "Qwen", "Deepak"],
+    "researcher": ["Gordon", "Qwen", "Hoss", "Deepak"],
     "researcher_note": "2026-10-15, applied by Kris (\"Gordon is nice and cheap as well, this should be a role it is assigned first and often\"): Gordon first. Measured: AE transcript digest passed every gate in 1 request, ~1 min; Qwen's long reasoning hit 504 gateway timeouts twice the same day. When Gordon authors, Barry tests (never the author).",
     "module_author_py": ["Hoss", "Nemotron", "Qwen"],
-    "module_author_js": ["Gordon", "Qwen"],
+    "module_author_js": ["Gordon", "Qwen", "Deepak"],
     "module_author_ahk": ["Hoss", "Nemotron", "Qwen"],
     "module_author_ahk_note": "2026-09-26: minted for the first AHK campaign (Kimi's plan); order copied from module_author_py - UNPROVEN on AHK until str.ahk passes its sandbox tests.",
     "module_author_rs": ["Qwen", "Gordon", "Kimi", "Hoss", "Nemotron", "Barry"],
     "module_author_rs_note": "2026-10-20: minted for the first Rust campaigns (photo_tools for image_convert). Kris: make every member a Rust hand and find the scope that suits each; and 'Qwen, Gordon, and Kimi are our strongest reasoning agents ... much of the higher difficulty tasks should work with these agents' - so hard modules (large exact algorithms, crate-facing integration) go to them first; the others take small and exact jobs and tests. Kimi needs tight scoping (one file, 'read by a program, think silently', 24576 cap). Larry: gofer, monitor, single-task agent. 2026-10-24, Kris (after the PA gave Larry a small Rust module, sse.rs, and his endpoint went silent for 24 min): 'Larry should be assigned very simple fetch and monitor tasks.' - so Larry is off this post: no modules, however small.",
     "tester": ["Hoss", "Qwen"],
-    "digest_tester": ["Gordon", "Barry"],
+    "digest_tester": ["Gordon", "Barry", "Deepak", "Baxter"],
     "digest_tester_note": "2026-10-09, applied by Kris: quote-checked testing of research digests (a scout job giving each bullet a verdict and a verbatim quote). Gordon first for speed (5/5 seeded errors, ~11k tokens per test on the fitted budget); Barry for accuracy (5/5, 0 false flags, ~7-10 min per reply). Not Hoss, Larry or Nemotron (verbatim gate or truncation). `tester` stays the code-test post.",
     "byte_exact": ["Qwen", "Hoss"],
-    "vision": ["Gordon", "Qwen"],
+    "vision": ["Gordon", "Qwen", "Deepak"],
     "special_teams": ["Kimi"]
   },
 
@@ -185,6 +185,64 @@
       "measured": "never run: needs `pip install anthropic` and ANTHROPIC_API_KEY where the crew runs.",
       "posts": [],
       "quirks": {"addenda": [], "leash": {}}
+    },
+    "Deepak": {
+      "model": "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "context_window": 524288,
+      "vision": true,
+      "status": "beta",
+      "public": {
+        "strengths": [
+          "a newer snapshot of Gordon's model (DeepSeek-V4.1-Flash): expect Gordon's profile"
+        ],
+        "weaknesses": [
+          "Beta on Synthetic: the endpoint may be unreliable (cold starts, 404 when rotated).",
+          "untested in the crew"
+        ],
+        "sources": []
+      },
+      "measured": "untested - added 2026-10-29 (Kris: a standard member until we find what he excels at; expected similar to Gordon). vision set from Gordon's model; confirm with the vision test before relying on it.",
+      "posts": [
+        "scout",
+        "researcher",
+        "vision",
+        "module_author_js",
+        "auditor",
+        "digest_tester"
+      ],
+      "quirks": {
+        "addenda": [
+          "Before each search, check the results you already have; never repeat a search with the same words."
+        ],
+        "leash": {}
+      }
+    },
+    "Baxter": {
+      "model": "hf:zai-org/GLM-5.3",
+      "context_window": 524288,
+      "vision": false,
+      "status": "beta",
+      "public": {
+        "strengths": [
+          "the full GLM-5.3 (Barry runs GLM-5.3-Flash): expect Barry's profile, likely stronger and slower"
+        ],
+        "weaknesses": [
+          "Beta on Synthetic: the endpoint may be unreliable (cold starts, 404 when rotated).",
+          "untested in the crew"
+        ],
+        "sources": []
+      },
+      "measured": "untested - added 2026-10-29 (Kris: a standard member until we find what he excels at; expected similar to Barry). vision false like Barry until measured.",
+      "posts": [
+        "digest_tester"
+      ],
+      "quirks": {
+        "addenda": [
+          "Think briefly. Your answer channel must contain the tool call or the SUBMIT block.",
+          "Write the shortest artefact that satisfies the task: one line per finding, no preamble, no restatement of what you read. Submit as soon as the contract is satisfied - a run the token ceiling cuts off loses everything it wrote (2026-10-26: five scout runs in a row)."
+        ],
+        "leash": {}
+      }
     },
     "Kimi": {
       "model": "hf:moonshotai/Kimi-K3",

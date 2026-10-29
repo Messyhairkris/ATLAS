@@ -36,6 +36,8 @@
   "Gordon": {"_seen": "2026-10-26: reads only what the brief names (13 steps, then writes); cheapest per step. 2026-10-27: stopped at 1.57M tokens / 20 steps while checking his own diff - tokens are cheap on his model, so a larger budget.",
              "cost_weight": 0.15, "ceiling_steps": 100},
   "Barry": {"cost_weight": 0.1},
+  "Deepak": {"cost_weight": 0.15, "_seen": "2026-10-29: added, untested; Gordon's model family."},
+  "Baxter": {"cost_weight": 0.15, "_seen": "2026-10-29: added, untested; full GLM-5.3 (Barry is the Flash), so likely dearer than Barry - correct from Synthetic's prices."},
   "Larry": {"cost_weight": 0.1},
   "Nemotron": {"cost_weight": 0.1},
   "Hoss": {"cost_weight": 0.1}
