@@ -165,6 +165,24 @@ def session_digest(db: Path, session: str, timeout: float = 2.0) -> list:
     return digest
 
 
+def compaction_count(db: Path, session: str, timeout: float = 2.0) -> int:
+    """How many compactions the engine has recorded for this session.
+
+    OpenCode writes a part with `type: "compaction"` when it summarises (measured 2026-10-28;
+    the summary message also carries a `summary` key). Counting them is how a client that gave up
+    tells "the engine failed" from "the engine finished after I stopped listening" - it completed
+    at 639,952 ms on 2026-10-28 while the client had timed out at 540 s.
+    """
+    con = _connect(db, timeout)
+    if con is None:
+        return 0
+    try:
+        rows = _rows(con, "part", session)
+    finally:
+        con.close()
+    return sum(1 for _, part in rows if part.get("type") == "compaction")
+
+
 def model_of(messages: list) -> str:
     """The model the newest assistant message ran on ("" when the engine kept none)."""
     for message in reversed(messages):
@@ -269,10 +287,26 @@ def compact(session: str, url: str = "", secret: str = "", provider: str = "synt
 
     messages = load_messages(db, session)
     before = compactlib.newest_fill(messages)
+    compactions_before = compaction_count(db, session)
     digest = session_digest(db, session)
     written = backup(db, session, dest, digest, stamp)
     out = {"session": session, "before": before, "after": before, "backup": written,
            "summarized": False, "applied": bool(apply), "why": ""}
+
+    def late() -> bool:
+        """Did the engine finish the summary after we stopped listening?
+
+        A timeout is NOT proof of failure: measured 2026-10-28, the engine completed at 639,952 ms
+        while the client had given up at 540 s, and the chat WAS compacted. So before reporting a
+        failure, look for a new compaction part; if one is there, report it as done, late.
+        """
+        if compaction_count(db, session) <= compactions_before:
+            return False
+        out["summarized"] = True
+        out["late"] = True
+        out["why"] = ""
+        out["after"] = compactlib.newest_fill(load_messages(db, session))
+        return True
 
     if not apply:
         out["why"] = "dry run: backup written, no summarize"
@@ -295,11 +329,13 @@ def compact(session: str, url: str = "", secret: str = "", provider: str = "synt
             progress(f"still compacting {session} ({int(time.time() - started)}s)")
     if thread.is_alive():
         out["why"] = f"gave up waiting after {int(wait)}s (the chat is unchanged; the backup is kept)"
+        late()                     # the engine may still have finished it, after we stopped
         return out
 
     result = box or {"ok": False, "why": "the summarize call gave no answer"}
     if not result.get("ok"):
         out["why"] = f"the summarize failed: {result.get('why', '')}"
+        late()                     # a failed call is not proof the summary did not happen
         return out
     out["summarized"] = True
     out["after"] = compactlib.newest_fill(load_messages(db, session))
@@ -310,7 +346,8 @@ def line_for(out: dict) -> str:
     """The one line the window shows."""
     folder = Path(out["backup"]["messages"]).parent if out["backup"]["messages"] else ""
     if out["summarized"]:
-        return f"compacted {abbrev(out['before'])} -> {abbrev(out['after'])}, backup saved to {folder}"
+        late = " (late - the engine finished after we stopped listening)" if out.get("late") else ""
+        return f"compacted {abbrev(out['before'])} -> {abbrev(out['after'])}, backup saved to {folder}{late}"
     if not out["applied"]:
         return f"would compact {abbrev(out['before'])} (dry run), backup saved to {folder}"
     return f"nothing compacted ({out['why']}), backup saved to {folder}"
@@ -321,6 +358,10 @@ def main(argv=None) -> int:
     ap.add_argument("--session", required=True, help="the chat's session id")
     ap.add_argument("--url", default="", help="the engine base url, e.g. http://127.0.0.1:4199")
     ap.add_argument("--secret", default="", help="the engine's password (basic auth, user opencode)")
+    ap.add_argument("--secret-stdin", action="store_true",
+                    help="read the password from stdin instead of --secret. A command line is "
+                         "visible to every process listing, so the window passes it on the pipe "
+                         "(desk::python writes its stdin argument) rather than in argv.")
     ap.add_argument("--provider", default="synthetic")
     ap.add_argument("--model", default="", help="default: the newest assistant message's modelID")
     ap.add_argument("--db", default="", help="the engine's opencode.db (default: OpenCode's own)")
@@ -330,8 +371,10 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="run the summarize (without it: a dry run)")
     a = ap.parse_args(argv)
 
+    secret = sys.stdin.readline().strip() if a.secret_stdin else a.secret
+
     out = compact(
-        a.session, url=a.url, secret=a.secret, provider=a.provider, model=a.model,
+        a.session, url=a.url, secret=secret, provider=a.provider, model=a.model,
         db=a.db or None, dest=a.dir or None, apply=a.apply, wait=a.wait, poll=a.poll,
         progress=lambda msg: print(msg, file=sys.stderr, flush=True),
     )

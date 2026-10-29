@@ -127,6 +127,78 @@ def test_without_apply_it_is_a_dry_run_and_never_calls_the_engine(tmp_path):
     assert (dest / "T_messages.jsonl").is_file(), "even a dry run leaves a backup"
 
 
+def _add_compaction_part(db, message_id="m_engine"):
+    """Record a compaction the engine wrote - what the "late" check looks for."""
+    con = sqlite3.connect(db)
+    con.execute("insert into part values (?, ?, ?, ?)",
+                ("p_cmp", message_id, SESSION, json.dumps({"type": "compaction", "auto": False})))
+    con.commit()
+    con.close()
+
+
+def test_a_timeout_is_not_proof_of_failure(tmp_path):
+    # measured 2026-10-28: the engine completed at 639,952 ms while the client had given up at
+    # 540 s, and the chat WAS compacted. A failed call must not be reported as a failure if the
+    # engine left a compaction behind.
+    db = _db(tmp_path / "opencode.db")
+    dest = tmp_path / "compact"
+
+    def post(*_a):
+        _add_compaction_part(db)
+        raise TimeoutError("gave up waiting")
+
+    out = chat_compact.compact(SESSION, url="http://127.0.0.1:9", model="hf:test-model",
+                               db=db, dest=dest, apply=True, post=post, stamp="T",
+                               wait=5, poll=0.01)
+    assert out["summarized"] is True, "the engine did the work, whatever the client saw"
+    assert out["late"] is True
+    assert out["why"] == ""
+    assert "(late" in chat_compact.line_for(out)
+
+
+def test_a_failure_with_no_new_compaction_is_a_real_failure(tmp_path):
+    db = _db(tmp_path / "opencode.db")
+    dest = tmp_path / "compact"
+
+    def post(*_a):
+        raise TimeoutError("gave up waiting")
+
+    out = chat_compact.compact(SESSION, url="http://127.0.0.1:9", model="hf:test-model",
+                               db=db, dest=dest, apply=True, post=post, stamp="T",
+                               wait=5, poll=0.01)
+    assert out["summarized"] is False
+    assert not out.get("late")
+    assert out["after"] == out["before"]
+
+
+def test_the_secret_reaches_the_request(tmp_path):
+    db = _db(tmp_path / "opencode.db")
+    dest = tmp_path / "compact"
+    seen = {}
+
+    def post(url, path, body, secret, timeout):
+        seen["secret"] = secret
+        return "true"
+
+    chat_compact.compact(SESSION, url="http://127.0.0.1:9", secret="s3cret", model="hf:test-model",
+                         db=db, dest=dest, apply=True, post=post, stamp="T", wait=5, poll=0.01)
+    assert seen["secret"] == "s3cret"
+
+
+def test_the_secret_can_be_read_from_stdin(tmp_path):
+    # a command line is visible to every process listing, so the window passes the password on
+    # the pipe; this proves the flag reads stdin and does not block or fall back to argv
+    db = _db(tmp_path / "opencode.db")
+    dest = tmp_path / "compact"
+    run = subprocess.run(
+        [sys.executable, str(TOOL), "--session", SESSION, "--db", str(db), "--dir", str(dest),
+         "--secret-stdin"],
+        input="from-the-pipe\n", capture_output=True, text=True, encoding="utf-8",
+        errors="replace", cwd=str(REPO), timeout=120)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip().startswith("would compact"), run.stdout
+
+
 def test_a_chat_with_no_recorded_model_is_not_summarized(tmp_path):
     db = _db(tmp_path / "opencode.db", messages=[("msg_u", SESSION, {"role": "user"})], parts=[])
     dest = tmp_path / "compact"
