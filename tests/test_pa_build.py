@@ -6,6 +6,7 @@ The engine (opencode) prints its reason on stderr - "service=server error= faile
 a pass: without this, run_checks graded an UNTOUCHED worktree and "passed" (measured 2026-10-28).
 """
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,3 +36,50 @@ def test_a_no_session_reason_with_no_stderr_is_still_clear():
     why = pa_build.no_session_reason("")
     assert why.startswith("no session"), why
     assert "engine said" not in why, why
+
+
+# ---- saved_by: which fixers actually changed something ---------------------------------------
+
+def test_saved_by_names_each_fixer_once_in_order():
+    sentences = ["cargo_fix: cargo fix applied the compiler's suggestions (--allow-dirty)",
+                 "normalise_newlines: rewrote CRLF/BOM in 1 file(s): a.py",
+                 "cargo_fix: a second sentence from the same fixer"]
+    assert pa_build.saved_by(sentences) == ["cargo_fix", "normalise_newlines"]
+
+
+def test_saved_by_of_nothing_is_empty():
+    assert pa_build.saved_by([]) == []
+
+
+# ---- fixer_message: the check output is quoted, never paraphrased ----------------------------
+
+def test_fixer_message_carries_the_check_output_verbatim():
+    checks = "$ python -m pytest -q" + NL + "-> FAILED" + NL + "E   SyntaxError: boom"
+    msg = pa_build.fixer_message(checks, ["cargo_fix: applied the compiler's suggestions"])
+    assert "E   SyntaxError: boom" in msg, msg            # the compiler's own line, unchanged
+    assert checks in msg, msg
+    assert "cargo_fix: applied the compiler's suggestions" in msg, msg
+
+
+def test_fixer_message_says_so_when_no_fixer_acted():
+    msg = pa_build.fixer_message("$ pytest" + NL + "-> FAILED" + NL + "boom", [])
+    assert "no fixer acted" in msg, msg
+    assert "boom" in msg, msg                             # the output is still quoted in full
+
+
+# ---- record_fixers: the evidence file, and never a raise --------------------------------------
+
+def test_record_fixers_writes_one_line_per_sentence():
+    with tempfile.TemporaryDirectory(prefix="pa-build-") as home:
+        root = Path(home)
+        pa_build.record_fixers(root, ["cargo_fix: applied", "ruff_fix: fixed 1 file(s): a.py"])
+        text = (root / "fixers.txt").read_text(encoding="utf-8")
+        assert text.splitlines() == ["cargo_fix: applied", "ruff_fix: fixed 1 file(s): a.py"]
+
+
+def test_record_fixers_writes_no_fixer_acted_for_an_empty_list():
+    with tempfile.TemporaryDirectory(prefix="pa-build-") as home:
+        root = Path(home)
+        pa_build.record_fixers(root, [])
+        assert (root / "fixers.txt").read_text(encoding="utf-8").strip() == "no fixer acted"
+
