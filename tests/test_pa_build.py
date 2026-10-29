@@ -83,3 +83,27 @@ def test_record_fixers_writes_no_fixer_acted_for_an_empty_list():
         pa_build.record_fixers(root, [])
         assert (root / "fixers.txt").read_text(encoding="utf-8").strip() == "no fixer acted"
 
+
+# ---- fix_plugin_env: the refused-command plugin is on every build, and it exists
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def test_the_refused_command_plugin_is_put_on_the_builds_env():
+    env = pa_build.fix_plugin_env(REPO, Path("C:/tmp/build-home"))
+    config_dir = Path(env["OPENCODE_CONFIG_DIR"])
+    assert config_dir.name == "opencode_config" and config_dir.parent.name == "crew", config_dir
+    log = Path(env["CREW_FIX_LOG"])
+    assert log.name == "fixes.jsonl" and log.parent.name == "build-home", log
+
+
+def test_the_plugin_the_env_points_at_really_exists():
+    # Fails if the plugin is moved or renamed out from under the wiring - the env would then
+    # point at nothing and a build would silently lose its rewrites.
+    plugin = REPO / "crew" / "opencode_config" / "plugins" / "fix_commands.js"
+    assert plugin.is_file(), plugin
+    src = plugin.read_text(encoding="utf-8")
+    assert "export const STRATEGY" in src, "the gate reads STRATEGY from the plugin"
+    assert "tool.execute.before" in src, "the hook that rewrites the call before it runs"
+
+

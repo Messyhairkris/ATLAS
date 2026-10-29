@@ -218,6 +218,18 @@ def record_fixers(home: Path, sentences: list) -> None:
         return
 
 
+def fix_plugin_env(repo: Path, home: Path) -> dict:
+    """The two variables that put the refused-command plugin on a build, and where it logs.
+
+    `repo` is the harness the runner is run from; the plugin lives under its
+    `crew/opencode_config/plugins/`, outside every build worktree, so a build cannot edit the
+    plugin that judges it. `home` is the build's own folder; `fixes.jsonl` there is what the
+    miner reads. Pure, so a test can check it without starting a build.
+    """
+    return {"OPENCODE_CONFIG_DIR": str(Path(repo) / "crew" / "opencode_config"),
+            "CREW_FIX_LOG": str(Path(home) / "fixes.jsonl")}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--pa", required=True)
@@ -274,6 +286,10 @@ def main(argv=None) -> int:
 
     env = {k: v for k, v in os.environ.items() if k != "CREW_HOME"}
     env["OPENCODE_CONFIG"] = str(cfg_path)
+    # The refused-command plugin (crew/opencode_config/plugins/fix_commands.js): OpenCode
+    # searches OPENCODE_CONFIG_DIR for plugins exactly like a project's `.opencode`, so it
+    # loads for these builds ONLY - never in the PM's own sessions, never in the worktree.
+    env.update(fix_plugin_env(REPO, home))
     # Its own OpenCode database: three PAs started at once on the shared
     # ~/.local/share/opencode/opencode.db, and two stopped on "database is locked"
     # before their first request (2026-10-26). Also keeps them out of the window's engine.
