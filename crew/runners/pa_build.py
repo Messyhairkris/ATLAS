@@ -64,7 +64,8 @@ Claude, the senior PA, wrote the brief in your first message and will review you
 5. Do not commit. Never print or copy a key, token or password. No network.
 6. When the checks pass, write PA_REPORT.md in the worktree root: what you built, the files,
    how you checked it (commands and their result lines), and anything you could not do.
-   Then stop.
+   (The runner moves it out of the tree to the build's own folder afterwards - write it there
+   anyway, that is where it is collected from.) Then stop.
 """
 
 ALLOWED = ("python -m pytest", "python -I -m pytest", "git status", "git diff", "git log",
@@ -299,12 +300,24 @@ def main(argv=None) -> int:
                              "total_tokens": usage["input"] + usage["output"],
                              "latency_ms": round(seconds * 1000),
                              "ts": dt.datetime.now().isoformat(timespec="seconds")}) + "\n")
+    # The build's own report belongs with the build's other records, not in the tree: EVERY build
+    # writes one, so in the worktree it is scratch that collides with the next build on merge
+    # (Kris, 2026-10-28). Move it beside status.json, checks.txt and the round's stream, and
+    # leave the tree clean - which is also why it is moved BEFORE the status below, so it is not
+    # listed as a change the build made.
+    report = ws / "PA_REPORT.md"
+    wrote_report = report.is_file()
+    if wrote_report:
+        try:
+            report.replace(home / "PA_REPORT.md")
+        except OSError:
+            pass
     stat = subprocess.run(["git", "-C", str(ws), "status", "--short"], capture_output=True,
                           text=True).stdout
     result = {"pa": a.pa, "branch": a.branch, "worktree": str(ws), "passed": passed,
               "stopped_by_guard": stopped, "rounds": rounds, "seconds": seconds, "usage": usage, "session": session,
               "wrote_outside": outside, "changed": stat.splitlines(),
-              "report": (ws / "PA_REPORT.md").is_file()}
+              "report": wrote_report}
     (home / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     status("finished", passed=passed, stopped_by_guard=stopped, finished=dt.datetime.now().isoformat(timespec="seconds"))
     print(json.dumps({k: result[k] for k in ("pa", "branch", "passed", "stopped_by_guard",
