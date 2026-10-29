@@ -1,62 +1,26 @@
 // OpenCode plugin: rewrite a bash command that would be refused, BEFORE it runs.
 //
-// The refusal is usually mechanical: a trailing ` 2>&1` or ` 2>nul` (the crew's own `*>*` deny
-// rule) or a display pipe (`| Select-Object ...`). Dropping that tail cannot change what the
-// command does - OpenCode captures stdout and stderr already - so the command runs instead of
-// being refused, and the round is not wasted.
-//
 // Loaded ONLY for PA builds: `pa_build` sets `OPENCODE_CONFIG_DIR` to `crew/opencode_config`, and
 // OpenCode searches that directory for plugins exactly like a project's `.opencode`. The PM's own
 // sessions and the build worktree itself never load it.
 //
-// The rules that make it safe to run unattended (Kris, 2026-10-29):
-//   * it only ever DROPS a tail - it never adds a redirect, a flag or a write;
+// This file exports ONE function and nothing else. OpenCode calls EVERY export of a file in
+// `plugins/` as a plugin at start-up, so a second export - even a plain array - crashes the
+// engine before its first tool call and takes down the whole build (measured 2026-10-29). All
+// the logic is in `../fix_commands_lib.js`, which nothing auto-loads.
+//
+// What it does, and what keeps it safe to run unattended (Kris, 2026-10-29):
+//   * it only ever DROPS a tail - a trailing ` 2>&1` / ` 2>nul` (the crew's own `*>*` deny rule)
+//     or a display pipe (`| Select-Object ...`); it never adds a redirect, a flag or a write;
 //   * an unmatched command is returned untouched, byte for byte;
 //   * it fails open: any exception means the call goes through exactly as the model wrote it;
 //   * every rewrite is appended to `CREW_FIX_LOG` (the build's `fixes.jsonl`) for the miner.
 //
-// `rewriteCommand` is pure (no I/O) so `tests/test_fix_commands.py` can judge it under node.
-//
-// The catalogue (`crew/fixes.json`) is the source of the patterns: only entries with
-// `kind: "plugin"` and `status: "active"` are applied, each through its `STRATEGY`.
+// Proven 2026-10-29 (Claude Code's proof run, OpenCode 1.2.6): `tool.execute.before` runs BEFORE
+// the bash permission check, so a refused `python -m pytest --version 2>&1` became
+// `python -m pytest --version` and really ran.
 
-import fs from "node:fs";
-import path from "node:path";
-
-// One rewrite per catalogue entry name. A name with no strategy here is a gap the gate catches.
-export const STRATEGY = {
-  drop_stderr_redirect: (command) => command.replace(/\s+2>(&1|nul|\$null)\s*$/i, ""),
-  display_pipe: (command) =>
-    command.replace(/\|\s*(Select-Object|Format-Table|Format-List)\b[^|]*$/i, "").trimEnd(),
-};
-
-export const FALLBACK_ENTRIES = [
-  { name: "drop_stderr_redirect", pattern: "\\s+2>(&1|nul|\\$null)\\s*$" },
-  { name: "display_pipe", pattern: "\\|\\s*(Select-Object|Format-Table|Format-List)\\b[^|]*$" },
-];
-
-export function rewriteCommand(command, entries) {
-  if (typeof command !== "string" || !command) return { command, entry: null };
-  let out = command;
-  let applied = null;
-  for (const entry of entries || []) {
-    const fix = entry && STRATEGY[entry.name];
-    if (!fix) continue;
-    let matches;
-    try {
-      matches = new RegExp(entry.pattern, "i").test(out);
-    } catch {
-      continue;
-    }
-    if (!matches) continue;
-    const next = fix(out);
-    if (next !== out && next.trim()) {
-      out = next;
-      applied = entry.name;
-    }
-  }
-  return { command: out, entry: applied };
-}
+import { log, readEntries, rewriteCommand } from "../fix_commands_lib.js";
 
 export const FixCommands = async (ctx) => {
   const entries = readEntries(ctx);
@@ -69,10 +33,10 @@ export const FixCommands = async (ctx) => {
         if (!args || typeof args.command !== "string") return;
         const result = rewriteCommand(args.command, entries);
         if (!result.entry || result.command === args.command) return;
-        const from = args.command;
+        const was = args.command;
         args.command = result.command;
         if (input.callID) applied.set(input.callID, result);
-        log(ctx, { entry: result.entry, from, to: result.command });
+        log({ entry: result.entry, command: result.command, was });
       } catch {
         // fail open: a rewrite is an optimisation, never a blocker
       }
@@ -82,8 +46,15 @@ export const FixCommands = async (ctx) => {
         const result = input && input.callID ? applied.get(input.callID) : null;
         if (!result) return;
         applied.delete(input.callID);
-        if (output && typeof output.output === "string") {
-          output.output = `[ran as: ${result.command} - ${result.entry}]\n` + output.output;
+        const note = `[ran as: ${result.command} - ${result.entry}]\n`;
+        // The result object's shape is not documented; try the fields it could be, and never
+        // let a miss become an error. (Claude Code's 2026-10-29 proof did not see this line in
+        // the stored result - re-checked on the rerun.)
+        for (const key of ["output", "result"]) {
+          if (output && typeof output[key] === "string") {
+            output[key] = note + output[key];
+            return;
+          }
         }
       } catch {
         // fail open
@@ -91,25 +62,3 @@ export const FixCommands = async (ctx) => {
     },
   };
 };
-
-function readEntries(ctx) {
-  try {
-    const file = path.join(ctx && ctx.directory ? ctx.directory : ".", "crew", "fixes.json");
-    const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    const entries = (data.entries || []).filter(
-      (e) => e && e.kind === "plugin" && e.status === "active");
-    return entries.length ? entries : FALLBACK_ENTRIES;
-  } catch {
-    return FALLBACK_ENTRIES;
-  }
-}
-
-function log(ctx, row) {
-  try {
-    const target = process.env.CREW_FIX_LOG;
-    if (!target) return;
-    fs.appendFileSync(target, JSON.stringify(row) + "\n");
-  } catch {
-    // fail open
-  }
-}

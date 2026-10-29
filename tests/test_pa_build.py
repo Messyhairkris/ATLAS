@@ -100,10 +100,15 @@ def test_the_refused_command_plugin_is_put_on_the_builds_env():
 def test_the_plugin_the_env_points_at_really_exists():
     # Fails if the plugin is moved or renamed out from under the wiring - the env would then
     # point at nothing and a build would silently lose its rewrites.
-    plugin = REPO / "crew" / "opencode_config" / "plugins" / "fix_commands.js"
+    config_dir = REPO / "crew" / "opencode_config"
+    plugin = config_dir / "plugins" / "fix_commands.js"
+    lib = config_dir / "fix_commands_lib.js"
     assert plugin.is_file(), plugin
-    src = plugin.read_text(encoding="utf-8")
-    assert "export const STRATEGY" in src, "the gate reads STRATEGY from the plugin"
-    assert "tool.execute.before" in src, "the hook that rewrites the call before it runs"
+    # The logic must stay OUT of plugins/: OpenCode calls every export of a file in there as a
+    # plugin, so `export const STRATEGY` beside the plugin crashed the engine (2026-10-29).
+    assert lib.is_file(), f"the plugin's logic belongs outside plugins/: {lib}"
+    assert "tool.execute.before" in plugin.read_text(encoding="utf-8")
+    assert "export const STRATEGY" in lib.read_text(encoding="utf-8")
+
 
 
