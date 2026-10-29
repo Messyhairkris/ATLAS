@@ -13,6 +13,10 @@ PA, unattended, the way opencode_trial.py runs one crew member:
   feature brief as the first message - nothing is added per reply;
 - after the PA stops, the runner runs the check commands itself; a failing check goes back
   to the same session as machine output, up to --rounds times;
+- a run that is ending in failure - the checks failed with no round left, or the guard stopped
+  it - first gets ONE pass of the mechanical fixers (crew/fixers.py) and then exactly one extra
+  round with what they repaired, so a run does not die over a predictable misplaced symbol;
+  a passing run never calls a fixer;
 - usage is written to the crew's telemetry ledger, and status.json says it is working.
 
   python crew/runners/pa_build.py --pa Gordon --repo C:/Users/user/ATLAS-api-harness ^
@@ -36,6 +40,7 @@ sys.path.insert(0, str(REPO / "v3-service"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from opencode_trial import LEDGER, OPENCODE, _events, _usage, _writes_outside  # noqa: E402
+from crew.fixers import run_fixers  # noqa: E402
 
 WORK = Path("C:/Users/user/pa-work")
 
@@ -169,6 +174,50 @@ def _actionable(report: str) -> bool:
     return False
 
 
+def saved_by(sentences: list) -> list:
+    """The name of each fixer that changed something, in the order they ran, without repeats.
+
+    A fixer's sentence always opens with its own name (`cargo_fix: ...`), so the part before
+    the first ':' names it. `[]` in, `[]` out.
+    """
+    names = []
+    for sentence in sentences or []:
+        name = str(sentence).split(":", 1)[0].strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def fixer_message(checks_text: str, sentences: list) -> str:
+    """The text for the one extra round: the checks that failed, then what each fixer did.
+
+    The check output is quoted EXACTLY and in full - never paraphrased, never truncated - so
+    the PA acts on the compiler's own words, and when no fixer acted the message says so
+    plainly instead of listing nothing.
+    """
+    output = checks_text if isinstance(checks_text, str) else str(checks_text or "")
+    done = [str(s) for s in (sentences or [])]
+    said = "\n".join(done) if done else "no fixer acted: no mechanical repair was applied"
+    return ("THE CHECKS FAILED. The output below is the machine's, quoted exactly as it was "
+            "printed; the fixers have already made the mechanical repairs that follow. Check "
+            "them, fix whatever is left, run the checks again, then stop.\n\n"
+            + output + "\n\n" + said)
+
+
+def record_fixers(home: Path, sentences: list) -> None:
+    """Write `fixers.txt` in the build's own folder: one line per sentence, or the single line
+    `no fixer acted`. The record of what was tried when a run could not be saved. Never raises.
+    """
+    try:
+        home = Path(home)
+        done = [str(s) for s in (sentences or [])]
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "fixers.txt").write_text(
+            "\n".join(done or ["no fixer acted"]) + "\n", encoding="utf-8")
+    except Exception:      # noqa: BLE001 - a record file must never kill the run that made it
+        return
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--pa", required=True)
@@ -249,6 +298,7 @@ def main(argv=None) -> int:
 
     session, raw_all, err_all, checks_text = None, "", "", ""
     message, rounds, passed, outside, stopped, passing = feature, 0, False, [], "", []
+    saved, fixed = [], False       # the fixers that acted; the one extra round is spent once
     t0 = time.time()
     while rounds < 1 + a.rounds:
         rounds += 1
@@ -275,17 +325,36 @@ def main(argv=None) -> int:
             stopped = no_session_reason(err)
             break
         outside = _writes_outside(events, ws)
-        if outside or stopped:
+        if outside:
             break
-        passed, checks_text = run_checks(ws, a.check, env, 1800)
-        passing.append(checks_text.count("-> passed"))
-        if passed or not session or not _actionable(checks_text):
-            break                      # a failure with no output gives the PA nothing to fix
-        if not guard.next_round(passing):
-            stopped = f"no improvement: checks passing per round {passing}"
+        if not stopped:
+            passed, checks_text = run_checks(ws, a.check, env, 1800)
+            passing.append(checks_text.count("-> passed"))
+            if passed or not session or not _actionable(checks_text):
+                break                  # a failure with no output gives the PA nothing to fix
+            more = guard.next_round(passing)
+            if more and rounds < 1 + a.rounds:
+                message = ("THE CHECKS FAILED. This is machine output, not an opinion. Fix the "
+                           "cause, run the checks again, update PA_REPORT.md, then stop.\n\n"
+                           + checks_text)
+                continue
+            if not more:
+                stopped = f"no improvement: checks passing per round {passing}"
+        # The run is ending in failure - the checks failed with no round left, or the guard
+        # stopped it. The fixers get exactly one pass, and the run exactly one more round with
+        # what they repaired; a passing run never reaches here, so a pass costs nothing and
+        # touches nothing. `fixed` closes the door: no loop, never offered twice.
+        if fixed:
             break
-        message = ("THE CHECKS FAILED. This is machine output, not an opinion. Fix the cause, "
-                   "run the checks again, update PA_REPORT.md, then stop.\n\n" + checks_text)
+        fixed = True
+        status_lines = subprocess.run(["git", "-C", str(ws), "status", "--short"],
+                                      capture_output=True, text=True, encoding="utf-8",
+                                      errors="replace").stdout
+        sentences = run_fixers(ws, checks_text, status_lines.splitlines())
+        record_fixers(home, sentences)
+        saved = saved_by(sentences)
+        message = fixer_message(checks_text, sentences)
+        a.rounds += 1                  # exactly one extra round, ever
     seconds = round(time.time() - t0, 1)
     (home / "opencode.jsonl").write_text(raw_all, encoding="utf-8")
     (home / "opencode.stderr.txt").write_text(err_all, encoding="utf-8")
@@ -315,13 +384,14 @@ def main(argv=None) -> int:
     stat = subprocess.run(["git", "-C", str(ws), "status", "--short"], capture_output=True,
                           text=True).stdout
     result = {"pa": a.pa, "branch": a.branch, "worktree": str(ws), "passed": passed,
+              "saved_by": saved,
               "stopped_by_guard": stopped, "rounds": rounds, "seconds": seconds, "usage": usage, "session": session,
               "wrote_outside": outside, "changed": stat.splitlines(),
               "report": wrote_report}
     (home / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     status("finished", passed=passed, stopped_by_guard=stopped, finished=dt.datetime.now().isoformat(timespec="seconds"))
-    print(json.dumps({k: result[k] for k in ("pa", "branch", "passed", "stopped_by_guard",
-                                              "rounds", "seconds")}))
+    print(json.dumps({k: result[k] for k in ("pa", "branch", "passed", "saved_by",
+                                              "stopped_by_guard", "rounds", "seconds")}))
     return 0 if passed else 1
 
 
