@@ -84,7 +84,13 @@ Work like this: write {module}; write your own tests in test_mine.py from the co
 run them with the shell command `python -m pytest -q test_mine.py`; fix what fails;
 repeat until they pass. You cannot run any other shell command. When the tests pass,
 stop. Hidden tests you never see decide the outcome, so test the contract's rules and
-examples, not your own reading of them."""
+examples, not your own reading of them.
+
+TO LOOK AT FILES, USE THE BUILT-IN TOOLS (glob, grep, read, list) - NOT the shell. The
+shell is for `python -m pytest -q test_mine.py` and nothing else; every other command is
+refused, and it is Windows PowerShell, so cmd.exe and Unix syntax cannot work either. No
+pipes, no `&`, no redirection - outputs are captured already. If a call is refused, do
+NOT try another form of it: use the built-in tool instead and carry on."""
 
 
 RESCUE_PROMPT = """A crew member's attempt at {module} FAILED the grader. You are the
@@ -93,7 +99,10 @@ specification. The grader's machine output is below - it is not an opinion.
 
 Fix the cause in {module}; do not start over unless the file is unusable. Its
 "Allowed imports" line is enforced by a scanner; open(), eval, exec, file, network and
-registry access are refused. Write tests in test_mine.py for the failing rules, run
+registry access are refused. TO LOOK AT FILES, USE THE BUILT-IN TOOLS (glob, grep, read,
+list) - NOT the shell. The shell is Windows PowerShell, so cmd.exe and Unix syntax
+cannot work; no pipes, no `&`, no redirection. If a call is refused, use the built-in
+tool instead - do not try another form of it. Write tests in test_mine.py for the failing rules, run
 them with `python -m pytest -q test_mine.py` (the only shell command you may run), fix
 what fails, and stop when they pass. Hidden tests you never see decide the outcome.
 
