@@ -12,6 +12,7 @@
   "max_tool_errors": 10,
   "max_errors_in_a_row": 4,
   "max_same_error": 3,
+  "max_refused": 6,
   "max_check_rounds": 2,
   "min_free_gb": 5,
   "poll_seconds": 15,

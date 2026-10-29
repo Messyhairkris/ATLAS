@@ -97,11 +97,40 @@ def _progress(p: dict, commands) -> bool:
     return False
 
 
+REFUSAL_MARK = "specified a rule which prevents you from using"
+FULL_ERRORS = 5
+
+
+def is_refusal(error) -> bool:
+    """A permission refusal: the tool never ran, the model picked a command the rules deny.
+
+    OpenCode's wording. It is NOT a broken tool and NOT a loop - the model is learning the
+    rules - so it gets its own count (max_refused) and resets nothing.
+    """
+    return REFUSAL_MARK in str(error or "")
+
+
+def call_key(p: dict, state: dict) -> str:
+    """The identity of a failed CALL: its tool and its own input (the command, the path).
+
+    Deliberately NOT the error text. Every permission refusal opens with the same 80 characters,
+    so keying "same error" on that prefix made three DIFFERENT refused commands look like one
+    repeated error and stopped a build that was doing good work (measured 2026-10-28, both alive
+    runs). The same command failing the same way - or being refused the same way - still counts.
+    """
+    inp = state.get("input")
+    try:
+        detail = json.dumps(inp, sort_keys=True) if inp is not None else ""
+    except (TypeError, ValueError):
+        detail = str(inp)
+    return f"{p.get('tool')}: {detail[:200]}"
+
+
 def count(parts: list, commands=()) -> dict:
     """Steps, tokens, progress and tool errors so far, from the job's database parts."""
     c = {"steps": 0, "tokens": 0, "fresh_tokens": 0, "tool_calls": 0, "tool_errors": 0,
-         "errors_in_a_row": 0, "same_error": 0, "progress": 0, "since_progress": 0,
-         "last_error": ""}
+         "errors_in_a_row": 0, "same_error": 0, "refused": 0, "progress": 0,
+         "since_progress": 0, "last_error": "", "errors": []}
     seen, run = {}, 0
     for p in parts:
         if p.get("type") == "step-finish":
@@ -117,18 +146,28 @@ def count(parts: list, commands=()) -> dict:
                 continue                   # still running
             c["tool_calls"] += 1
             if state.get("status") == "error":
-                key = f"{p.get('tool')}: " + " ".join(str(state.get("error") or "").split())[:80]
+                error = " ".join(str(state.get("error") or "").split())
+                refused = is_refusal(error)
+                c["errors"].append({"tool": p.get("tool"), "input": state.get("input"),
+                                    "error": error, "refused": refused})
+                c["last_error"] = f"{p.get('tool')}: {error[:80]}"
+                key = call_key(p, state)
                 seen[key] = seen.get(key, 0) + 1
-                run += 1
-                c["tool_errors"] += 1
-                c["last_error"] = key
                 c["same_error"] = max(c["same_error"], seen[key])
+                if refused:
+                    # The model learning the rules, not a broken tool: its own count, and it
+                    # neither adds to the error run nor resets it.
+                    c["refused"] += 1
+                else:
+                    run += 1
+                    c["tool_errors"] += 1
             else:
                 run = 0
                 if _progress(p, commands):
                     c["progress"] += 1
                     c["since_progress"] = 0
             c["errors_in_a_row"] = max(c["errors_in_a_row"], run)
+    c["errors"] = c["errors"][-FULL_ERRORS:]
     return c
 
 
@@ -137,7 +176,8 @@ CEILINGS = (("tokens", "ceiling_tokens", "tokens"),
             ("steps", "ceiling_steps", "steps"))
 FAILURES = (("tool_errors", "max_tool_errors", "failed tool calls"),
             ("errors_in_a_row", "max_errors_in_a_row", "failed tool calls in a row"),
-            ("same_error", "max_same_error", "repeats of the same error"))
+            ("same_error", "max_same_error", "repeats of the same call"),
+            ("refused", "max_refused", "permission refusals"))
 
 
 def weighed(c: dict, lim: dict) -> dict:
@@ -282,6 +322,8 @@ def main(argv=None) -> int:
     ap.add_argument("--member", default="", help="default: status.json's pa or member")
     ap.add_argument("--job", default="", help="build, fix, ...; default: build for a PA build")
     ap.add_argument("--replay", action="store_true")
+    ap.add_argument("--errors", action="store_true",
+                    help="print the last few tool errors IN FULL, with the command that caused them")
     a = ap.parse_args(argv)
     d = Path(a.job_dir)
     try:
@@ -306,6 +348,19 @@ def main(argv=None) -> int:
         print(f"  replay: {'stopped at step ' + str(n) + ': ' + why if i else 'never stopped'}")
     else:
         print(f"  {verdict(raw, lim) or 'may go on'}")
+    if a.errors:
+        # The evidence for every stop: the refusal/error text in full, with the call that made
+        # it. Asked for 2026-10-28, after two builds were stopped by a permission refusal whose
+        # command could not be recovered from the logs.
+        print(f"  last {len(raw.get('errors') or [])} error(s), in full:")
+        for e in raw.get("errors") or []:
+            kind = "REFUSED" if e.get("refused") else "error"
+            try:
+                call = json.dumps(e.get("input"), sort_keys=True)
+            except (TypeError, ValueError):
+                call = str(e.get("input"))
+            print(f"    [{kind}] {e.get('tool')}: {call[:400]}")
+            print(f"        {e.get('error')}")
     return 0
 
 

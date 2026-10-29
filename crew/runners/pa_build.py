@@ -47,8 +47,16 @@ You are working alone, unattended, in a git worktree: {worktree} (branch {branch
 Claude, the senior PA, wrote the brief in your first message and will review your diff.
 
 1. Only this folder exists for you. Edits outside it are refused.
-2. Windows 10. Shell commands you may run: {allowed}. Every other command is refused;
-   do not retry a refused command in another form.
+2. Windows 10, and the shell behind the bash tool is **Windows PowerShell**, not cmd.exe and
+   not git-bash (measured 2026-10-28: opencode runs `powershell -NoProfile -ExecutionPolicy
+   Bypass -Command`). cmd.exe syntax therefore cannot work here: no `dir /s /b`, no `for %f`,
+   no `2>nul`. PowerShell has `Get-ChildItem -Recurse -Filter`, `ForEach-Object`, `2>$null`.
+2b. Find and read files with the built-in glob, grep, list and read tools - NOT the shell.
+   Use the shell only for cargo, pytest and git. Commands you may run: {allowed}. No pipes
+   (`|`), no `&`, no redirection (`>`, `2>&1`), and every piped or chained part is checked
+   too; outputs are captured already, so none of them are needed. Every other command is
+   refused. If a call is refused, do NOT try another form of it - use the built-in tool
+   instead, and carry on.
 3. Build exactly what the brief asks. Touch only the files it names. Do not reformat or
    "tidy" code you were not asked to change; match the surrounding style and comments.
 4. Write tests for what you build. These checks must pass, and the runner runs them
@@ -61,7 +69,13 @@ Claude, the senior PA, wrote the brief in your first message and will review you
 
 ALLOWED = ("python -m pytest", "python -I -m pytest", "git status", "git diff", "git log",
            "git show", "ls", "dir", "Get-ChildItem", "Get-Content", "Select-String", "cat",
-           "type", "rg", "grep", "head", "tail", "wc")
+           "type", "rg", "grep", "head", "tail", "wc",
+           # Read-only PowerShell cmdlets (Kris, 2026-10-28): they only ever appear as a pipe
+           # stage, and opencode checks every stage, so a display pipe used to be refused. All
+           # read; none writes. `2>&1` and `>` are deliberately NOT matched here - a pattern
+           # like "*2>&1*" would also match "x > file 2>&1", which is a write.
+           "Select-Object", "Format-Table", "Format-List", "Sort-Object", "Where-Object",
+           "Measure-Object", "Compare-Object", "Test-Path", "Get-Item")
 CARGO = ("cargo build", "cargo test", "cargo check")
 
 

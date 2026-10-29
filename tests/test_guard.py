@@ -58,6 +58,109 @@ def test_the_real_limits_file_loads():
     assert lim["stall_steps"] > 0 and lim["budget_tokens"] < lim["ceiling_tokens"]
 
 
+# ---- refusals: a model learning the rules, not a loop (2026-10-28) -----------------------
+
+# OpenCode's permission-refusal wording. EVERY refusal opens with the same characters, which is
+# exactly why counting repeats by the error text went wrong.
+REFUSAL_TEXT = ("The user has specified a rule which prevents you from using this specific tool "
+                "call. Here are some rules: [...]")
+
+
+def _refused(command):
+    return {"type": "tool", "tool": "bash", "state": {
+        "status": "error", "error": REFUSAL_TEXT, "input": {"command": command}}}
+
+
+def _failed(command, error="Error: something broke"):
+    return {"type": "tool", "tool": "bash", "state": {
+        "status": "error", "error": error, "input": {"command": command}}}
+
+
+LOOSE = {**LIM, "max_refused": 6}
+
+
+def test_three_different_refusals_are_not_a_loop():
+    # this is the false stop that killed two builds on 2026-10-28: three DIFFERENT refused
+    # commands, all sharing the refusal's opening words, counted as "3 repeats of the same error"
+    parts = [STEP, _refused("Get-ChildItem | Select-Object Name"), _refused("dir /s /b"),
+             _refused("for %f in (*) do echo %f")]
+    c = guard.count(parts)
+    assert c["refused"] == 3
+    assert c["same_error"] == 1, "three different calls are not one repeated call"
+    assert c["tool_errors"] == 0, "a refusal is not a broken tool"
+    assert guard.verdict(c, LOOSE) == ""
+
+
+def test_the_same_command_refused_three_times_is_a_loop():
+    parts = [STEP] + [_refused("dir /s /b")] * 3
+    c = guard.count(parts)
+    assert c["same_error"] == 3
+    assert "repeats of the same call" in guard.verdict(c, LOOSE)
+
+
+def test_six_different_refusals_stop_the_job():
+    parts = [STEP] + [_refused(f"cmd{i}") for i in range(6)]
+    c = guard.count(parts)
+    assert c["same_error"] == 1 and c["refused"] == 6
+    assert "permission refusals" in guard.verdict(c, LOOSE)
+
+
+def test_a_refusal_neither_adds_to_nor_resets_the_error_run():
+    parts = [STEP, _failed("a"), _refused("b"), _failed("a")]
+    c = guard.count(parts)
+    assert c["tool_errors"] == 2, "only the two real failures count as tool errors"
+    assert c["errors_in_a_row"] == 2, "the refusal in between did not reset the run"
+    assert c["same_error"] == 2, "two of the same call"
+
+
+def test_the_same_call_failing_with_different_words_still_repeats():
+    parts = [STEP, _failed("cargo test"), _failed("cargo test", "Error: other wording")]
+    assert guard.count(parts)["same_error"] == 2
+
+
+def test_the_last_errors_are_kept_in_full_with_their_command():
+    parts = [STEP] + [_failed(f"cmd{i}", f"boom {i}") for i in range(8)]
+    c = guard.count(parts)
+    assert len(c["errors"]) == 5, "the last five only"
+    assert c["errors"][0]["input"] == {"command": "cmd3"}
+    assert c["errors"][-1]["input"] == {"command": "cmd7"}
+    assert c["errors"][-1]["error"] == "boom 7"
+    assert c["errors"][-1]["refused"] is False
+
+
+def test_a_refusal_is_recorded_as_refused_with_its_command():
+    c = guard.count([STEP, _refused("dir /s /b")])
+    last = c["errors"][-1]
+    assert last["refused"] is True
+    assert last["input"] == {"command": "dir /s /b"}
+    assert "prevents you from using" in last["error"]
+
+
+def test_the_real_limits_file_has_a_refusal_limit():
+    assert guard.limits("Gordon", "build")["max_refused"] == 6
+
+
+def test_the_errors_flag_prints_the_full_text_and_the_command(tmp_path, capsys):
+    home = tmp_path / "build-x"
+    home.mkdir()
+    (home / "status.json").write_text(json.dumps({"pa": "Gordon"}), encoding="utf-8")
+    _db(guard.db_path(home), [STEP, _refused("Get-ChildItem | Select-Object Name")])
+    assert guard.main([str(home), "--errors"]) == 0
+    out = capsys.readouterr().out
+    assert "REFUSED" in out
+    assert "Select-Object" in out, "the command that was refused must be printed"
+    assert "prevents you from using" in out, "the error text must be printed in full"
+
+
+def test_the_shell_a_build_runs_is_powershell():
+    # measured 2026-10-28 from the engine binary: opencode runs
+    # `powershell -NoProfile -ExecutionPolicy Bypass -Command`, so cmd.exe syntax cannot work
+    src = (REPO / "crew" / "runners" / "pa_build.py").read_text(encoding="utf-8")
+    assert "Windows PowerShell" in src
+    assert "no `dir /s /b`" in src
+    assert "Select-Object" in src, "the read-only cmdlets Kris approved are allowed"
+
+
 def test_progress_is_edits_and_passing_tests_not_reading():
     c = guard.count([STEP, READ, STEP, EDIT, STEP, TEST_BAD, STEP, TEST_OK, STEP, READ], ["cargo test"])
     assert c["progress"] == 2 and c["since_progress"] == 1
@@ -82,7 +185,7 @@ def test_past_budget_the_stall_allowance_shrinks():
 
 def test_repeating_a_failure_is_stopped_even_while_editing():
     i, why = guard.replay([STEP, EDIT, ERR] * 3, LIM)
-    assert why.startswith("failing") and "repeats of the same error" in why
+    assert why.startswith("failing") and "repeats of the same call" in why
 
 
 def test_next_round_only_on_improvement():
