@@ -61,6 +61,11 @@ def _part(seconds_ago, body=None):
     return _part_at(NOW - seconds_ago, body)
 
 
+def _text_part(seconds_ago, text):
+    """A text part - the shape the engine's max-steps notice answer has."""
+    return _part(seconds_ago, {"type": "text", "text": text})
+
+
 def _assistant(seconds_ago, completed=False):
     block = {"created": int((NOW - seconds_ago) * 1000)}
     if completed:
@@ -195,6 +200,61 @@ def test_a_build_with_no_status_is_dead(tmp_path):
     report = alive.build_report(folder)
     assert report["line"].startswith("DEAD  ")
     assert report["exists"] is False
+
+
+# ---- the step ceiling (STEPS) ----------------------------------------------------------
+
+def _turn_messages(count, agent="Gordon-assign"):
+    """A user turn, then `count` assistant messages - the turn's step count, oldest first."""
+    base = NOW - 3600
+    out = [(base, {"role": "user", "agent": agent, "time": {"created": int(base * 1000)}})]
+    for i in range(count):
+        created = base + 1 + i
+        out.append((created, {"role": "assistant", "agent": agent,
+                              "time": {"created": int(created * 1000)}}))
+    return out
+
+
+def test_a_turn_at_the_step_ceiling_is_steps(tmp_path):
+    # Gordon's ceiling is 60 (personnel.json); the real turn that surfaced this had 61 and 78 tools
+    db = _db(tmp_path / "o.db", parts=[_part(2)], messages=_turn_messages(60))
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["steps"] is True
+    assert report["line"].startswith("STEPS    ")
+    assert "step ceiling" in report["line"]
+
+
+def test_a_turn_under_the_ceiling_is_not_steps(tmp_path):
+    db = _db(tmp_path / "o.db", parts=[_part(2)], messages=_turn_messages(59))
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["steps"] is False
+    assert not report["line"].startswith("STEPS")
+
+
+def test_a_max_steps_notice_part_is_steps(tmp_path):
+    db = _db(tmp_path / "o.db",
+             parts=[_text_part(2, "CRITICAL - MAXIMUM STEPS REACHED\n\nI reached the ceiling.")])
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["steps"] is True
+    assert report["line"].startswith("STEPS    ")
+
+
+def test_step_limit_reads_personnel():
+    assert alive.step_limit("Gordon-assign") == 60
+    assert alive.step_limit("Gordon") == 60
+    assert alive.step_limit("") is None
+    assert alive.step_limit("Nobody-assign") is None
+
+
+def test_turn_steps_counts_only_the_newest_turn(tmp_path):
+    # an older turn's assistants must not be added to the newest turn's count
+    older = _turn_messages(30)
+    newer = [(NOW - 100, {"role": "user", "agent": "Gordon-assign", "time": {"created": 1}}),
+             (NOW - 90, {"role": "assistant", "agent": "Gordon-assign", "time": {"created": 2}}),
+             (NOW - 80, {"role": "assistant", "agent": "Gordon-assign", "time": {"created": 3}})]
+    db = _db(tmp_path / "o.db", parts=[_part(2)], messages=older + newer)
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["steps"] is False, "only the newest turn's steps count"
 
 
 # ---- the CLI ---------------------------------------------------------------------------

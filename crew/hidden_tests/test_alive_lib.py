@@ -10,8 +10,9 @@ import alive_lib as a
 # ---- constants -------------------------------------------------------------------------
 
 def test_states_and_default_quiet():
-    assert a.STATES == ("WORKING", "QUIET", "DEAD")
+    assert a.STATES == ("WORKING", "QUIET", "DEAD", "STEPS")
     assert a.DEFAULT_QUIET_S == 120
+    assert a.MAX_STEPS_MARKER == "CRITICAL - MAXIMUM STEPS REACHED"
 
 
 # ---- state_of --------------------------------------------------------------------------
@@ -76,6 +77,59 @@ def test_junk_times_do_not_crash():
     assert a.state_of(None, activity=None, alive=True) == "QUIET"
     assert a.state_of(1000, activity="x", alive=True) == "QUIET"
     assert a.state_of(1000, started=True, engine_start=0, activity=999, alive=True) == "WORKING"
+
+
+# ---- STEPS: the step ceiling ended the turn --------------------------------------------
+
+def test_steps_beats_every_other_state():
+    # the engine's max-steps notice means the turn answered in text and stopped using tools
+    assert a.state_of(1000, activity=988, alive=True, steps=True) == "STEPS"
+    assert a.state_of(1000, activity=60, alive=True, steps=True) == "STEPS"
+    assert a.state_of(1000, activity=900, alive=False, steps=True) == "STEPS"
+    assert a.state_of(1000, started=100, engine_start=500, alive=True, steps=True) == "STEPS"
+
+
+def test_steps_false_is_not_the_steps_state():
+    assert a.state_of(1000, activity=988, alive=True, steps=False) == "WORKING"
+    assert a.state_of(1000, activity=988, alive=True) == "WORKING"
+
+
+def test_steps_notice_only_an_opening_echo():
+    assert a.steps_notice({"type": "text", "text": "CRITICAL - MAXIMUM STEPS REACHED\n\nI reached the ceiling."}) is True
+    assert a.steps_notice({"type": "text", "text": "   CRITICAL - MAXIMUM STEPS REACHED"}) is True
+
+
+def test_steps_notice_false_for_a_quote_the_tail_alone_or_another_part():
+    assert a.steps_notice({"type": "text", "text": "I read about MAXIMUM STEPS REACHED earlier."}) is False
+    assert a.steps_notice({"type": "text", "text": "MAXIMUM STEPS REACHED"}) is False
+    assert a.steps_notice({"type": "tool", "tool": "read"}) is False
+    # a non-text part is never the notice, even when it carries such a text
+    assert a.steps_notice({"type": "tool", "text": "CRITICAL - MAXIMUM STEPS REACHED"}) is False
+    assert a.steps_notice({"type": "text"}) is False
+    assert a.steps_notice({}) is False
+    assert a.steps_notice(None) is False
+    assert a.steps_notice("CRITICAL - MAXIMUM STEPS REACHED") is False
+
+
+def test_hit_ceiling_reaching_the_limit_counts():
+    assert a.hit_ceiling(60, 60) is True
+    assert a.hit_ceiling(61, 60) is True
+    assert a.hit_ceiling(59, 60) is False
+    assert a.hit_ceiling(0, 60) is False
+
+
+def test_hit_ceiling_junk_is_false():
+    assert a.hit_ceiling(None, 60) is False
+    assert a.hit_ceiling(60, None) is False
+    assert a.hit_ceiling(60, 0) is False
+    assert a.hit_ceiling(True, 60) is False
+
+
+def test_the_steps_line():
+    assert a.line(1000, activity=988, alive=True, steps=True) == \
+        "STEPS    the step ceiling ended this turn (text only); send the next message to continue"
+    assert a.line(1000, activity=900, alive=False, steps=True) == \
+        "STEPS    the step ceiling ended this turn (text only); send the next message to continue"
 
 
 # ---- age_of ----------------------------------------------------------------------------
@@ -154,3 +208,4 @@ def test_the_state_word_is_padded_to_one_column():
     assert a.line(1000, activity=988, alive=True)[:9] == "WORKING  "
     assert a.line(1000, activity=60, alive=True)[:9] == "QUIET    "
     assert a.line(1000, activity=900, alive=False)[:9] == "DEAD     "
+    assert a.line(1000, activity=988, alive=True, steps=True)[:9] == "STEPS    "

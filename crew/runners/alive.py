@@ -135,6 +135,51 @@ def process_facts(pid, now: float):
         return False, None
 
 
+def turn_steps(con, session: str):
+    """How many assistant messages the newest turn used, and its agent name.
+
+    The window's brief says "up to 60 steps per message"; a turn that reaches the ceiling is cut
+    off by the engine, which then injects its own max-steps prompt. Counting is the reliable
+    signal - the notice itself is never stored, and a reply may quote its wording.
+    """
+    columns = [r[1] for r in con.execute("pragma table_info(message)")]
+    sid = next((c for c in columns if c.lower() in ("sessionid", "session_id")), "")
+    if not sid:
+        return 0, ""
+    try:
+        rows = con.execute(
+            f"select data from message where {sid} = ? order by time_created desc", (session,)).fetchall()
+    except sqlite3.Error:
+        return 0, ""
+    used, agent = 0, ""
+    for (data,) in rows:
+        try:
+            message = json.loads(data) if isinstance(data, str) else {}
+        except ValueError:
+            continue
+        role = message.get("role")
+        if role == "user":
+            break
+        if role == "assistant":
+            used += 1
+            if not agent and message.get("agent"):
+                agent = str(message["agent"])
+    return used, agent
+
+
+def step_limit(agent: str):
+    """The step ceiling for an agent like `Gordon-assign`, from personnel.json. None if unset."""
+    pa = (agent or "").split("-")[0]
+    if not pa:
+        return None
+    try:
+        staff = json.loads((REPO_ROOT / "crew" / "personnel.json").read_text(encoding="utf-8"))
+        value = (((staff.get("pa") or {}).get("scopes") or {}).get(pa) or {}).get("steps")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def session_report(session: str, db=None, engine_pid=None, engine_start=None, now=None, quiet=None):
     """The facts for one chat, ready to hand to alive_lib.line."""
     db = Path(db) if db else db_default()
@@ -142,11 +187,14 @@ def session_report(session: str, db=None, engine_pid=None, engine_start=None, no
     con = _connect(db)
     activity = started = None
     doing = ""
+    steps = False
     if con is not None:
         try:
             activity, part = _newest_part(con, session)
             doing = alive_lib.doing_of(part)
             started = running_turn(con, session)
+            used, agent = turn_steps(con, session)
+            steps = alive_lib.hit_ceiling(used, step_limit(agent)) or alive_lib.steps_notice(part)
         finally:
             con.close()
     if engine_start is None and engine_pid is not None:
@@ -161,11 +209,13 @@ def session_report(session: str, db=None, engine_pid=None, engine_start=None, no
         "activity": activity,
         "engine_start": engine_start,
         "alive": alive,
+        "steps": steps,
         "quiet_s": quiet_s() if quiet is None else quiet,
         "doing": doing,
         "line": alive_lib.line(now, started=started, activity=activity,
                                engine_start=engine_start, alive=alive,
-                               quiet_s=quiet_s() if quiet is None else quiet, doing=doing),
+                               quiet_s=quiet_s() if quiet is None else quiet, doing=doing,
+                               steps=steps),
     }
 
 
