@@ -1,0 +1,106 @@
+{
+ "_about": "The fix catalogue (Claude's design, 2026-10-28): every known way a job or a chat fails, with a pattern a machine can match and the fix that resolves it. Kris edits this. Read by crew/runners/mine_failures.py (which only PROPOSES new entries from real jobs - it never adds one itself) and by the plugin crew/opencode_plugins/fix_commands.js (which rewrites a refused command before it runs) and by pa_build (after-run fixers and the standing rules in a member's brief). Seeded 2026-10-29 by Gordon from Claude's review of the 2026-10-28 failures, so most of these have hits: 1 - the miner corrects the counts.",
+ "_kinds": {
+  "plugin": "rewritten BEFORE the call runs (crew/opencode_plugins/fix_commands.js). Only ever drops something the model did not need; never adds, never writes.",
+  "after_run_hint": "nothing is changed for the model - when a build fails its check, the next round's message quotes the compiler's own words for this shape",
+  "chat_repair": "the chat self-repair step (crew/runners/chat_repair.py) fixes the session and resends",
+  "brief_rule": "a fixed standing line in that member's build brief (pa_build's rules), generated ONLY for the members this entry lists, so one member's habits never clutter another's"
+ },
+ "_statuses": {
+  "active": "match it and act on it",
+  "record": "already fixed at the source; keep counting it so a regression is visible, but do not act"
+ },
+ "_entry_fields": ["name", "where", "pattern", "kind", "status", "fixer", "members", "jobs", "hits"],
+ "entries": [
+  {"name": "drop_stderr_redirect", "where": "tool_refusal", "kind": "plugin", "status": "active",
+   "pattern": "\\s+2>(&1|nul|\\$null)\\s*$",
+   "fixer": "plugin: drop the trailing redirection (stderr is captured already)",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-alive", "thecrew-pa-gordon-alive-20261028-190351"],
+   "why": "`2>&1` and `2>nul` are matched by the `*>*` deny rule. Harmless to drop: outputs are captured."},
+
+  {"name": "display_pipe", "where": "tool_refusal", "kind": "plugin", "status": "active",
+   "pattern": "\\|\\s*(Select-Object|Format-Table|Format-List)\\b[^|]*$",
+   "fixer": "plugin: drop the display tail (keep the command before the pipe)",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-alive", "thecrew-pa-gordon-alive-20261028-190351"],
+   "why": "These are allowed since afbd34f, so this should no longer fire. Kept because the plugin can drop the tail safely if a member pipes into something else."},
+
+  {"name": "cmd_exe_syntax", "where": "tool_refusal", "kind": "brief_rule", "status": "active",
+   "pattern": "(^|\\s)(dir\\s+/[sbw]|for\\s+%%?\\w|type\\s+\\S+\\s*&|find\\s+/[cv])",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-alive", "thecrew-pa-gordon-alive-20261028-190351"],
+   "why": "The shell is Windows PowerShell (measured from the engine binary: `powershell -NoProfile -ExecutionPolicy Bypass -Command`), so cmd.exe syntax cannot work. Not rewritable safely.",
+   "rule": "The shell is Windows PowerShell, not cmd.exe. No `dir /s /b`, no `for %f`, no `2>nul`. List files with the glob tool."},
+
+  {"name": "chained_ampersand", "where": "tool_refusal", "kind": "brief_rule", "status": "active",
+   "pattern": "\\S\\s+&\\s+\\S",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-alive", "thecrew-pa-gordon-alive-20261028-190351"],
+   "why": "PowerShell 5.1 rejects `&` mid-line, and opencode checks each chained part against the allowlist.",
+   "rule": "One command per call; no `&`."},
+
+  {"name": "outside_worktree", "where": "tool_refusal", "kind": "brief_rule", "status": "active",
+   "pattern": "\"permission\":\"external_directory\"",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-alive-20261028-190351"],
+   "why": "The build's own rules deny every directory outside its working copy, by design.",
+   "rule": "Stay in the worktree; it is the whole project. Anything from elsewhere must be quoted in the brief."},
+
+  {"name": "stale_edit", "where": "tool_error", "kind": "brief_rule", "status": "active",
+   "pattern": "has been modified since it was last read",
+   "fixer": "",
+   "members": ["Kimi", "Qwen", "Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-kimi-inbox", "thecrew-pa-qwen-changes", "thecrew-pa-gordon-changes-pane-attempt1"],
+   "why": "Root cause (a formatter rewriting files between read and edit) is off since 2e231b9, but a member can still race itself.",
+   "rule": "If an edit is refused as stale, read the file again before the next edit. Never repeat the same edit."},
+
+  {"name": "non_exhaustive_match", "where": "check_output", "kind": "after_run_hint", "status": "active",
+   "pattern": "error\\[E0004\\]: non-exhaustive patterns: (.+) not covered",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-changes-pane"],
+   "why": "What the new arm should DO is a decision, not mechanical - so quote the compiler and let the next round decide.",
+   "rule": "The next round's message lists each missing variant with its file and line."},
+
+  {"name": "unclosed_delimiter", "where": "check_output", "kind": "after_run_hint", "status": "active",
+   "pattern": "error: (this file contains an unclosed delimiter|mismatched closing delimiter)",
+   "fixer": "",
+   "members": [], "hits": 1,
+   "jobs": [],
+   "why": "Common in crew-written Rust modules. The compiler gives two locations; both matter.",
+   "rule": "The next round's message quotes both of the compiler's locations."},
+
+  {"name": "script_args_split", "where": "check_output", "kind": "after_run_hint", "status": "active",
+   "pattern": "attempted relative import with no known parent package",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-changes-pane"],
+   "why": "Found at the screenshot, not by cargo test - a script path split across arguments. The lesson is that a check needs a smoke run, not only unit tests.",
+   "rule": "A runtime screenshot or smoke run belongs in the checks for anything with a script argument."},
+
+  {"name": "bmp_mime", "where": "engine_error", "kind": "chat_repair", "status": "record",
+   "pattern": "Image type image/x-ms-bmp not supported",
+   "fixer": "chat_repair.rewrite_bmp_mime",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": ["ses_e8fdcc727ffe46Y7X7MqSenCyX"],
+   "why": "Synthetic refuses a BMP; the window writes PNG since 0badd10. Handled by the chat self-repair."},
+
+  {"name": "engine_password_inherited", "where": "engine_error", "kind": "brief_rule", "status": "record",
+   "pattern": "service=server error= failed",
+   "fixer": "",
+   "members": [], "hits": 1,
+   "jobs": ["thecrew-pa-gordon-changes-pane"],
+   "why": "Fixed at the source: guard.launch drops OPENCODE_SERVER_PASSWORD (8a3e102). Kept so a regression shows up."},
+
+  {"name": "blind_tool_call", "where": "tool_error", "kind": "brief_rule", "status": "record",
+   "pattern": "a tool call answered by an imagined \"Tool result\" in the same reply",
+   "fixer": "agent.blind_call",
+   "members": ["Gordon"], "hits": 1,
+   "jobs": [],
+   "why": "A crew-agent failure, not an OpenCode one - already handled in crew/agent.py (e46efb3)."}
+ ]
+}
