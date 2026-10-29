@@ -257,6 +257,33 @@ def test_turn_steps_counts_only_the_newest_turn(tmp_path):
     assert report["steps"] is False, "only the newest turn's steps count"
 
 
+def test_a_finished_turn_reads_quiet_not_working(tmp_path):
+    # The whole question is "is it still processing?". A turn that ENDED must not read WORKING
+    # for two minutes just because its last part is recent (found in review, 2026-10-28).
+    db = _db(tmp_path / "o.db", parts=[_part(2)], messages=[_assistant(120, completed=True)])
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["turn_over"] is True
+    assert report["line"].startswith("QUIET  ")
+    assert "no activity for" in report["line"]
+
+
+def test_an_unfinished_turn_with_a_recent_part_is_working(tmp_path):
+    db = _db(tmp_path / "o.db", parts=[_part(2)], messages=[_assistant(120)])
+    report = _report(db, engine_pid=os.getpid(), engine_start=NOW - 7200)
+    assert report["turn_over"] is False
+    assert report["line"].startswith("WORKING  ")
+
+
+def test_a_dead_turn_is_still_dead_even_though_it_is_not_in_flight(tmp_path):
+    # the crash case: an unfinished turn plus an engine that restarted after it. The engine's
+    # session status is IDLE here, which is exactly why the window must not gate the check on
+    # "is a turn in flight" - it would never show the one state this feature exists for.
+    db = _db(tmp_path / "o.db", parts=[_part(4000)], messages=[_assistant(4000)])
+    report = _report(db, engine_start=NOW - 3600, engine_pid=os.getpid())
+    assert report["turn_over"] is False
+    assert report["line"].startswith("DEAD  ")
+
+
 # ---- the CLI ---------------------------------------------------------------------------
 
 def _run(*args):

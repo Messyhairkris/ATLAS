@@ -180,6 +180,37 @@ def step_limit(agent: str):
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def turn_is_over(con, session: str) -> bool:
+    """True when the newest assistant message has finished: nothing is running.
+
+    A turn that ENDED normally must not keep reading as WORKING for the next two minutes just
+    because its last part is recent - the whole question is "is it still processing?". The
+    runner answers it by telling alive_lib to accept no pause at all (quiet_s=0), so a finished
+    turn reads QUIET with its age, and only a turn that is genuinely unfinished can be DEAD
+    (started before this engine) or WORKING.
+    """
+    columns = [r[1] for r in con.execute("pragma table_info(message)")]
+    sid = next((c for c in columns if c.lower() in ("sessionid", "session_id")), "")
+    if not sid:
+        return False
+    try:
+        rows = con.execute(
+            f"select data from message where {sid} = ? order by time_created desc limit 20",
+            (session,)).fetchall()
+    except sqlite3.Error:
+        return False
+    for (data,) in rows:
+        try:
+            message = json.loads(data) if isinstance(data, str) else {}
+        except ValueError:
+            continue
+        if message.get("role") != "assistant":
+            continue
+        time_block = message.get("time") if isinstance(message.get("time"), dict) else {}
+        return "completed" in time_block          # the newest assistant message's own state
+    return False
+
+
 def session_report(session: str, db=None, engine_pid=None, engine_start=None, now=None, quiet=None):
     """The facts for one chat, ready to hand to alive_lib.line."""
     db = Path(db) if db else db_default()
@@ -188,11 +219,13 @@ def session_report(session: str, db=None, engine_pid=None, engine_start=None, no
     activity = started = None
     doing = ""
     steps = False
+    over = False
     if con is not None:
         try:
             activity, part = _newest_part(con, session)
             doing = alive_lib.doing_of(part)
             started = running_turn(con, session)
+            over = turn_is_over(con, session)
             used, agent = turn_steps(con, session)
             steps = alive_lib.hit_ceiling(used, step_limit(agent)) or alive_lib.steps_notice(part)
         finally:
@@ -202,6 +235,8 @@ def session_report(session: str, db=None, engine_pid=None, engine_start=None, no
     alive = None
     if engine_pid is not None:
         alive, _ = process_facts(engine_pid, now)
+    # A finished turn accepts no pause: it reports QUIET with its age, never WORKING.
+    limit = 0.0 if over else (quiet_s() if quiet is None else quiet)
     return {
         "session": session,
         "now": now,
@@ -210,12 +245,12 @@ def session_report(session: str, db=None, engine_pid=None, engine_start=None, no
         "engine_start": engine_start,
         "alive": alive,
         "steps": steps,
-        "quiet_s": quiet_s() if quiet is None else quiet,
+        "turn_over": over,
+        "quiet_s": limit,
         "doing": doing,
         "line": alive_lib.line(now, started=started, activity=activity,
                                engine_start=engine_start, alive=alive,
-                               quiet_s=quiet_s() if quiet is None else quiet, doing=doing,
-                               steps=steps),
+                               quiet_s=limit, doing=doing, steps=steps),
     }
 
 
