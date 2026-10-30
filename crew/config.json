@@ -1,30 +1,30 @@
 {
   "comment": "The Crew: proto-CrossTalk work queue for cheap roster models. Read roots bound what crew members may look at; write roots bound where APPROVED output may land. Nothing outside these is reachable. deny_globs win over roots (secrets, git internals, app config).",
-  "state_home": "C:/Users/user/ATLAS-api-harness/runs/crew",
-  "telemetry_file": "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki/experiments/atlas-api-harness/runs/telemetry.jsonl",
+  "state_home": "${HOME}/ATLAS-api-harness/runs/crew",
+  "telemetry_file": "${HOME}/Documents/Obsidian/Knowledge_Base/wiki/experiments/atlas-api-harness/runs/telemetry.jsonl",
   "project": "crosstalk",
   "read_roots": [
-    "C:/Users/user/Documents/Obsidian/Knowledge_Base",
-    "C:/Users/user/ATLAS-api-harness",
-    "C:/Users/user/Cross_talk",
-    "C:/Users/user/Voice_to_Text_Project",
-    "C:/Users/user/Desktop/AHK V1 Agentic Project",
-    "C:/Users/user/octofriend-vanilla",
-    "C:/Users/user/Vocto",
-    "C:/Users/user/yetifriend",
-    "C:/Users/user/.octofriend",
-    "C:/Users/user/Desktop/TRIZ",
-    "C:/Users/user/Desktop/Splat Portfolio project",
-    "C:/Users/user/.ahk-lsp",
+    "${HOME}/Documents/Obsidian/Knowledge_Base",
+    "${HOME}/ATLAS-api-harness",
+    "${HOME}/Cross_talk",
+    "${HOME}/Voice_to_Text_Project",
+    "${HOME}/Desktop/AHK V1 Agentic Project",
+    "${HOME}/octofriend-vanilla",
+    "${HOME}/Vocto",
+    "${HOME}/yetifriend",
+    "${HOME}/.octofriend",
+    "${HOME}/Desktop/TRIZ",
+    "${HOME}/Desktop/Splat Portfolio project",
+    "${HOME}/.ahk-lsp",
     "D:/Splat Portfolio Flash drive",
     "D:/Touch_Up_Portable",
     "D:/Looking for work tool kit",
-    "C:/Users/user/MakerCAD",
-    "C:/Users/user/.crush"
+    "${HOME}/MakerCAD",
+    "${HOME}/.crush"
   ],
   "write_roots": [
-    "C:/Users/user/Documents/Obsidian/Knowledge_Base/wiki",
-    "C:/Users/user/ATLAS-api-harness/runs/crew/outbox"
+    "${HOME}/Documents/Obsidian/Knowledge_Base/wiki",
+    "${HOME}/ATLAS-api-harness/runs/crew/outbox"
   ],
   "deny_globs": [
     "**/.git/**",
@@ -118,7 +118,7 @@
       "comment": "For suites whose tests are standalone scripts (VtoT): runs each tests/test_*.py in its own process and prints a pytest-shaped summary.",
       "argv": [
         "{python}",
-        "C:/Users/user/ATLAS-api-harness/crew/runners/run_test_scripts.py",
+        "${HOME}/ATLAS-api-harness/crew/runners/run_test_scripts.py",
         "{project_root}"
       ],
       "timeout_s": 1800
@@ -127,8 +127,8 @@
   "lsp": {
     "comment": "Language servers a job may use when its spec sets lsp: true (a campaign sets it with top-level \"lsp\": true). Members get symbols/definition/references/diagnostics as read-only tools, confined to their read roots; code jobs also get an 'lsp' gate rung that fails only on ERROR-severity diagnostics. Ported 2026-09-25 from Crush-lite's read-only LSP profile. Python: pylsp navigates (jedi) but has no linter plugin installed, so ruff's built-in server does diagnostics. pylsp cold-starts in ~23s on this machine, hence start_timeout_s.",
     "python": {
-      "command": ["C:/Users/user/AppData/Local/Programs/Python/Python314/Scripts/pylsp.exe"],
-      "diagnostics_command": ["C:/Users/user/AppData/Local/Programs/Python/Python314/Scripts/ruff.exe", "server"],
+      "command": ["${HOME}/AppData/Local/Programs/Python/Python314/Scripts/pylsp.exe"],
+      "diagnostics_command": ["${HOME}/AppData/Local/Programs/Python/Python314/Scripts/ruff.exe", "server"],
       "diagnostics_settings": {"settings": {"configurationPreference": "editorOnly", "lint": {"select": ["E9", "F"]}}},
       "extensions": [".py"],
       "settings": {"pylsp": {"plugins": {"pycodestyle": {"enabled": false}, "mccabe": {"enabled": false}, "jedi_symbols": {"all_scopes": true, "include_import_symbols": false}}}},

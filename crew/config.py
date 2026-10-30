@@ -40,6 +40,13 @@ def _member_model(member: str) -> Optional[str]:
 
 class Config:
     def __init__(self, data: dict):
+        # ${HOME} and ${REPO} become real paths here, once, so no settings file has to carry an
+        # account name (crew/home.py). Everything below reads the expanded values.
+        try:
+            from .home import expand_all
+        except ImportError:                      # imported as a plain module
+            from home import expand_all
+        data = expand_all(data or {})
         self.data = data
         self.state_home = Path(os.environ.get("CREW_HOME")
                                or data.get("state_home")
