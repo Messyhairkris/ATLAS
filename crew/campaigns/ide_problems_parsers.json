@@ -1,0 +1,39 @@
+{
+  "name": "ide-problems-parsers",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "max_requests": 60,
+  "goal": "IDE Phase 1's first pure module: problems_lib.py, the cargo and pytest parser behind the Problems pane (design: C:/Users/user/TheCrew/design/IDE design - review first (2026-10-29).md, 'Pure modules ... go to the crew under hidden tests'). Deepak and Baxter get their first measured jobs here, beside their twins (Deepak beside Gordon, Baxter beside Barry).",
+  "teams": {
+    "Parsers": {
+      "author": "Deepak",
+      "tester": "Baxter"
+    }
+  },
+  "tasks": [
+    {
+      "id": "problems_lib",
+      "team": "Parsers",
+      "module": "problems_lib.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/problems_lib.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_problems_lib.py"
+      ],
+      "api": [
+        "LOC_WITHIN",
+        "KINDS",
+        "load",
+        "parse",
+        "format_problem"
+      ],
+      "depends": [],
+      "min_tests": 20,
+      "instructions": "Read the contract's two built-in kind regexes character for character and use them exactly - the tests check the rows they produce, not a paraphrase. The traps: kinds are tried in list order and the FIRST match on a line wins; a kind with a loc regex only looks at the next LOC_WITHIN (3) lines, the first match wins, and a position on the 4th line after the head is NOT used; a head that already captured a line is never overridden by loc; severity comes from the head's level group, else the kind's fixed level, else 'error' - anything that is not 'error' or 'warning' becomes 'error'; dedupe on (kind, file, line, col, code, message) keeping the first and the original order; load(path) returns a NEW list, replaces a built-in by name in the built-in's own place and appends new kinds in file order; a kind with no name or no head raises ValueError. Do not import anything but json, re, typing, __future__. No print().",
+      "test_instructions": "Write code_tests, not the module. Cover every row of the two worked-example tables, the LOC_WITHIN boundary from both sides (a position on the 3rd line after the head IS used, on the 4th is NOT), the note and gutter lines that must not become problems, dedupe keeping order, both ValueError cases, all four format_problem shapes plus the empty-message one, and load's replace-in-place / append-in-file-order / no-kinds / not-a-list cases."
+    }
+  ]
+}
