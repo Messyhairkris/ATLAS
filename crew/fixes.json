@@ -101,6 +101,22 @@
    "fixer": "agent.blind_call",
    "members": ["Gordon"], "hits": 1,
    "jobs": [],
-   "why": "A crew-agent failure, not an OpenCode one - already handled in crew/agent.py (e46efb3)."}
+   "why": "A crew-agent failure, not an OpenCode one - already handled in crew/agent.py (e46efb3)."},
+
+  {"name": "read_before_overwrite", "where": "tool_error", "kind": "brief_rule", "status": "active",
+   "pattern": "You must read file .* before overwriting it",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 39,
+   "jobs": [],
+   "why": "Approved by Kris 2026-10-29 from the miner: edit 23 + write 16 = 39 in the last window, the top untouched shape. The Write and Edit tools refuse a file this session has not read.",
+   "rule": "Before you Edit or Write a file that already exists, read it first; the tool refuses an overwrite otherwise, and re-reading is also how a refused stale edit is recovered."},
+
+  {"name": "unix_in_powershell", "where": "tool_refusal", "kind": "brief_rule", "status": "active",
+   "pattern": "(^|[;&|\\s])(ls|head|tail|cat|grep|rg|which|touch|rm|cp|mv|sed|awk|find|chmod)(\\s|$)",
+   "fixer": "",
+   "members": ["Gordon"], "hits": 67,
+   "jobs": [],
+   "why": "Approved by Kris 2026-10-29 from the miner: `ls -la` 55 + `cd ... | head -N` 12 = 67, the two top untouched refused shapes. The shell is PowerShell and OpenCode checks every chained part against the allowlist.",
+   "rule": "The shell is Windows PowerShell, not bash: no ls, head, tail, cat or grep. Find files with the glob tool, search with grep, read with the read tool; keep the shell for cargo, pytest and git."}
  ]
 }
