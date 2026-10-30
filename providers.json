@@ -28,7 +28,9 @@
         "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
         "hf:zai-org/GLM-5.3-Flash",
         "hf:deepseek-ai/DeepSeek-V4.1-Flash",
-        "hf:zai-org/GLM-4.7-Flash"
+        "hf:zai-org/GLM-4.7-Flash",
+        "hf:zai-org/GLM-5.3",
+        "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017"
       ],
       "model_aliases": {
         "Hoss": "hf:openai/gpt-oss-120b",
@@ -38,7 +40,9 @@
         "Nemotron": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
         "Kimi": "hf:moonshotai/Kimi-K3",
         "Gordon": "hf:deepseek-ai/DeepSeek-V4.1-Flash",
-        "Larry": "hf:zai-org/GLM-4.7-Flash"
+        "Larry": "hf:zai-org/GLM-4.7-Flash",
+        "Deepak": "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "Baxter": "hf:zai-org/GLM-5.3"
       },
       "embeddings": {
         "path": "/v1/embeddings",
@@ -73,6 +77,14 @@
           "out_per_mtok": null
         },
         "hf:deepseek-ai/DeepSeek-V4.1-Flash": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:zai-org/GLM-5.3": {
+          "in_per_mtok": null,
+          "out_per_mtok": null
+        },
+        "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017": {
           "in_per_mtok": null,
           "out_per_mtok": null
         }
