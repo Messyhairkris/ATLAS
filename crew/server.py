@@ -15,14 +15,18 @@ import io
 import json
 import os
 import sys
+import urllib.request
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 
 import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
 
-from . import playbook, task_types
-from .config import CrewError
+from . import mcp_catalog, playbook, task_types
+from .config import CrewError, REPO_ROOT, load_config
 from .core import Crew
 
 INSTRUCTIONS = """The Crew: a work queue of cheap roster models (Hoss = gpt-oss-120b by default) that do bounded, checkable work with READ-ONLY tools while you architect and review.
@@ -228,6 +232,98 @@ def crew_playbook(task_type: str) -> str:
         return playbook.load(task_type)
     except (CrewError, Exception) as e:  # noqa: BLE001
         return _err(e)
+
+
+def _engine_http(method: str, url: str, timeout: float = 30.0) -> dict:
+    """One call to The Crew engine's own HTTP API. Tests monkeypatch this, so no test opens a
+    socket; the machine is offline while the suite runs."""
+    request = urllib.request.Request(url, data=(b"" if method == "POST" else None),
+                                     method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as answer:
+        text = answer.read().decode("utf-8", errors="replace")
+    return json.loads(text) if text.strip() else {}
+
+
+def _project_dir() -> str:
+    """The chat's or build's project directory, for the engine's `directory` query parameter:
+    the engine can hold several projects, so it needs to be told which one (Gordon, 2026-10-29).
+    The crew MCP is started inside that project, so its own working directory is it."""
+    return os.getcwd()
+
+
+def _mcp_log(action: str, name: str, reason: str, decision: str) -> None:
+    """One JSON line per crew_mcp call, in the crew's state home (runs/crew/mcp_switch.jsonl):
+    who switched what, why, and what the catalogue decided."""
+    try:
+        home = Path(load_config().state_home)
+    except (OSError, ValueError):
+        home = REPO_ROOT / "runs" / "crew"
+    home.mkdir(parents=True, exist_ok=True)
+    line = {"ts": datetime.now().isoformat(timespec="seconds"), "client": CLIENT,
+            "action": action, "name": name, "reason": reason, "decision": decision}
+    with open(home / "mcp_switch.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def _mcp_on(data: dict, name: str) -> bool:
+    """Whether the engine's GET /mcp says this server is on. The shape is the engine's: a list of
+    {"name", "status"/"connected"} or a dict keyed by name (or {"servers": ...})."""
+    items = data.get("servers", data) if isinstance(data, dict) else data
+    if isinstance(items, dict):
+        entry = items.get(name)
+        return isinstance(entry, dict) and bool(
+            entry.get("connected") or entry.get("enabled")
+            or entry.get("status") in ("connected", "ready", "on"))
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and item.get("name") == name:
+                return bool(item.get("connected") or item.get("enabled")
+                            or item.get("status") in ("connected", "ready", "on"))
+    return False
+
+
+def _mcp_refused(catalog: dict, name: str, decision: str) -> str:
+    """The plain sentence crew_mcp returns when the catalogue will not let it switch a server on:
+    a PA never switches it on without Kris, and here is why."""
+    klass, why = mcp_catalog.klass(catalog, name), mcp_catalog.why(catalog, name)
+    if decision == "deny":
+        return (f"{name} is classed '{klass}' in the MCP catalogue: Kris does not allow it, so it "
+                f"stays off. Why: {why}")
+    return (f"{name} is classed '{klass}' in the MCP catalogue: Kris must approve switching it on "
+            f"in this chat. Why: {why}")
+
+
+@mcp.tool()
+def crew_mcp(action: str, name: str = "", reason: str = "") -> str:
+    """List the extra MCP servers a PA may switch on, or switch one on or off from chat.
+
+    The catalogue (crew/mcp_catalog.json, which Kris edits) decides: read servers switch on
+    freely, local_act once per chat, account only with Kris's approval, and never ones never.
+    action: list | on | off. name: a catalogue name (e.g. arxiv, godot_mcp, github). reason: one
+    line on why, kept in runs/crew/mcp_switch.jsonl with the decision. Switching needs The
+    Crew's engine; in Claude's chat (no CREW_ENGINE_URL) this only says so."""
+    base = os.environ.get("CREW_ENGINE_URL", "").rstrip("/")
+    if not base:
+        return "switching needs The Crew's engine"
+    catalog = mcp_catalog.load()
+    directory = quote(_project_dir())
+    if action == "list":
+        data = _engine_http("GET", f"{base}/mcp?directory={directory}")
+        listing = [{"name": e.get("from"), "class": e.get("class"),
+                    "on": _mcp_on(data, e.get("from"))}
+                   for e in catalog.get("servers") or []]
+        _mcp_log(action, name, reason, "list")
+        return _ok(listing)
+    if action not in ("on", "off"):
+        return _err(ValueError(f"action {action!r} is not list, on or off"))
+    decision = mcp_catalog.decide(catalog, name, action)
+    _mcp_log(action, name, reason, decision)
+    if decision != "allow":
+        return _mcp_refused(catalog, name, decision)
+    url = (f"{base}/mcp/{quote(name)}/"
+           f"{'connect' if action == 'on' else 'disconnect'}?directory={directory}")
+    return _ok({"action": action, "name": name, "decision": decision,
+                "engine": _engine_http("POST", url)})
 
 
 def main() -> None:

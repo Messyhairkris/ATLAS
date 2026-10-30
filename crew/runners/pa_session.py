@@ -32,6 +32,8 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "v3-service"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from crew import mcp_catalog  # noqa: E402  (REPO is on the path just above)
+
 PYTHON = sys.executable
 HOME = Path.home()
 CRUSH_SKILLS = HOME / ".crush" / "skills"
@@ -160,7 +162,11 @@ def base_config(models: dict, agents: dict, default_agent: str, client: str,
                          # the queue (14 on 2026-10-23); the PA runs work with campaigns
                          "environment": {"CREW_CLIENT": client,
                                          "CREW_WORKER": "1" if worker else "0"},
-                         "enabled": True, "timeout": 120000}},
+                         "enabled": True, "timeout": 120000},
+                # The catalogue's extra servers (Kris 2026-10-27), all disabled: a PA switches
+                # one on from chat with crew_mcp (crew/server.py). No secret lands here - every
+                # header and environment value is an {env:...} reference (crew/mcp_catalog.py).
+                **mcp_catalog.servers(mcp_catalog.load())},
         "lsp": lsp,
         "agent": agents,
         "default_agent": default_agent,
