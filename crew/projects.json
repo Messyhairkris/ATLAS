@@ -1,0 +1,4 @@
+{
+  "_about": "Project folders (Kris, 2026-10-30). One entry per project: name, description shown on mouse-over, tags, key links, and the chats in it. A chat is in exactly one project - or in Unsorted, which is not listed here because it is everything else. Kris edits this; crew/runners/projects.py reads it and writes it, and crew/projects_lib.py holds the rules.",
+  "projects": []
+}
