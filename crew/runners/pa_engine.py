@@ -32,6 +32,8 @@ import pa_session  # noqa: E402
 
 REPO = pa_session.REPO
 
+from crew import mcp_catalog  # noqa: E402  (pa_session put REPO on the path)
+
 
 def engine_pas(staff: dict) -> list:
     """The approved PAs that run in OpenCode, in the approved order."""
@@ -88,7 +90,13 @@ def main(argv=None) -> int:
     config.parent.mkdir(parents=True, exist_ok=True)
     chats = state / "chats"
     chats.mkdir(parents=True, exist_ok=True)
-    config.write_text(json.dumps(engine_config(staff, briefs, chats), indent=2), encoding="utf-8")
+    cfg = engine_config(staff, briefs, chats)
+    # crew_mcp (crew/server.py) reaches the engine's own HTTP API to switch an MCP server on or
+    # off. Only this file knows the port, so it goes into the crew server's environment (Kris
+    # 2026-10-29): Claude's chat has no engine and says so instead of switching.
+    cfg["mcp"]["crew"].setdefault("environment", {})[
+        "CREW_ENGINE_URL"] = f"http://127.0.0.1:{args.port}"
+    config.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     print(f"PAs: {', '.join(pas)}; config: {config}", flush=True)
 
     from opencode_trial import _opencode_exe
@@ -106,6 +114,10 @@ def main(argv=None) -> int:
     key = pa_session.synthetic_key()
     if key:
         env["SYNTHETIC_API_KEY"] = key
+    # The catalogue's servers' secrets (headers, env values) go into the ENGINE's environment
+    # only, as CREW_MCP_<NAME>_<KEY>, which the generated config references. Never printed or
+    # written, exactly like the Synthetic key above.
+    env.update(mcp_catalog.secret_env(mcp_catalog.load()))
     return subprocess.call(argv_serve, cwd=args.project, env=env)
 
 

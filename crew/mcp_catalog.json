@@ -1,0 +1,42 @@
+{
+  "_about": "The extra MCP servers a PA may switch on from its chat (design: TheCrew/design/Round 4 - PA tools and MCP switching.md, sections 1-2; Kris confirmed the risk classes 2026-10-27). Kris edits THIS file; crew/mcp_catalog.py turns it into OpenCode mcp entries and decides what a PA may do. One entry per server in Crush's mcp block (%LOCALAPPDATA%/crush/crush.json), except crew itself, which every PA always has. `from` is the server's name in crush.json; `class` is the risk class below; `_why` says, in one line, why it is in that class. The catalogue IS the policy: changing what a PA may switch on means editing a class rule or a server's class here, never code.",
+  "classes": {
+    "_about": "What a PA may do with a server of each class. `on` is the rule for switching a server ON: allow = no question; ask_once = Kris approves the first time in a chat, then it may be switched freely until the chat ends; ask = Kris's approval every time; deny = never. crew/mcp_catalog.decide() reads these rules; server.py (crew_mcp) asks it and obeys.",
+    "read": {
+      "on": "allow",
+      "_why": "Read-only tools (a document, a paper, a package's docs): nothing on this machine or on any account changes, so switching it on costs nothing to undo."
+    },
+    "local_act": {
+      "on": "ask_once",
+      "_why": "Drives something real on THIS machine (the Godot editor, a browser, the vault): one wrong call changes live state, so Kris approves the first switch in a chat and not every one after."
+    },
+    "account": {
+      "on": "ask",
+      "_why": "Acts as Kris on an account OUTSIDE this machine (GitHub, Sentry, Penpot): a mistake leaves this machine, so every switch needs Kris, not once per chat."
+    },
+    "never": {
+      "on": "deny",
+      "_why": "Kris never wants a PA to reach it: no gate, nothing the crew can check, so the catalogue refuses it outright."
+    }
+  },
+  "servers": [
+    {"from": "hex_analyzer", "class": "read", "_why": "Opens a file and reports its bytes/structure; reads only."},
+    {"from": "disasm_helper", "class": "read", "_why": "Disassembles code for inspection, like a debugger's list view; reads only."},
+    {"from": "pe_elf_analyzer", "class": "read", "_why": "Parses PE/ELF headers of a binary; reads only."},
+    {"from": "document_server", "class": "read", "_why": "Reads documents and returns their text; reads only."},
+    {"from": "godot_docs", "class": "read", "_why": "Searches Godot's documentation; reads only."},
+    {"from": "godot_docs_full", "class": "read", "_why": "The full Godot documentation set; reads only."},
+    {"from": "arxiv", "class": "read", "_why": "Search and fetch papers; reads only, no account."},
+    {"from": "context7", "class": "read", "_why": "Fetches a library's current docs; reads only."},
+    {"from": "shadcn", "class": "read", "_why": "Fetches UI component source and docs; reads only."},
+    {"from": "godot_mcp", "class": "local_act", "_why": "Drives the running Godot editor on this machine (scenes, nodes, run); a wrong call edits a real project."},
+    {"from": "chrome_devtools", "class": "local_act", "_why": "Drives a real browser through its DevTools protocol on this machine; clicks and types for real."},
+    {"from": "playwright", "class": "local_act", "_why": "Drives a real browser on this machine; clicks and types for real."},
+    {"from": "obsidian", "class": "local_act", "_why": "Reads and WRITES the user's Obsidian vault on this machine; a wrong call changes real notes."},
+    {"from": "github", "class": "account", "_why": "Acts as Kris on GitHub (repos, issues, pull requests); a mistake leaves this machine."},
+    {"from": "sentry", "class": "account", "_why": "Reaches Kris's Sentry account (projects, issues); a mistake leaves this machine."},
+    {"from": "penpot", "class": "account", "_why": "Acts as Kris on Penpot (design files); a mistake leaves this machine."},
+    {"from": "penpot_godot_bridge", "class": "account", "_why": "Bridges Penpot design into Godot under Kris's Penpot account; a mistake leaves this machine."},
+    {"from": "notepadpp", "class": "never", "_why": "A scratch text editor with no gate and nothing the crew can check; Kris does not want a PA driving it."}
+  ]
+}
