@@ -16,15 +16,20 @@
 //   * it fails open: any exception means the call goes through exactly as the model wrote it;
 //   * every rewrite is appended to `CREW_FIX_LOG` (the build's `fixes.jsonl`) for the miner.
 //
-// Proven 2026-10-29 (Claude Code's proof run, OpenCode 1.2.6): `tool.execute.before` runs BEFORE
-// the bash permission check, so a refused `python -m pytest --version 2>&1` became
-// `python -m pytest --version` and really ran.
+// Proven 2026-10-29 (OpenCode 1.2.6, with the real config dir): `tool.execute.before` runs BEFORE
+// the bash permission check, so a refused `python -m pytest --version 2>&1` becomes
+// `python -m pytest --version` and really runs ("pytest 9.1.0"), while the same command with the
+// plugin off is refused.
+//
+// There is deliberately NO `tool.execute.after` hook. One was written to prepend a
+// `[ran as: ...]` note to the tool result; measurement showed the hook does receive
+// `output.output` ("pytest 9.1.0\r\n") but its mutation is NOT what gets stored - the model never
+// sees it. Rather than keep code that only pretends to act, it is gone.
 
 import { log, readEntries, rewriteCommand } from "../fix_commands_lib.js";
 
 export const FixCommands = async (ctx) => {
   const entries = readEntries(ctx);
-  const applied = new Map();
   return {
     "tool.execute.before": async (input, output) => {
       try {
@@ -35,29 +40,9 @@ export const FixCommands = async (ctx) => {
         if (!result.entry || result.command === args.command) return;
         const was = args.command;
         args.command = result.command;
-        if (input.callID) applied.set(input.callID, result);
         log({ entry: result.entry, command: result.command, was });
       } catch {
         // fail open: a rewrite is an optimisation, never a blocker
-      }
-    },
-    "tool.execute.after": async (input, output) => {
-      try {
-        const result = input && input.callID ? applied.get(input.callID) : null;
-        if (!result) return;
-        applied.delete(input.callID);
-        const note = `[ran as: ${result.command} - ${result.entry}]\n`;
-        // The result object's shape is not documented; try the fields it could be, and never
-        // let a miss become an error. (Claude Code's 2026-10-29 proof did not see this line in
-        // the stored result - re-checked on the rerun.)
-        for (const key of ["output", "result"]) {
-          if (output && typeof output[key] === "string") {
-            output[key] = note + output[key];
-            return;
-          }
-        }
-      } catch {
-        // fail open
       }
     },
   };

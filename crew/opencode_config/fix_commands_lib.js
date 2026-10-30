@@ -65,7 +65,12 @@ export function readEntries(ctx) {
   }
 }
 
-// One JSON line per rewrite, for the miner. `command` is what ran; `was` is what the model wrote.
+// BEST EFFORT ONLY. One JSON line per rewrite, for the miner: `command` is what ran, `was` is
+// what the model wrote. Measured 2026-10-29 over four engine runs with identical inputs and a
+// fresh log path each time: the rewrite happened in every run, but the line was written in only
+// two of them. The cause is on the engine's side (not the path, which was set and readable), and
+// this plugin cannot fix it. So treat the file as a PARTIAL sample, never a complete count - if
+// the miner needs exact numbers, compare the model's own tool-call arguments with what ran.
 export function log(row) {
   try {
     const target = process.env.CREW_FIX_LOG;
