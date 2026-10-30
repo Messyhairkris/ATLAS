@@ -1,0 +1,65 @@
+{
+  "name": "project-folders-pure",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "max_requests": 70,
+  "goal": "Project folders (Kris, 2026-10-30): the two pure modules the window and the crew lookups sit on. A project has a name, a description, tags, key links and its chats; a chat is in exactly one place - a project or Unsorted. A PA finds something inside a folder without loading it. Deepak takes the model (his second measured job after problems_lib), Hoss the search; each writes the other's tests, so a member never judges only its own work.",
+  "teams": {
+    "Modeled": {
+      "author": "Deepak",
+      "tester": "Hoss"
+    },
+    "Searched": {
+      "author": "Hoss",
+      "tester": "Deepak"
+    }
+  },
+  "tasks": [
+    {
+      "id": "projects_lib",
+      "team": "Modeled",
+      "module": "projects_lib.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/projects_lib.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_projects_lib.py"
+      ],
+      "api": [
+        "UNSORTED",
+        "make",
+        "place",
+        "remove",
+        "locate",
+        "duplicates",
+        "groups"
+      ],
+      "depends": [],
+      "min_tests": 20,
+      "instructions": "Imports allowed: typing and __future__ ONLY. No json, no re, and no open() - the airlock bans open() and a module that reads the disk is not a pure module. The traps: make() strips the name and raises ValueError('a project needs a name') on an empty or non-str name; tags and links are None-safe, each entry stripped, empties dropped, duplicates dropped KEEPING THE FIRST, order kept; place() and remove() return a NEW dict and never mutate the one passed in, and place() is idempotent; remove() of a chat that is not there is not an error; locate() returns UNSORTED when no project holds the chat and raises ValueError('a chat is in exactly one place') when two do; groups() lists the projects in the order given, each one's chats in the order the CALLER's chats list gives (not the placement order), then a final Unsorted entry described 'Not in a project' with empty tags and links holding the caller's chats that no project claims; a chat claimed twice appears once, in the first project that claims it.",
+      "test_instructions": "Write code_tests, not the module. Cover every worked example in the contract, the idempotent place, the non-mutating place and remove, both ValueError cases, duplicates in first-seen order, and groups() with: a project holding no chats, no projects at all, the caller's order beating the placement order, and a chat claimed by two projects."
+    },
+    {
+      "id": "project_search",
+      "team": "Searched",
+      "module": "project_search.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/project_search.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_project_search.py"
+      ],
+      "api": [
+        "STOPWORDS",
+        "terms",
+        "score",
+        "snippet",
+        "rank"
+      ],
+      "depends": [],
+      "min_tests": 20,
+      "instructions": "Imports allowed: re, typing, __future__. No open(). The traps: terms() lowercases, splits on anything that is not a letter, digit or underscore, drops STOPWORDS, drops repeats keeping the first, keeps order, and returns [] for a non-str or empty query; score() counts DISTINCT terms, so ['engine','engine'] against a text holding 'engine' is 1, not 2, and it can never exceed len(ts); the comparison is case-insensitive in BOTH directions - the term must be lowercased before it is looked for, not only the text; snippet() collapses the text to one line with ' '.join(text.split()) first, returns it UNCHANGED with no ellipsis when it is at most width characters, returns '' when no term is in it, otherwise windows exactly width characters (start = max(0, earliest - width//3), end = min(len, start+width), then start = max(0, end-width)) and marks a trimmed end with '...'; rank() keeps only score above zero, sorts by score descending then id ASCENDING, caps at limit, and a limit of zero or less gives [].",
+      "test_instructions": "Write code_tests, not the module. Cover every worked example, the repeated-term case in score, an uppercase term finding a lowercase text and vice versa, snippet at both ends of the text and when the line is exactly width, the '' cases, the tie-break by id, the limit and the zero limit, and a doc with no kind key."
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "attention-signal",
+  "senior": "Claude",
+  "senior_fallback": "Kimi",
+  "max_attempts": 3,
+  "max_escalations": 1,
+  "requests_per_attempt": 14,
+  "tokens_per_attempt": 150000,
+  "max_requests": 60,
+  "goal": "Project folders need the indicator Kris asked for (2026-10-30): a conversation, and a folder, must show when one needs attention or a run has finished. Pure logic - four facts in, one state out - so the crew builds it under hidden tests. Nemotron takes the module (his clean-logic niche); Baxter, whose code_tests were accepted on the problems_lib contract, writes the tests.",
+  "teams": {
+    "Signal": {
+      "author": "Nemotron",
+      "tester": "Baxter"
+    }
+  },
+  "tasks": [
+    {
+      "id": "attention_lib",
+      "team": "Signal",
+      "module": "attention_lib.py",
+      "contract": "C:/Users/user/ATLAS-api-harness/crew/contracts/attention_lib.md",
+      "hidden_tests": [
+        "C:/Users/user/ATLAS-api-harness/crew/hidden_tests/test_attention_lib.py"
+      ],
+      "api": [
+        "STATES",
+        "DEFAULT_QUIET_S",
+        "state_for",
+        "label",
+        "folder_state"
+      ],
+      "depends": [],
+      "min_tests": 20,
+      "instructions": "Imports allowed: typing and __future__ ONLY. No open() - the airlock bans it. The contract's rules are FIRST MATCH WINS, in the order given, so code them in that order rather than as independent checks. The traps: rule 1 (running and alive is False) beats everything, even a busy timestamp; rule 2 (running and last_activity is None) is working, not quiet; rule 3 is STRICTLY less than quiet_s, so an activity exactly quiet_s old is already needs_attention, and a quiet_s of 0 or less turns rule 3 off so a running conversation always falls to rule 4; rule 5 comes BEFORE rule 6, so a finish since last_read reads 'finished' and not 'needs_attention'; a last_read of None means never read, which makes any activity or finish since then need attention; comparing 980 > 999 is False, so read that far past the activity is idle; label() maps only the four known states and anything else - None, '', a number - reads 'idle'; folder_state() returns the FIRST of ('needs_attention','finished','working','idle') that appears in the list, so one needy conversation marks the folder, and an empty list, None or only unknown values give 'idle'.",
+      "test_instructions": "Write code_tests, not the module. Cover every row of the contract's table, the quiet_s boundary from both sides (age 119 is working, 120 is not), quiet_s 0 and negative, running with alive False and with alive None, a finish before the read and after the read, never-read for both activity and finish, label for all four states plus an unknown one, and folder_state for each precedence step plus empty, None and unknown-only."
+    }
+  ]
+}
